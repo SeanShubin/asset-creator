@@ -16,24 +16,24 @@ Decal primitives are designed for mark-making on surfaces rather than general-pu
 
 These work well with all projection modes, including triplanar wrapping around edges:
 
-| Primitive | Parameters | Description |
-|-----------|-----------|-------------|
-| `Spot` | `radius, falloff` | Circle with soft or hard edge. `falloff: 0.0` = hard disc, `1.0` = fully feathered. The basic building block for dots, splatter, and grime. |
-| `Ring` | `radius, thickness` | Circle outline. Useful for target marks, rivets, and decorative borders. |
-| `Arc` | `radius, thickness, angle, sweep` | Partial ring. Defined by start `angle` and `sweep` in degrees. For gauges, partial borders, crescent shapes. |
-| `Polygon` | `radius, sides` | Regular N-sided polygon (3 = triangle, 6 = hexagon, etc.). |
-| `Star` | `outer_radius, inner_radius, points` | N-pointed star. |
-| `Box` | `half_width, half_height, corner_radius` | Rectangle with optional rounded corners. |
+| Primitive | Parameters                               | Description                                                                                                                                 |
+| --------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Spot`    | `radius, falloff`                        | Circle with soft or hard edge. `falloff: 0.0` = hard disc, `1.0` = fully feathered. The basic building block for dots, splatter, and grime. |
+| `Ring`    | `radius, thickness`                      | Circle outline. Useful for target marks, rivets, and decorative borders.                                                                    |
+| `Arc`     | `radius, thickness, angle, sweep`        | Partial ring. Defined by start `angle` and `sweep` in degrees. For gauges, partial borders, crescent shapes.                                |
+| `Polygon` | `radius, sides`                          | Regular N-sided polygon (3 = triangle, 6 = hexagon, etc.).                                                                                  |
+| `Star`    | `outer_radius, inner_radius, points`     | N-pointed star.                                                                                                                             |
+| `Box`     | `half_width, half_height, corner_radius` | Rectangle with optional rounded corners.                                                                                                    |
 
 ### Stroke Primitives
 
 For lines and curves. These are inherently extended shapes -- they can span large areas and cross face boundaries. See [Projection Pairing](#projection-pairing) for guidance on which projection mode to use.
 
-| Primitive | Parameters | Description |
-|-----------|-----------|-------------|
-| `Line` | `start, end, width` | Straight line segment between two points with uniform width. |
-| `Bezier` | `start, ctrl1, ctrl2, end, width_start, width_end` | Cubic Bezier curve with variable width. The four control points define the curve shape; width tapers linearly from `width_start` to `width_end`. |
-| `BezierChain` | `points, widths` | Chain of cubic Bezier segments sharing endpoints. `points` has `3n + 1` entries (start, then groups of ctrl1, ctrl2, end). `widths` has `n + 1` entries (one per junction). |
+| Primitive     | Parameters                                         | Description                                                                                                                                                                 |
+| ------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Line`        | `start, end, width`                                | Straight line segment between two points with uniform width.                                                                                                                |
+| `Bezier`      | `start, ctrl1, ctrl2, end, width_start, width_end` | Cubic Bezier curve with variable width. The four control points define the curve shape; width tapers linearly from `width_start` to `width_end`.                            |
+| `BezierChain` | `points, widths`                                   | Chain of cubic Bezier segments sharing endpoints. `points` has `3n + 1` entries (start, then groups of ctrl1, ctrl2, end). `widths` has `n + 1` entries (one per junction). |
 
 ### Bezier Curve Evaluation
 
@@ -72,14 +72,14 @@ This gives smooth, resolution-independent curved strokes with:
 
 Primitives are combined using CSG-style boolean operations:
 
-| Operation | Formula | Description |
-|-----------|---------|-------------|
-| `Union` | `min(a, b)` | Merge shapes together |
-| `Intersection` | `max(a, b)` | Keep only the overlapping region |
-| `Subtraction` | `max(a, -b)` | Cut shape B from shape A |
-| `SmoothUnion` | Polynomial smooth min | Merge with rounded blend |
-| `SmoothSubtraction` | Polynomial smooth max | Cut with rounded blend |
-| `SmoothIntersection` | Polynomial smooth max | Intersect with rounded blend |
+| Operation            | Formula               | Description                      |
+| -------------------- | --------------------- | -------------------------------- |
+| `Union`              | `min(a, b)`           | Merge shapes together            |
+| `Intersection`       | `max(a, b)`           | Keep only the overlapping region |
+| `Subtraction`        | `max(a, -b)`          | Cut shape B from shape A         |
+| `SmoothUnion`        | Polynomial smooth min | Merge with rounded blend         |
+| `SmoothSubtraction`  | Polynomial smooth max | Cut with rounded blend           |
+| `SmoothIntersection` | Polynomial smooth max | Intersect with rounded blend     |
 
 Smooth operations take a `k` parameter controlling the blend radius (typically 0.001-0.2).
 
@@ -98,13 +98,13 @@ This is particularly useful for creating organic decal shapes like splatter patt
 
 Each shape in a decal composition has:
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `primitive` | `PrimitiveType` | required | Which SDF primitive |
-| `x, y` | `f64` | `0.0` | Position in normalized coordinates (for compact primitives) |
-| `rotation` | `f64` | `0.0` | Rotation around shape center in degrees (math convention) |
-| `op` | `BoolOp` | `Union` | How this shape combines with previous shapes |
-| `smooth_k` | `f64` | `0.05` | Blend radius for smooth operations |
+| Property    | Type            | Default  | Description                                                 |
+| ----------- | --------------- | -------- | ----------------------------------------------------------- |
+| `primitive` | `PrimitiveType` | required | Which SDF primitive                                         |
+| `x, y`      | `f64`           | `0.0`    | Position in normalized coordinates (for compact primitives) |
+| `rotation`  | `f64`           | `0.0`    | Rotation around shape center in degrees (math convention)   |
+| `op`        | `BoolOp`        | `Union`  | How this shape combines with previous shapes                |
+| `smooth_k`  | `f64`           | `0.05`   | Blend radius for smooth operations                          |
 
 Size parameters vary by primitive (see tables above). Stroke primitives use explicit point coordinates instead of `x, y` positioning.
 
@@ -112,11 +112,11 @@ Size parameters vary by primitive (see tables above). Stroke primitives use expl
 
 The editor provides three visualization modes:
 
-| Mode | Description |
-|------|-------------|
-| **Solid** | Anti-aliased filled shape with configurable foreground/background colors |
-| **Distance Field** | Raw signed distance visualized as blue (inside) / red (outside) |
-| **Contours** | Iso-distance contour lines with bright boundary highlight |
+| Mode               | Description                                                              |
+| ------------------ | ------------------------------------------------------------------------ |
+| **Solid**          | Anti-aliased filled shape with configurable foreground/background colors |
+| **Distance Field** | Raw signed distance visualized as blue (inside) / red (outside)          |
+| **Contours**       | Iso-distance contour lines with bright boundary highlight                |
 
 ## Composing Decals
 
@@ -199,46 +199,46 @@ The `sharpness` exponent (typically 4.0-8.0) controls how quickly the blend tran
 
 ### How It Works on Each Object Shape
 
-| Object Shape | Behavior |
-|-------|----------|
-| **Box** | Decal wraps cleanly across edges and around corners. Each face uses its dominant projection axis, with smooth blending at the bevels. |
-| **Sphere** | Smooth coverage over the entire surface. The three projections blend continuously based on the surface normal direction. Slight distortion at the poles where two projections compete equally. |
-| **Cylinder** | Wraps around the barrel via X/Z projections, blends onto the caps via Y projection. Clean transition at the rim. |
-| **Compound shapes** | Works on any geometry. The projection is purely a function of world position and surface normal -- it does not depend on mesh topology, UV mapping, or shape type. |
+| Object Shape        | Behavior                                                                                                                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Box**             | Decal wraps cleanly across edges and around corners. Each face uses its dominant projection axis, with smooth blending at the bevels.                                                          |
+| **Sphere**          | Smooth coverage over the entire surface. The three projections blend continuously based on the surface normal direction. Slight distortion at the poles where two projections compete equally. |
+| **Cylinder**        | Wraps around the barrel via X/Z projections, blends onto the caps via Y projection. Clean transition at the rim.                                                                               |
+| **Compound shapes** | Works on any geometry. The projection is purely a function of world position and surface normal -- it does not depend on mesh topology, UV mapping, or shape type.                             |
 
 ### Projection Modes
 
-| Mode | Description |
-|------|-------------|
-| `Triplanar` | Default. Wraps around all geometry using normal-weighted blending. Best for compact decals. |
-| `Planar(axis)` | Single-axis projection. Decal only appears on surfaces facing the projection axis. Good for flat faces or restricting a decal to one side. |
-| `Cylindrical(axis)` | Projects radially around an axis. Ideal for stripes, bands, and labels that wrap around cylindrical or elongated parts. |
+| Mode                | Description                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Triplanar`         | Default. Wraps around all geometry using normal-weighted blending. Best for compact decals.                                                |
+| `Planar(axis)`      | Single-axis projection. Decal only appears on surfaces facing the projection axis. Good for flat faces or restricting a decal to one side. |
+| `Cylindrical(axis)` | Projects radially around an axis. Ideal for stripes, bands, and labels that wrap around cylindrical or elongated parts.                    |
 
 ### Projection Pairing
 
 The choice of projection mode depends on the decal's shape:
 
-| Decal Type | Recommended Projection | Why |
-|------------|----------------------|-----|
-| Compact shapes (spots, rings, emblems, stars) | `Triplanar` | Small relative to the object. Wraps naturally around edges with no artifacts. |
-| Straight stripes, panel lines | `Planar` or `Cylindrical` | Extended along one direction. Triplanar would evaluate the stripe on all three axis planes, producing ghost copies on perpendicular faces. |
-| Curved strokes wrapping around a part | `Cylindrical` | The stroke follows the part's circumference. Cylindrical projection maps the decal's X axis around the barrel, so the curve wraps continuously. |
-| Large insignia spanning a flat panel | `Planar` | Covers one face only. No need for wrapping, and planar avoids blend-zone artifacts at edges. |
-| Grime, weathering, damage splatter | `Triplanar` | Organic, non-directional. Triplanar blending at edges actually helps -- weathering should look natural at seams. |
+| Decal Type                                    | Recommended Projection    | Why                                                                                                                                             |
+| --------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compact shapes (spots, rings, emblems, stars) | `Triplanar`               | Small relative to the object. Wraps naturally around edges with no artifacts.                                                                   |
+| Straight stripes, panel lines                 | `Planar` or `Cylindrical` | Extended along one direction. Triplanar would evaluate the stripe on all three axis planes, producing ghost copies on perpendicular faces.      |
+| Curved strokes wrapping around a part         | `Cylindrical`             | The stroke follows the part's circumference. Cylindrical projection maps the decal's X axis around the barrel, so the curve wraps continuously. |
+| Large insignia spanning a flat panel          | `Planar`                  | Covers one face only. No need for wrapping, and planar avoids blend-zone artifacts at edges.                                                    |
+| Grime, weathering, damage splatter            | `Triplanar`               | Organic, non-directional. Triplanar blending at edges actually helps -- weathering should look natural at seams.                                |
 
 ### Decal Placement
 
 Each decal instance on a 3D object has:
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `decal` | `String` | required | Name of the decal definition to apply |
-| `center` | `(f32, f32, f32)` | `(0.0, 0.0, 0.0)` | World-space center of the decal projection |
-| `scale` | `f32` | `1.0` | Size of the decal in world units |
-| `rotation` | `f32` | `0.0` | Rotation of the decal pattern in degrees (math convention) |
-| `projection` | `ProjectionMode` | `Triplanar` | `Triplanar`, `Planar(axis)`, or `Cylindrical(axis)` |
-| `blend_sharpness` | `f32` | `6.0` | Triplanar blend exponent. Only used with `Triplanar`. |
-| `opacity` | `f32` | `1.0` | Overall decal opacity (0.0-1.0) |
+| Property          | Type              | Default           | Description                                                |
+| ----------------- | ----------------- | ----------------- | ---------------------------------------------------------- |
+| `decal`           | `String`          | required          | Name of the decal definition to apply                      |
+| `center`          | `(f32, f32, f32)` | `(0.0, 0.0, 0.0)` | World-space center of the decal projection                 |
+| `scale`           | `f32`             | `1.0`             | Size of the decal in world units                           |
+| `rotation`        | `f32`             | `0.0`             | Rotation of the decal pattern in degrees (math convention) |
+| `projection`      | `ProjectionMode`  | `Triplanar`       | `Triplanar`, `Planar(axis)`, or `Cylindrical(axis)`        |
+| `blend_sharpness` | `f32`             | `6.0`             | Triplanar blend exponent. Only used with `Triplanar`.      |
+| `opacity`         | `f32`             | `1.0`             | Overall decal opacity (0.0-1.0)                            |
 
 ### Compositing
 

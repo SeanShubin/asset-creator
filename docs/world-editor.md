@@ -10,11 +10,11 @@ The world editor generates multi-biome terrain maps using layered noise fields. 
 
 The terrain is driven by three independent noise fields, each using fractal Brownian motion (fBM) with configurable parameters:
 
-| Layer | Controls | Default Frequency | Seed Offset |
-|-------|----------|-------------------|-------------|
-| **Elevation** | Water vs. land vs. mountain | 3.0 | 0 |
-| **Moisture** | Dry vs. wet biomes on land | 4.0 | 137 |
-| **Drainage** | Swamp/marsh vs. grassland/forest | 5.0 | 293 |
+| Layer         | Controls                         | Default Frequency | Seed Offset |
+| ------------- | -------------------------------- | ----------------- | ----------- |
+| **Elevation** | Water vs. land vs. mountain      | 3.0               | 0           |
+| **Moisture**  | Dry vs. wet biomes on land       | 4.0               | 137         |
+| **Drainage**  | Swamp/marsh vs. grassland/forest | 5.0               | 293         |
 
 Each layer has its own seed offset for independence, and all share the same fBM parameters:
 - **Octaves** (1-10): Detail level. More octaves add finer features.
@@ -27,42 +27,42 @@ Biomes are determined by a lookup function mapping `(elevation, moisture, draina
 
 ### Elevation-Driven Biomes
 
-| Elevation Range | Biome |
-|----------------|-------|
-| 0.00 - 0.30 | Deep Water |
-| 0.30 - 0.38 | Shallow Water |
-| 0.38 - 0.42 | Beach |
-| 0.75 - 0.85 | Rock |
-| 0.85 - 1.00 | Snow |
+| Elevation Range | Biome         |
+| --------------- | ------------- |
+| 0.00 - 0.30     | Deep Water    |
+| 0.30 - 0.38     | Shallow Water |
+| 0.38 - 0.42     | Beach         |
+| 0.75 - 0.85     | Rock          |
+| 0.85 - 1.00     | Snow          |
 
 ### Land Biomes (elevation 0.42 - 0.75)
 
 Land biomes are determined by moisture and drainage:
 
-| | Low Drainage (<0.35) | Mid Drainage (0.35-0.65) | High Drainage (>0.65) |
-|---|---|---|---|
-| **Dry** (moisture <0.25) | Desert | Desert | Savanna |
-| **Moderate** (0.25-0.55) | Marsh | Grassland | Grassland |
-| **Wet** (>0.55) | Swamp | Forest | Dense Forest |
+|                          | Low Drainage (<0.35) | Mid Drainage (0.35-0.65) | High Drainage (>0.65) |
+| ------------------------ | -------------------- | ------------------------ | --------------------- |
+| **Dry** (moisture <0.25) | Desert               | Desert                   | Savanna               |
+| **Moderate** (0.25-0.55) | Marsh                | Grassland                | Grassland             |
+| **Wet** (>0.55)          | Swamp                | Forest                   | Dense Forest          |
 
 ### Biome Colors
 
 Each biome has a base color and a detail color, blended by a detail noise layer to add micro-variation:
 
-| Biome | Base Color | Detail Color |
-|-------|-----------|--------------|
-| Deep Water | Dark blue | Darker blue |
-| Shallow Water | Medium blue | Slightly darker blue |
-| Beach | Tan | Warm sand |
-| Desert | Yellow-brown | Darker yellow |
-| Savanna | Olive | Dark olive |
-| Grassland | Green | Darker green |
-| Forest | Dark green | Very dark green |
-| Dense Forest | Very dark green | Near-black green |
-| Swamp | Dark olive | Brown-green |
-| Marsh | Gray-green | Darker gray-green |
-| Rock | Gray-brown | Darker gray |
-| Snow | Near-white | Light gray |
+| Biome         | Base Color      | Detail Color         |
+| ------------- | --------------- | -------------------- |
+| Deep Water    | Dark blue       | Darker blue          |
+| Shallow Water | Medium blue     | Slightly darker blue |
+| Beach         | Tan             | Warm sand            |
+| Desert        | Yellow-brown    | Darker yellow        |
+| Savanna       | Olive           | Dark olive           |
+| Grassland     | Green           | Darker green         |
+| Forest        | Dark green      | Very dark green      |
+| Dense Forest  | Very dark green | Near-black green     |
+| Swamp         | Dark olive      | Brown-green          |
+| Marsh         | Gray-green      | Darker gray-green    |
+| Rock          | Gray-brown      | Darker gray          |
+| Snow          | Near-white      | Light gray           |
 
 ## Biome Blending
 
@@ -74,10 +74,10 @@ At biome boundaries, colors are smoothly blended using stochastic sampling:
 
 ### Blend Parameters
 
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| `blend_width` | 0.0-0.2 | 0.06 | Radius of blending in parameter space |
-| `blend_samples` | 1-16 | 8 | Number of jittered samples for blending |
+| Parameter       | Range   | Default | Description                             |
+| --------------- | ------- | ------- | --------------------------------------- |
+| `blend_width`   | 0.0-0.2 | 0.06    | Radius of blending in parameter space   |
+| `blend_samples` | 1-16    | 8       | Number of jittered samples for blending |
 
 Setting `blend_width` to 0 or `blend_samples` to 1 produces hard biome boundaries.
 
@@ -87,10 +87,10 @@ The jitter uses golden-ratio spacing for even distribution: offsets are placed a
 
 A separate high-frequency noise layer adds micro-variation within biomes, blending between each biome's base and detail colors:
 
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| `detail_strength` | 0.0-1.0 | 0.3 | Amplitude of detail variation |
-| `detail_freq` | 5.0-60.0 | 20.0 | Spatial frequency of detail noise |
+| Parameter         | Range    | Default | Description                       |
+| ----------------- | -------- | ------- | --------------------------------- |
+| `detail_strength` | 0.0-1.0  | 0.3     | Amplitude of detail variation     |
+| `detail_freq`     | 5.0-60.0 | 20.0    | Spatial frequency of detail noise |
 
 ## Hill-Shaded Lighting
 
@@ -107,24 +107,24 @@ normal = normalize(-dh/dx * height_scale, -dh/dy * height_scale, 1.0)
 
 ### Lighting Parameters
 
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| `light_azimuth` | 0-360 degrees | 225 | Direction the light comes from |
-| `light_elevation` | 5-85 degrees | 45 | Angle of light above the horizon |
-| `ambient` | 0.0-0.5 | 0.15 | Minimum brightness in shadow |
-| `height_scale` | 0.1-5.0 | 1.0 | Exaggeration of terrain relief |
+| Parameter         | Range         | Default | Description                      |
+| ----------------- | ------------- | ------- | -------------------------------- |
+| `light_azimuth`   | 0-360 degrees | 225     | Direction the light comes from   |
+| `light_elevation` | 5-85 degrees  | 45      | Angle of light above the horizon |
+| `ambient`         | 0.0-0.5       | 0.15    | Minimum brightness in shadow     |
+| `height_scale`    | 0.1-5.0       | 1.0     | Exaggeration of terrain relief   |
 
 Shading formula: `brightness = ambient + max(0, dot(normal, light_dir))`
 
 ## View Modes
 
-| Mode | Description |
-|------|-------------|
-| **Biomes (lit)** | Full biome colors with hill-shaded lighting |
-| **Biomes (flat)** | Biome colors without lighting |
-| **Elevation** | Grayscale elevation map |
-| **Moisture** | Blue-scale moisture map |
-| **Drainage** | Green-scale drainage map |
+| Mode              | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| **Biomes (lit)**  | Full biome colors with hill-shaded lighting             |
+| **Biomes (flat)** | Biome colors without lighting                           |
+| **Elevation**     | Grayscale elevation map                                 |
+| **Moisture**      | Blue-scale moisture map                                 |
+| **Drainage**      | Green-scale drainage map                                |
 | **Blend Weights** | RGB visualization (R=elevation, G=moisture, B=drainage) |
 
 ## RON Format

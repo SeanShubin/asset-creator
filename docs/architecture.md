@@ -257,11 +257,11 @@ cargo run -- tileset --preset Concrete --export wall.png --tile-size 128
 
 ## Dependencies
 
-| Crate | Purpose |
-|-------|---------|
-| `bevy` | ECS framework, rendering, windowing, asset management |
-| `bevy_egui` | Immediate-mode UI for editor panels |
-| `noise` | Perlin, Simplex noise generators |
-| `ron` | RON deserialization |
-| `serde` | Serialization/deserialization derive macros |
-| `image` | PNG export |
+| Crate       | Purpose                                               |
+| ----------- | ----------------------------------------------------- |
+| `bevy`      | ECS framework, rendering, windowing, asset management |
+| `bevy_egui` | Immediate-mode UI for editor panels                   |
+| `noise`     | Perlin, Simplex noise generators                      |
+| `ron`       | RON deserialization                                   |
+| `serde`     | Serialization/deserialization derive macros           |
+| `image`     | PNG export                                            |

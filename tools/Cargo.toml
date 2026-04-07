@@ -1,0 +1,8 @@
+[package]
+name = "asset-creator-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pad-tables"
+path = "src/bin/pad_tables.rs"

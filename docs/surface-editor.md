@@ -35,32 +35,32 @@ A surface is defined by these parameters:
 
 ### Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `name` | `String` | required | Identifier for referencing this surface from other assets |
-| `base_color` | `(f32, f32, f32)` | `(0.5, 0.5, 0.55)` | Primary RGB color (0.0-1.0) |
-| `color_variation` | `(f32, f32, f32)` | `(0.08, 0.06, 0.04)` | Per-channel noise-driven color offset |
-| `noise_scale` | `f32` | `8.0` | Spatial frequency of the noise pattern |
-| `noise_octaves` | `u32` | `3` | FBM octaves (1 = smooth, 4+ = detailed) |
-| `pattern` | `PatternType` | `Perlin` | Which noise function drives the look |
-| `roughness` | `f32` | `0.6` | PBR roughness (0.0 = mirror, 1.0 = matte). Used by 3D output; ignored by 2D pixel export. |
-| `speckle_density` | `f32` | `0.0` | Fraction of pixels that receive speckle dots (0.0-1.0) |
-| `speckle_color` | `(f32, f32, f32)` | `(1.0, 1.0, 1.0)` | Color of speckle dots |
-| `secondary_color` | `Option<(f32, f32, f32)>` | `None` | For two-tone patterns; blended with base via noise |
-| `stripe_angle` | `f32` | `90.0` | Angle in degrees for stripe patterns (math convention: 0° = horizontal, 90° = vertical) |
-| `seed` | `u32` | `42` | Noise seed for reproducibility |
+| Parameter         | Type                      | Default              | Description                                                                               |
+| ----------------- | ------------------------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `name`            | `String`                  | required             | Identifier for referencing this surface from other assets                                 |
+| `base_color`      | `(f32, f32, f32)`         | `(0.5, 0.5, 0.55)`   | Primary RGB color (0.0-1.0)                                                               |
+| `color_variation` | `(f32, f32, f32)`         | `(0.08, 0.06, 0.04)` | Per-channel noise-driven color offset                                                     |
+| `noise_scale`     | `f32`                     | `8.0`                | Spatial frequency of the noise pattern                                                    |
+| `noise_octaves`   | `u32`                     | `3`                  | FBM octaves (1 = smooth, 4+ = detailed)                                                   |
+| `pattern`         | `PatternType`             | `Perlin`             | Which noise function drives the look                                                      |
+| `roughness`       | `f32`                     | `0.6`                | PBR roughness (0.0 = mirror, 1.0 = matte). Used by 3D output; ignored by 2D pixel export. |
+| `speckle_density` | `f32`                     | `0.0`                | Fraction of pixels that receive speckle dots (0.0-1.0)                                    |
+| `speckle_color`   | `(f32, f32, f32)`         | `(1.0, 1.0, 1.0)`    | Color of speckle dots                                                                     |
+| `secondary_color` | `Option<(f32, f32, f32)>` | `None`               | For two-tone patterns; blended with base via noise                                        |
+| `stripe_angle`    | `f32`                     | `90.0`               | Angle in degrees for stripe patterns (math convention: 0° = horizontal, 90° = vertical)   |
+| `seed`            | `u32`                     | `42`                 | Noise seed for reproducibility                                                            |
 
 ### Pattern Types
 
-| Pattern | Description |
-|---------|-------------|
-| `Perlin` | Smooth, organic bumpy surface from Perlin noise |
-| `Cellular` | Voronoi/Worley-style cell boundaries (F2-F1) |
-| `Ridged` | Ridged multifractal -- sharp mountain-like ridges |
-| `Stripe` | Directional lines with cross-grain detail, controlled by `stripe_angle` |
-| `Marble` | Domain-warped Perlin passed through a sine function, producing veined stone |
-| `Turbulence` | Absolute-value FBM producing billowy, cloud-like patterns |
-| `DomainWarp` | Multi-pass domain warping for organic, flowing distortions |
+| Pattern      | Description                                                                 |
+| ------------ | --------------------------------------------------------------------------- |
+| `Perlin`     | Smooth, organic bumpy surface from Perlin noise                             |
+| `Cellular`   | Voronoi/Worley-style cell boundaries (F2-F1)                                |
+| `Ridged`     | Ridged multifractal -- sharp mountain-like ridges                           |
+| `Stripe`     | Directional lines with cross-grain detail, controlled by `stripe_angle`     |
+| `Marble`     | Domain-warped Perlin passed through a sine function, producing veined stone |
+| `Turbulence` | Absolute-value FBM producing billowy, cloud-like patterns                   |
+| `DomainWarp` | Multi-pass domain warping for organic, flowing distortions                  |
 
 See [Noise Functions](noise-functions.md) for the full math behind each pattern.
 
@@ -68,19 +68,19 @@ See [Noise Functions](noise-functions.md) for the full math behind each pattern.
 
 Built-in presets provide starting points:
 
-| Preset | Base Color | Pattern | Roughness | Character |
-|--------|-----------|---------|-----------|-----------|
-| Concrete | Gray | Perlin (3 octave) | 0.7 | Rough, granular surface |
-| Red Stone | Brick red | Ridged + speckles | 0.8 | Rough stone with flecks |
-| Dark Stone | Dark gray | Cellular (4 octave) | 0.9 | Cracked dark rock |
-| Marble | Off-white | Marble (domain warp) | 0.3 | Veined polished stone |
-| Wood Plank | Warm brown | Stripe (horizontal) | 0.6 | Directional grain |
-| Sandstone | Tan | Perlin + speckles | 0.7 | Warm granular stone |
-| Metal Plate | Silver | Perlin (1 octave) | 0.3 | Smooth brushed metal |
-| Brushed Metal | Silver | Fine Perlin | 0.3 | Subtle directional grain |
-| Rusted Steel | Orange-brown | Ridged (high strength) | 0.8 | Heavy corrosion |
-| Dark Composite | Near-black | Fine Perlin | 0.4 | Carbon fiber feel |
-| Energy | Blue | Coarse Perlin | 0.1 | Glowing, shifting field |
+| Preset         | Base Color   | Pattern                | Roughness | Character                |
+| -------------- | ------------ | ---------------------- | --------- | ------------------------ |
+| Concrete       | Gray         | Perlin (3 octave)      | 0.7       | Rough, granular surface  |
+| Red Stone      | Brick red    | Ridged + speckles      | 0.8       | Rough stone with flecks  |
+| Dark Stone     | Dark gray    | Cellular (4 octave)    | 0.9       | Cracked dark rock        |
+| Marble         | Off-white    | Marble (domain warp)   | 0.3       | Veined polished stone    |
+| Wood Plank     | Warm brown   | Stripe (horizontal)    | 0.6       | Directional grain        |
+| Sandstone      | Tan          | Perlin + speckles      | 0.7       | Warm granular stone      |
+| Metal Plate    | Silver       | Perlin (1 octave)      | 0.3       | Smooth brushed metal     |
+| Brushed Metal  | Silver       | Fine Perlin            | 0.3       | Subtle directional grain |
+| Rusted Steel   | Orange-brown | Ridged (high strength) | 0.8       | Heavy corrosion          |
+| Dark Composite | Near-black   | Fine Perlin            | 0.4       | Carbon fiber feel        |
+| Energy         | Blue         | Coarse Perlin          | 0.1       | Glowing, shifting field  |
 
 ## How Surfaces Are Used
 
@@ -161,13 +161,13 @@ cargo run -- surface --preset Marble --export marble_512.png --size 512
 
 The same surface definition drives both rendering paths. The core difference is where the noise is evaluated:
 
-| | 2D Pixel Output | 3D Shader Output |
-|---|---|---|
-| **Evaluator** | CPU (Rust noise crate) | GPU (WGSL shader) |
-| **Coordinate space** | Pixel coordinates / world tile coords | World-space vertex position |
-| **Output** | RGBA pixel buffer / PNG | Fragment color + PBR roughness |
-| **Roughness** | Ignored (lighting is baked or N/A) | Maps to PBR roughness |
-| **Use cases** | Tilesets, sprites, exported images | 3D objects, live preview |
+|                      | 2D Pixel Output                       | 3D Shader Output               |
+| -------------------- | ------------------------------------- | ------------------------------ |
+| **Evaluator**        | CPU (Rust noise crate)                | GPU (WGSL shader)              |
+| **Coordinate space** | Pixel coordinates / world tile coords | World-space vertex position    |
+| **Output**           | RGBA pixel buffer / PNG               | Fragment color + PBR roughness |
+| **Roughness**        | Ignored (lighting is baked or N/A)    | Maps to PBR roughness          |
+| **Use cases**        | Tilesets, sprites, exported images    | 3D objects, live preview       |
 
 The visual result is the same -- the noise math is identical, just executed on different hardware.
 

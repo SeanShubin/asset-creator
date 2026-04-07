@@ -8,11 +8,11 @@ The tileset editor produces complete tileset sheets matching the standard 47-blo
 
 Each tile has up to three concentric zones, defined as fractions from outside in:
 
-| Zone | Surface | Required | Description |
-|------|---------|----------|-------------|
-| **Outer** | required | yes | The exposed edge/ground area around the tile perimeter |
-| **Middle** | optional | no | Angled transition (bevel) between outer and inner |
-| **Inner** | optional | no | The raised/central face of the tile |
+| Zone       | Surface  | Required | Description                                            |
+| ---------- | -------- | -------- | ------------------------------------------------------ |
+| **Outer**  | required | yes      | The exposed edge/ground area around the tile perimeter |
+| **Middle** | optional | no       | Angled transition (bevel) between outer and inner      |
+| **Inner**  | optional | no       | The raised/central face of the tile                    |
 
 Zone fractions must sum to 1.0 (`outer + middle + inner = 1.0`).
 
@@ -93,15 +93,15 @@ The 47-blob system encodes all possible configurations of a tile's 8 neighbors (
 Each neighbor direction maps to a bit:
 
 | Direction | Bit | Value |
-|-----------|-----|-------|
-| N | 0 | 1 |
-| NE | 1 | 2 |
-| E | 2 | 4 |
-| SE | 3 | 8 |
-| S | 4 | 16 |
-| SW | 5 | 32 |
-| W | 6 | 64 |
-| NW | 7 | 128 |
+| --------- | --- | ----- |
+| N         | 0   | 1     |
+| NE        | 1   | 2     |
+| E         | 2   | 4     |
+| SE        | 3   | 8     |
+| S         | 4   | 16    |
+| SW        | 5   | 32    |
+| W         | 6   | 64    |
+| NW        | 7   | 128   |
 
 Corner bits (NE, SE, SW, NW) are only relevant when both adjacent cardinal neighbors are present. This reduces the full 256 combinations to 47 unique visual cases.
 
@@ -139,20 +139,20 @@ normalized
 
 ### Zone Normals
 
-| Zone | Normal | Lighting behavior |
-|------|--------|-------------------|
-| **Inner** | Straight up `(0, 0, 1)` | Uniform brightness across the flat face |
+| Zone       | Normal                                          | Lighting behavior                                           |
+| ---------- | ----------------------------------------------- | ----------------------------------------------------------- |
+| **Inner**  | Straight up `(0, 0, 1)`                         | Uniform brightness across the flat face                     |
 | **Middle** | Tilted by `bevel_angle` toward the exposed edge | Lit on the light-facing side, shadowed on the opposite side |
-| **Outer** | Straight up `(0, 0, 1)` | Uniform brightness (flat ground) |
+| **Outer**  | Straight up `(0, 0, 1)`                         | Uniform brightness (flat ground)                            |
 
 Corner normals in the middle zone use radial distance for smooth curved transitions. Inner corners (concave notches) use inward-tilted normals.
 
 ### Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `light_angle` | `f32` | 135.0 | Light direction in degrees (math convention). 135° = upper-left. |
-| `ambient` | `f32` | 0.25 | Minimum brightness floor (0.0-1.0) |
+| Parameter     | Type  | Default | Description                                                      |
+| ------------- | ----- | ------- | ---------------------------------------------------------------- |
+| `light_angle` | `f32` | 135.0   | Light direction in degrees (math convention). 135° = upper-left. |
+| `ambient`     | `f32` | 0.25    | Minimum brightness floor (0.0-1.0)                               |
 
 ## Procedural Surfaces on Tiles
 

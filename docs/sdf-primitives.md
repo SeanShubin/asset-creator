@@ -63,11 +63,11 @@ Boolean operations combine two SDF values `a` and `b` (where `a` is the accumula
 
 ### Hard Operations
 
-| Operation | Formula | Description |
-|-----------|---------|-------------|
-| **Union** | `min(a, b)` | Merge: inside either shape |
-| **Intersection** | `max(a, b)` | Overlap only: inside both shapes |
-| **Subtraction** | `max(a, -b)` | Cut: inside A but outside B |
+| Operation        | Formula      | Description                      |
+| ---------------- | ------------ | -------------------------------- |
+| **Union**        | `min(a, b)`  | Merge: inside either shape       |
+| **Intersection** | `max(a, b)`  | Overlap only: inside both shapes |
+| **Subtraction**  | `max(a, -b)` | Cut: inside A but outside B      |
 
 These produce exact distance fields outside but only approximate distances near the operation boundary.
 
@@ -104,12 +104,12 @@ Intersects with a rounded chamfer at the intersection edge.
 
 ### Choosing k Values
 
-| k Value | Character |
-|---------|-----------|
+| k Value    | Character                          |
+| ---------- | ---------------------------------- |
 | 0.001-0.01 | Nearly sharp, barely visible blend |
-| 0.02-0.05 | Subtle rounding, mechanical feel |
-| 0.05-0.1 | Visible organic blending |
-| 0.1-0.2 | Very soft, blobby transitions |
+| 0.02-0.05  | Subtle rounding, mechanical feel   |
+| 0.05-0.1   | Visible organic blending           |
+| 0.1-0.2    | Very soft, blobby transitions      |
 
 ## Rendering
 

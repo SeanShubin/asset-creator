@@ -67,30 +67,30 @@ Objects are defined in RON files with this structure:
 
 ## Primitive Shapes
 
-| Shape | Parameters | Description |
-|-------|-----------|-------------|
-| `Box` | `size: (w, h, d)` | Axis-aligned cuboid |
-| `Sphere` | `radius: f32` | UV sphere |
-| `Cylinder` | `radius: f32, height: f32` | Vertical cylinder |
+| Shape      | Parameters                 | Description         |
+| ---------- | -------------------------- | ------------------- |
+| `Box`      | `size: (w, h, d)`          | Axis-aligned cuboid |
+| `Sphere`   | `radius: f32`              | UV sphere           |
+| `Cylinder` | `radius: f32, height: f32` | Vertical cylinder   |
 
 ## Node Properties
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `name` | `String` | Identifier used for animation targeting and UI display |
-| `shape` | `PrimitiveShape` | Optional geometry for this node |
-| `at` | `(f32, f32, f32)` | Position relative to parent |
-| `pivot` | `(f32, f32, f32)` | Rotation pivot offset (defaults to node origin) |
-| `color` | `(f32, f32, f32)` | RGB color (0.0-1.0), used when no surface is specified |
-| `surface` | `String` | Name of a [surface](surface-editor.md) to apply to this part |
-| `emissive` | `bool` | Whether the material emits light |
-| `orient` | `Axis` | Reorient the shape's primary axis (default Y). `X` rotates 90° around Z (Y→X), `Z` rotates 90° around X (Y→Z). Useful for cylinders which are Y-up by default. |
-| `rotate` | `(f32, Axis)` | Static rotation in degrees around an axis. Converted to radians internally. |
-| `template` | `String` | Name of a template to instantiate |
-| `children` | `[ShapeNode]` | Child nodes in the hierarchy |
-| `mirror` | `Axis` | Duplicate this subtree mirrored across the given axis |
-| `repeat` | `RepeatSpec` | Repeat this node along an axis |
-| `decals` | `[DecalInstance]` | [Decals](decal-editor.md) applied to this part's geometry |
+| Property   | Type              | Description                                                                                                                                                    |
+| ---------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`     | `String`          | Identifier used for animation targeting and UI display                                                                                                         |
+| `shape`    | `PrimitiveShape`  | Optional geometry for this node                                                                                                                                |
+| `at`       | `(f32, f32, f32)` | Position relative to parent                                                                                                                                    |
+| `pivot`    | `(f32, f32, f32)` | Rotation pivot offset (defaults to node origin)                                                                                                                |
+| `color`    | `(f32, f32, f32)` | RGB color (0.0-1.0), used when no surface is specified                                                                                                         |
+| `surface`  | `String`          | Name of a [surface](surface-editor.md) to apply to this part                                                                                                   |
+| `emissive` | `bool`            | Whether the material emits light                                                                                                                               |
+| `orient`   | `Axis`            | Reorient the shape's primary axis (default Y). `X` rotates 90° around Z (Y→X), `Z` rotates 90° around X (Y→Z). Useful for cylinders which are Y-up by default. |
+| `rotate`   | `(f32, Axis)`     | Static rotation in degrees around an axis. Converted to radians internally.                                                                                    |
+| `template` | `String`          | Name of a template to instantiate                                                                                                                              |
+| `children` | `[ShapeNode]`     | Child nodes in the hierarchy                                                                                                                                   |
+| `mirror`   | `Axis`            | Duplicate this subtree mirrored across the given axis                                                                                                          |
+| `repeat`   | `RepeatSpec`      | Repeat this node along an axis                                                                                                                                 |
+| `decals`   | `[DecalInstance]` | [Decals](decal-editor.md) applied to this part's geometry                                                                                                      |
 
 ## Templates
 
@@ -156,18 +156,18 @@ Animations are defined as named states, each containing channels that target spe
 
 ### Motion Types
 
-| Motion | Parameters | Description |
-|--------|-----------|-------------|
-| `Oscillate` | `amplitude, speed, offset` | `sin(phase * speed + offset) * amplitude` |
-| `Spin` | `rate` | Continuous rotation: `phase * rate` |
-| `Bob` | `amplitude, freq` | Time-based sine bob (independent of walk phase) |
+| Motion      | Parameters                 | Description                                     |
+| ----------- | -------------------------- | ----------------------------------------------- |
+| `Oscillate` | `amplitude, speed, offset` | `sin(phase * speed + offset) * amplitude`       |
+| `Spin`      | `rate`                     | Continuous rotation: `phase * rate`             |
+| `Bob`       | `amplitude, freq`          | Time-based sine bob (independent of walk phase) |
 
 ### Animation Properties
 
-| Property | Description |
-|----------|-------------|
-| `Rotation` | Rotate around the specified axis (radians) |
-| `Translation` | Translate along the specified axis |
+| Property      | Description                                |
+| ------------- | ------------------------------------------ |
+| `Rotation`    | Rotate around the specified axis (radians) |
+| `Translation` | Translate along the specified axis         |
 
 ### Example: Multi-state Animation
 
@@ -203,15 +203,15 @@ The egui side panel displays the full part hierarchy with:
 
 ## Camera Controls
 
-| Input | Action |
-|-------|--------|
-| Left mouse drag | Orbit camera |
-| Middle mouse drag | Pan camera |
-| Scroll wheel | Zoom (orthographic scale) |
-| Arrow keys | Orbit camera |
-| R | Reload shape file |
-| F1 | Toggle debug gizmos (part origins, axes) |
-| Tab | Cycle animation state |
+| Input             | Action                                   |
+| ----------------- | ---------------------------------------- |
+| Left mouse drag   | Orbit camera                             |
+| Middle mouse drag | Pan camera                               |
+| Scroll wheel      | Zoom (orthographic scale)                |
+| Arrow keys        | Orbit camera                             |
+| R                 | Reload shape file                        |
+| F1                | Toggle debug gizmos (part origins, axes) |
+| Tab               | Cycle animation state                    |
 
 ## Surface and Decal Integration
 

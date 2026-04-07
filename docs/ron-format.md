@@ -46,13 +46,13 @@ RON is similar to Rust literal syntax:
 
 ## Asset File Types
 
-| Extension | Editor | Root Type | Description |
-|-----------|--------|-----------|-------------|
+| Extension      | Editor         | Root Type    | Description                                                     |
+| -------------- | -------------- | ------------ | --------------------------------------------------------------- |
 | `.surface.ron` | Surface Editor | `SurfaceDef` | Visual appearance definition (color, noise, pattern, roughness) |
-| `.shape.ron` | Object Editor | `ShapeFile` | 3D object with templates and animations |
-| `.tileset.ron` | Tileset Editor | `TilesetDef` | 47-blob tileset referencing face/edge surfaces |
-| `.decal.ron` | Decal Editor | `DecalDef` | SDF shape composition for surface overlays |
-| `.world.ron` | World Editor | `WorldDef` | Biome terrain generation parameters |
+| `.shape.ron`   | Object Editor  | `ShapeFile`  | 3D object with templates and animations                         |
+| `.tileset.ron` | Tileset Editor | `TilesetDef` | 47-blob tileset referencing face/edge surfaces                  |
+| `.decal.ron`   | Decal Editor   | `DecalDef`   | SDF shape composition for surface overlays                      |
+| `.world.ron`   | World Editor   | `WorldDef`   | Biome terrain generation parameters                             |
 
 ## Shape Files (`.shape.ron`)
 
