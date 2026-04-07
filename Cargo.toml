@@ -1,0 +1,12 @@
+[package]
+name = "asset-creator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.15.3"
+bevy_egui = "0.33"
+ron = "0.8"
+serde = { version = "1", features = ["derive"] }
+image = "0.25"
+noise = "0.9"
