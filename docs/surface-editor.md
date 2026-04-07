@@ -23,7 +23,7 @@ A surface is defined by these parameters:
     color_variation: (0.15, 0.1, 0.05),
     noise_scale: 6.0,
     noise_octaves: 4,
-    pattern: "Ridged",
+    pattern: Ridged,
     roughness: 0.8,
     speckle_density: 0.0,
     speckle_color: (1.0, 1.0, 1.0),
@@ -42,7 +42,7 @@ A surface is defined by these parameters:
 | `color_variation` | `(f32, f32, f32)` | `(0.08, 0.06, 0.04)` | Per-channel noise-driven color offset |
 | `noise_scale` | `f32` | `8.0` | Spatial frequency of the noise pattern |
 | `noise_octaves` | `u32` | `3` | FBM octaves (1 = smooth, 4+ = detailed) |
-| `pattern` | `PatternType` | `"Perlin"` | Which noise function drives the look |
+| `pattern` | `PatternType` | `Perlin` | Which noise function drives the look |
 | `roughness` | `f32` | `0.6` | PBR roughness (0.0 = mirror, 1.0 = matte). Used by 3D output; ignored by 2D pixel export. |
 | `speckle_density` | `f32` | `0.0` | Fraction of pixels that receive speckle dots (0.0-1.0) |
 | `speckle_color` | `(f32, f32, f32)` | `(1.0, 1.0, 1.0)` | Color of speckle dots |
@@ -198,7 +198,7 @@ Surfaces use `.surface.ron` extension:
     color_variation: (0.15, 0.1, 0.05),
     noise_scale: 6.0,
     noise_octaves: 4,
-    pattern: "Ridged",
+    pattern: Ridged,
     roughness: 0.8,
     seed: 42,
 )

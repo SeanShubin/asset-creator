@@ -41,17 +41,12 @@ A Rust/Bevy application for procedurally generating and live-editing game assets
 ## Quick Start
 
 ```bash
-# Interactive surface editor
+# Launch the asset browser (access all editors from one window)
+cargo run
+
+# Jump directly to a specific editor
 cargo run -- surface --preset Marble
-
-# Interactive object editor
-cargo run -- object path/to/shape.ron
-
-# Export a tileset to PNG
-cargo run -- tileset --preset DarkStone --export assets/generated/wall.png
-
-# Interactive world editor
-cargo run -- world
+cargo run -- object data/shapes/scout_bot.shape.ron
 ```
 
 ## Controls (shared across editors)

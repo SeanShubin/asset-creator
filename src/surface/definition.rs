@@ -17,7 +17,7 @@ impl Default for PatternType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SurfaceDef {
     #[serde(default = "default_name")]
     pub name: String,

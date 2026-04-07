@@ -116,7 +116,7 @@ See [Object Editor](object-editor.md) for the complete node property reference.
     color_variation: (0.15, 0.1, 0.05),
     noise_scale: 6.0,
     noise_octaves: 4,
-    pattern: "Ridged",
+    pattern: Ridged,
     roughness: 0.8,
     seed: 42,
 )

@@ -1,0 +1,76 @@
+(
+    templates: {
+        "wheel": (
+            shape: Cylinder(radius: 0.18, height: 0.1),
+            color: (0.25, 0.25, 0.28),
+            orient: Z,
+        ),
+    },
+    root: (
+        name: "scout_bot",
+        children: [
+            (
+                name: "chassis",
+                shape: Box(size: (0.7, 0.35, 0.5)),
+                at: (0.0, 0.55, 0.0),
+                color: (0.45, 0.45, 0.50),
+                children: [
+                    (
+                        name: "head",
+                        shape: Sphere(radius: 0.18),
+                        at: (0.0, 0.35, 0.0),
+                        color: (0.55, 0.55, 0.60),
+                        children: [
+                            (
+                                name: "eye",
+                                shape: Sphere(radius: 0.06),
+                                at: (0.0, 0.0, 0.15),
+                                color: (0.9, 0.2, 0.1),
+                                emissive: true,
+                            ),
+                        ],
+                    ),
+                    (
+                        name: "arm",
+                        shape: Box(size: (0.12, 0.4, 0.12)),
+                        at: (0.41, 0.0, 0.0),
+                        color: (0.25, 0.25, 0.28),
+                        mirror: X,
+                    ),
+                ],
+            ),
+            (
+                name: "wheel",
+                template: "wheel",
+                at: (0.38, 0.18, 0.2),
+                mirror: X,
+            ),
+            (
+                name: "wheel_rear",
+                template: "wheel",
+                at: (0.38, 0.18, -0.2),
+                mirror: X,
+            ),
+        ],
+    ),
+    animations: [
+        (
+            name: "idle",
+            channels: [
+                (part: "head", property: Rotation, axis: Y,
+                 motion: Oscillate(amplitude: 0.15, speed: 2.0, offset: 0.0)),
+            ],
+        ),
+        (
+            name: "drive",
+            channels: [
+                (part: "wheel", property: Rotation, axis: Z,
+                 motion: Spin(rate: 8.0)),
+                (part: "wheel_rear", property: Rotation, axis: Z,
+                 motion: Spin(rate: 8.0)),
+                (part: "arm", property: Rotation, axis: X,
+                 motion: Oscillate(amplitude: 0.2, speed: 6.0, offset: 0.0)),
+            ],
+        ),
+    ],
+)

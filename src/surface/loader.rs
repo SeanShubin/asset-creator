@@ -8,6 +8,7 @@ pub fn load_surface_from_file(path: &Path) -> Result<SurfaceDef, String> {
 }
 
 fn parse_surface_ron(ron_str: &str) -> Result<SurfaceDef, String> {
-    ron::de::from_str(ron_str)
+    let options = ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
+    options.from_str(ron_str)
         .map_err(|e| format!("Failed to parse RON: {}", e))
 }

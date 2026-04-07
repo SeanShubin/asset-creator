@@ -4,37 +4,64 @@ Application structure, plugin organization, and shared systems.
 
 ## High-Level Structure
 
-The asset creator is a Bevy application organized as a set of editor modes, each implemented as a Bevy plugin. All editors share common infrastructure for camera control, UI panels, dirty-flag rendering, and RON deserialization.
+The asset creator is a single Bevy application that launches with an asset browser. All editors are accessible from one `cargo run` invocation. The left sidebar always shows the asset browser (all known assets organized by type), and the main viewport displays the active editor. Switching editors despawns the previous editor's entities and spawns new ones, while the asset registry persists across switches.
+
+CLI arguments can skip the browser and jump directly into a specific editor:
+- `cargo run` — asset browser with no editor active
+- `cargo run -- surface --preset Marble` — jump to surface editor
+- `cargo run -- object data/shapes/scout_bot.shape.ron` — jump to object editor
 
 ```
 asset-creator/
   src/
-    main.rs              # CLI argument parsing, editor mode dispatch
-    editors/
-      surface.rs         # Surface editor (visual appearance, 2D/3D preview)
-      object.rs          # 3D object editor (shape viewer + part tree)
-      tileset.rs         # 47-blob autotile tileset editor
-      decal.rs           # SDF shape composer for decals
-      world.rs           # Biome terrain generator
-    shared/
-      camera.rs          # Orbit camera (3D) and pan/zoom camera (2D)
-      noise.rs           # Noise function library
-      sdf.rs             # SDF primitives and boolean operations
-      shape.rs           # Shape description interpreter (RON -> Bevy entities)
-      surface.rs         # Surface definition, 2D renderer, WGSL material bridge
-      ui.rs              # Common egui panel helpers
-    shaders/
-      surface.wgsl       # World-space procedural surface shader
+    main.rs              # App entry point, plugin registration
+    browser/
+      mod.rs             # Asset browser plugin (sidebar UI, editor switching)
+    editor/
+      surface_editor.rs  # Surface editor (2D preview, parameter UI)
+      object_editor.rs   # 3D object editor (shape viewer, part tree, animation)
+      orbit_camera.rs    # 3D orbit camera
+      camera.rs          # 2D pan/zoom camera
+    noise/               # Pure math noise function library
+    surface/             # Surface definition, renderer, presets, RON loader
+    shape/               # Shape interpreter (RON -> Bevy entities), animation
+    registry/            # Asset registry, file watcher, persistence
   data/
-    surfaces/            # Example RON surface definitions
-    shapes/              # Example RON shape files
-    tilesets/            # Example RON tileset definitions
-    decals/              # Example RON decal definitions
-    worlds/              # Example RON world definitions
+    surfaces/            # RON surface definitions
+    shapes/              # RON shape files
+    tilesets/            # RON tileset definitions (future)
+    decals/              # RON decal definitions (future)
+    worlds/              # RON world definitions (future)
   assets/
     generated/           # Export output directory
     shaders/             # WGSL shader assets
 ```
+
+## Application Lifecycle
+
+1. **Startup**: The registry scans `data/` and loads all RON files by type
+2. **Asset browser**: The left sidebar displays all known assets grouped by type (surfaces, shapes, etc.) with "New" buttons for each type
+3. **Editor activation**: Clicking an asset opens its editor in the main viewport. The previous editor's entities (cameras, sprites, meshes) are despawned and the new editor's entities are spawned.
+4. **Live editing**: Changes in one editor are immediately visible in others via the shared registry. Editing a surface updates any object that references it.
+5. **File persistence**: UI changes auto-save to disk on interaction completion. External file edits are detected by the file watcher within 500ms.
+
+## Editor Switching
+
+Editors are activated and deactivated dynamically. Each editor module provides:
+- A `spawn` function that creates its cameras, lights, sprites, and UI state
+- A `despawn` function that cleans up all its entities
+- Systems that only run when the editor is active (gated by a marker resource)
+
+```rust
+#[derive(Resource)]
+enum ActiveEditor {
+    None,
+    Surface { name: String },
+    Object { path: PathBuf },
+}
+```
+
+The browser plugin watches for changes to `ActiveEditor` and handles the spawn/despawn lifecycle.
 
 ## Bevy Plugin Organization
 
@@ -62,30 +89,67 @@ impl Plugin for SurfaceEditorPlugin {
 }
 ```
 
-## Dirty-Flag Rendering
+## Asset Registry
 
-All editors use a dirty-flag pattern to avoid unnecessary recomputation:
+The asset registry is the central data store. RON files on disk are the source of truth. All editors read from and write to the registry, which synchronizes with the filesystem.
 
-1. A `Dirty(bool)` resource tracks whether parameters have changed
-2. UI systems set `dirty = true` when any parameter is modified
-3. The regeneration system checks `dirty`, does work only when true, then sets `dirty = false`
+### Registry Design
 
 ```rust
 #[derive(Resource)]
-struct RenderDirty(bool);
+struct AssetRegistry {
+    surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
+    // Future: shapes, tilesets, decals, worlds
+}
 
-fn regenerate_texture(
-    mut dirty: ResMut<RenderDirty>,
-    params: Res<BlenderParams>,
-    // ...
-) {
-    if !dirty.0 { return; }
-    dirty.0 = false;
-    // ... expensive texture generation ...
+struct RegisteredAsset<T> {
+    data: T,
+    path: PathBuf,
+    last_modified: SystemTime,
 }
 ```
 
-This ensures the viewport stays responsive during parameter editing while avoiding per-frame recomputation.
+The registry:
+- Scans `data/` on startup, loading all RON files by type
+- Polls file modification times periodically (every 500ms) to detect external changes
+- Provides named lookup: `registry.surfaces.get("rusted_steel")`
+- When an editor modifies an asset through the UI, it updates both the registry and writes to disk
+
+### File Watching
+
+External changes (text editor saves) are detected by comparing `last_modified` timestamps on a timer. This avoids OS-specific file watcher dependencies while being fast enough to feel immediate.
+
+### Cross-Editor Reactivity
+
+When a surface changes (either from UI or file reload), any object referencing that surface by name sees the update automatically because:
+1. The registry entry is updated
+2. A generation counter or change event signals dependent editors
+3. Dependent editors rebuild their materials/textures from the new data
+
+## Dirty-Flag Rendering
+
+Editors use two levels of dirty flags to separate preview responsiveness from file persistence:
+
+### Preview Dirty
+
+Set on every `changed()` from egui widgets. Triggers immediate re-render of the viewport preview. Fires continuously during slider drags for real-time feedback.
+
+### File Dirty
+
+Set only on interaction completion signals:
+- `drag_stopped()` for sliders and color pickers (fires once on mouse release)
+- `lost_focus()` for text inputs (fires when user clicks away or presses enter)
+- `clicked()` for buttons and radio selectors (already discrete actions)
+
+This ensures the preview stays responsive during interaction while the file is only written when the user commits a change. Moving a slider from 0.20 to 0.80 produces one file write, not sixty.
+
+```rust
+#[derive(Resource)]
+struct EditorDirty {
+    preview: bool,  // regenerate the viewport
+    file: bool,     // write to disk
+}
+```
 
 ## Camera Systems
 
