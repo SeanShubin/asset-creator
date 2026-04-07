@@ -9,11 +9,13 @@ use super::camera::{PanZoomCamera, zoom_camera};
 
 const PREVIEW_SIZE: u32 = 512;
 
-pub struct SurfaceEditorPlugin;
+pub struct SurfaceEditorPlugin {
+    pub initial_surface: SurfaceDef,
+}
 
 impl Plugin for SurfaceEditorPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(EditorState::new(SurfaceDef::default()))
+        app.insert_resource(EditorState::new(self.initial_surface.clone()))
             .insert_resource(RenderDirty(true))
             .add_systems(Startup, setup_preview)
             .add_systems(Update, (parameter_ui, regenerate_preview, zoom_camera, pan_camera));
