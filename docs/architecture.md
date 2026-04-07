@@ -47,17 +47,17 @@ Each editor is a self-contained Bevy plugin that registers its own:
 ### Plugin Pattern
 
 ```rust
-pub struct TextureEditorPlugin {
-    pub params: TexParams,
+pub struct SurfaceEditorPlugin {
+    pub initial_surface: String,
 }
 
-impl Plugin for TextureEditorPlugin {
+impl Plugin for SurfaceEditorPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(self.params.clone())
-           .insert_resource(TexDirty(true))
-           .add_systems(Startup, spawn_camera_and_tileset)
+        app.insert_resource(SurfaceParams::default())
+           .insert_resource(SurfaceDirty(true))
+           .add_systems(Startup, setup_preview)
            .add_systems(EguiPrimaryContextPass, parameter_ui)
-           .add_systems(Update, (regenerate_tileset, camera_zoom, camera_pan));
+           .add_systems(Update, (regenerate_preview, camera_zoom, camera_pan));
     }
 }
 ```

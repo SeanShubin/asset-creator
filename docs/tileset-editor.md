@@ -1,16 +1,88 @@
 # Tileset Editor
 
-Generate 47-blob autotile tilesets with procedural surfaces, beveled 3D lighting, and multiple tile styles.
+Generate 47-blob autotile tilesets with procedural surfaces, beveled lighting, and configurable zone geometry.
 
 ## Overview
 
-The tileset editor produces complete tileset sheets matching the standard 47-blob autotile layout used by tile map editors (LDtk, Tiled, etc.). Each tile is rendered procedurally from surface definitions -- no hand-painted source textures are needed.
+The tileset editor produces complete tileset sheets matching the standard 47-blob autotile layout used by tile map editors (LDtk, Tiled, etc.). Each tile is rendered procedurally from [surface](surface-editor.md) definitions -- no hand-painted source textures are needed.
 
-The editor supports two tile styles:
-- **Bevel**: Elevated tiles with 3D-lit beveled edges
-- **Ground**: Flat tiles with a border/outline texture
+Each tile has up to three concentric zones, defined as fractions from outside in:
 
-Both styles use independent face and edge [surfaces](surface-editor.md).
+| Zone | Surface | Required | Description |
+|------|---------|----------|-------------|
+| **Outer** | required | yes | The exposed edge/ground area around the tile perimeter |
+| **Middle** | optional | no | Angled transition (bevel) between outer and inner |
+| **Inner** | optional | no | The raised/central face of the tile |
+
+Zone fractions must sum to 1.0 (`outer + middle + inner = 1.0`).
+
+## Zone Model
+
+The 47-blob adjacency mask determines where each zone appears on each tile. On sides where the tile has adjacency (a neighbor of the same type), the outer zone is suppressed and the inner zone extends to that edge. On exposed sides (no neighbor), all three zones are visible in order: outer at the perimeter, then middle, then inner.
+
+### Bevel Angle
+
+The middle zone has a `bevel_angle` parameter (0-90 degrees) that controls the surface normal used for lighting:
+
+- **0°** = flat. The middle zone is a flat band with a different surface than inner/outer. Normal points straight up. No lighting variation.
+- **15-30°** = gentle ramp. Subtle lighting -- slightly lit on one side, slightly shadowed on the other.
+- **45°** = classic bevel. The standard raised-tile look. Clear light/shadow distinction on the slope.
+- **60°+** = steep slope. The middle zone receives very little light from above, appearing as a dark band.
+
+The angle does not change the pixel width of the middle zone -- it only affects how light hits it. The per-pixel normal for the middle zone is:
+
+```
+normal = (sin(bevel_angle) * edge_direction, cos(bevel_angle))
+```
+
+Where `edge_direction` points from inner toward outer (away from the tile center on exposed edges).
+
+The practical useful range is 0-60°. Beyond that the bevel is so dark it's essentially invisible. At 90° with zero middle fraction, the angle is irrelevant.
+
+### Examples
+
+**Flat ground tile** (no bevel):
+
+```ron
+(
+    outer_fraction: 0.5,
+    outer_surface: "ground",
+    middle_fraction: 0.0,
+    inner_fraction: 0.5,
+    inner_surface: "grass",
+)
+```
+
+A tile with N+S adjacency: the outer "ground" surface appears as 0.25-wide strips on the exposed left and right edges. The center is filled with "grass". No height transition.
+
+**Classic raised tile** (beveled):
+
+```ron
+(
+    outer_fraction: 0.0,
+    middle_fraction: 0.5,
+    middle_surface: "stone_slope",
+    bevel_angle: 45.0,
+    inner_fraction: 0.5,
+    inner_surface: "stone_face",
+)
+```
+
+A tile with N+S adjacency: the left and right edges have a 45° slope (lit/shadowed by the directional light), the center is flat "stone_face".
+
+**Three-zone tile** (ground + bevel + face):
+
+```ron
+(
+    outer_fraction: 0.25,
+    outer_surface: "dirt",
+    middle_fraction: 0.25,
+    middle_surface: "stone_wall",
+    bevel_angle: 50.0,
+    inner_fraction: 0.5,
+    inner_surface: "stone_floor",
+)
+```
 
 ## 47-Blob Autotile System
 
@@ -50,109 +122,61 @@ For each tile, the bitmask determines which edges are exposed:
 - **Outer corners**: Cardinal neighbor absent, making the diagonal corner exposed
 - **Inner corners**: Both adjacent cardinals are present, but the diagonal is absent -- producing a concave notch
 
-## Bevel Lighting Model
+## Lighting Model
 
-Beveled tiles simulate a 3D raised surface using per-pixel normal computation:
-
-### Geometry
-
-Each tile has three zones:
-1. **Face**: The flat top surface (normal pointing straight up: `[0, 0, 1]`)
-2. **Bevel**: Angled slope from face to edge, width controlled by `edge_fraction` (default 0.22 = 22% of tile size)
-3. **Edge**: The vertical side (only visible in ground-style as a border)
-
-### Lighting
-
-The lighting model computes per-pixel brightness from a directional light:
+The lighting model computes per-pixel brightness from a directional light source:
 
 ```
 brightness = ambient + (1.0 - ambient) * max(0, dot(normal, light_dir))
 ```
 
-Parameters:
-- `light_angle`: Direction of the light source in degrees (default: 135, from upper-left)
-- `shadow_strength`: How dark the shadowed bevels get (0.0-1.0)
-- `highlight_strength`: How bright the lit bevels get (0.0-1.0)
-- `ambient`: Minimum brightness floor (default: 0.25)
+The light direction is derived from `light_angle` (degrees, math convention: 0° = right, counter-clockwise positive):
 
-### Bevel Normal Computation
+```
+light_dir = (cos(light_angle), sin(light_angle), overhead_z)
+normalized
+```
 
-For each pixel in the bevel zone, the surface normal is computed based on:
-- Distance to the nearest edge
-- Bevel angle: `atan(bevel_depth / bevel_width)`
-- The normal is tilted away from the face toward the edge direction
+### Zone Normals
 
-Corner bevels use radial distance for smooth curved transitions. Inner corners produce concave geometry with inverted normals.
+| Zone | Normal | Lighting behavior |
+|------|--------|-------------------|
+| **Inner** | Straight up `(0, 0, 1)` | Uniform brightness across the flat face |
+| **Middle** | Tilted by `bevel_angle` toward the exposed edge | Lit on the light-facing side, shadowed on the opposite side |
+| **Outer** | Straight up `(0, 0, 1)` | Uniform brightness (flat ground) |
 
-### Edge Lines
+Corner normals in the middle zone use radial distance for smooth curved transitions. Inner corners (concave notches) use inward-tilted normals.
 
-Optional edge lines mark bevel boundaries:
-- **Outer line**: Lighter, at the top of the bevel ridge
-- **Inner line**: Darker, where the bevel meets the face
-- Lines are suppressed at tile boundaries (where adjacent tiles would connect)
+### Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `light_angle` | `f32` | 135.0 | Light direction in degrees (math convention). 135° = upper-left. |
+| `ambient` | `f32` | 0.25 | Minimum brightness floor (0.0-1.0) |
 
 ## Procedural Surfaces on Tiles
 
-Face and edge zones each reference a [surface](surface-editor.md) definition. The surface is sampled using world-space coordinates (continuous across the full tileset sheet), so patterns tile seamlessly when tiles are placed adjacent in a map.
+Each zone references a [surface](surface-editor.md) by name. Surfaces are evaluated using world-space tile coordinates (continuous across the full tileset sheet), so patterns tile seamlessly when tiles are placed adjacent in a map.
 
-Surface parameters per zone include base color, color variation, noise scale, octave count, pattern type, speckle overlay, and secondary color. See [Surface Editor](surface-editor.md) for the full parameter reference.
-
-## Presets
-
-| Preset | Style | Description |
-|--------|-------|-------------|
-| Beveled Block | Bevel | Flat gray with 3D lighting and edge lines, no texture |
-| Concrete | Bevel | Gray Perlin noise with moderate detail |
-| Red Stone | Bevel | Ridged pattern with brick-like speckles |
-| Dark Stone | Bevel | High-octave cellular pattern |
-| Marble | Bevel | Domain-warped veined stone |
-| Wood Plank | Bevel | Horizontal stripe grain |
-| Sandstone | Bevel | Warm Perlin with fine speckles |
-| Metal Plate | Bevel | Low-variation, high-bevel-depth metal |
+See [Surface Editor](surface-editor.md) for the full surface parameter reference.
 
 ## RON Format
 
-Tileset definitions can be specified in RON:
-
 ```ron
 (
-    style: Bevel,
-    face_surface: "concrete",
-    edge_surface: "dark_concrete",
-    edge_fraction: 0.22,
+    name: "stone_wall_tileset",
+    outer_fraction: 0.0,
+    middle_fraction: 0.25,
+    middle_surface: "stone_slope",
+    bevel_angle: 45.0,
+    inner_fraction: 0.75,
+    inner_surface: "stone_face",
     light_angle: 135.0,
-    shadow_strength: 0.7,
-    highlight_strength: 0.4,
+    ambient: 0.25,
 )
 ```
 
-Surfaces can also be defined inline:
-
-```ron
-(
-    style: Bevel,
-    face_surface: (
-        base_color: (0.62, 0.62, 0.62),
-        color_variation: (0.06, 0.06, 0.06),
-        noise_scale: 0.08,
-        noise_octaves: 3,
-        pattern: "Perlin",
-        seed: 42,
-    ),
-    edge_surface: (
-        base_color: (0.50, 0.50, 0.55),
-        color_variation: (0.03, 0.03, 0.03),
-        noise_scale: 0.08,
-        noise_octaves: 2,
-        pattern: "Perlin",
-        seed: 42,
-    ),
-    edge_fraction: 0.22,
-    light_angle: 135.0,
-    shadow_strength: 0.7,
-    highlight_strength: 0.4,
-)
-```
+All fraction and angle fields have defaults (see parameter tables). Only non-default values need to be specified.
 
 ## Export
 
@@ -165,8 +189,8 @@ cargo run -- tileset --export assets/generated/wall.png
 # High-res 128px tiles
 cargo run -- tileset --export wall_hd.png --tile-size 128
 
-# With preset
-cargo run -- tileset --preset DarkStone --export dark_stone.png
+# With a specific tileset definition
+cargo run -- tileset data/tilesets/stone_wall.tileset.ron --export stone.png
 ```
 
 Export produces a gapless grid (no inter-tile spacing) suitable for direct use in tile map editors. The interactive editor adds 2px gaps between tiles for visual clarity.
@@ -174,12 +198,8 @@ Export produces a gapless grid (no inter-tile spacing) suitable for direct use i
 ## UI Panel
 
 The egui side panel provides:
-- Tile style selector (Bevel / Ground)
-- Face surface parameters (full surface config, or pick from named surfaces)
-- Edge surface parameters (independent config)
-- Edge fraction slider
-- Bevel lighting controls (angle, shadow, highlight, ambient)
-- 3D lighting toggle
-- Edge line toggle
-- Preset selector
+- Zone fraction sliders (outer, middle, inner -- constrained to sum to 1.0)
+- Surface selectors for each zone (pick from named surfaces)
+- Bevel angle slider (shown when middle fraction > 0)
+- Lighting controls (angle, ambient)
 - Export button with tile size input

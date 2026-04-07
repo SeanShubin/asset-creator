@@ -128,17 +128,18 @@ Surfaces define visual appearance independently of output format. The same surfa
 
 ```ron
 (
-    style: Bevel,
-    face_surface: "concrete",
-    edge_surface: "dark_concrete",
-    edge_fraction: 0.22,
+    name: "stone_wall_tileset",
+    outer_fraction: 0.0,
+    middle_fraction: 0.25,
+    middle_surface: "stone_slope",
+    bevel_angle: 45.0,
+    inner_fraction: 0.75,
+    inner_surface: "stone_face",
     light_angle: 135.0,
-    shadow_strength: 0.7,
-    highlight_strength: 0.4,
 )
 ```
 
-Face and edge zones reference surfaces by name or define them inline. See [Tileset Editor](tileset-editor.md) for the complete reference.
+Tilesets define up to three concentric zones (outer, middle, inner) with named surface references. See [Tileset Editor](tileset-editor.md) for the complete reference.
 
 ## Decal Files (`.decal.ron`)
 
@@ -189,6 +190,16 @@ Decals use triplanar projection by default, wrapping around edges, spheres, and 
 ```
 
 See [World Editor](world-editor.md) for the complete parameter reference.
+
+## Angle Convention
+
+All angle values in RON files are specified in **degrees**. They follow math convention: 0° = right (+X), counter-clockwise positive. Code converts to radians at the deserialization boundary.
+
+Examples:
+- `light_angle: 135.0` = upper-left
+- `stripe_angle: 0.0` = horizontal lines
+- `stripe_angle: 90.0` = vertical lines
+- `bevel_angle: 45.0` = 45° slope
 
 ## Deserialization
 

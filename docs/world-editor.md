@@ -10,11 +10,11 @@ The world editor generates multi-biome terrain maps using layered noise fields. 
 
 The terrain is driven by three independent noise fields, each using fractal Brownian motion (fBM) with configurable parameters:
 
-| Layer | Controls | Typical Frequency |
-|-------|----------|-------------------|
-| **Elevation** | Water vs. land vs. mountain | 3.0 |
-| **Moisture** | Dry vs. wet biomes on land | 4.0 |
-| **Drainage** | Swamp/marsh vs. grassland/forest | 5.0 |
+| Layer | Controls | Default Frequency | Seed Offset |
+|-------|----------|-------------------|-------------|
+| **Elevation** | Water vs. land vs. mountain | 3.0 | 0 |
+| **Moisture** | Dry vs. wet biomes on land | 4.0 | 137 |
+| **Drainage** | Swamp/marsh vs. grassland/forest | 5.0 | 293 |
 
 Each layer has its own seed offset for independence, and all share the same fBM parameters:
 - **Octaves** (1-10): Detail level. More octaves add finer features.
@@ -132,6 +132,8 @@ Shading formula: `brightness = ambient + max(0, dot(normal, light_dir))`
 World definitions specify noise parameters and biome configuration:
 
 ```ron
+// All fields shown with their default values.
+// Only non-default values need to be specified.
 (
     seed: 42,
     elevation_freq: 3.0,
@@ -144,7 +146,7 @@ World definitions specify noise parameters and biome configuration:
     blend_samples: 8,
     detail_strength: 0.3,
     detail_freq: 20.0,
-    light_azimuth: 225.0,
+    light_angle: 225.0,
     light_elevation: 45.0,
     ambient: 0.15,
     height_scale: 1.0,

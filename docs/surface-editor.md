@@ -35,20 +35,20 @@ A surface is defined by these parameters:
 
 ### Parameters
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | `String` | Identifier for referencing this surface from other assets |
-| `base_color` | `(f32, f32, f32)` | Primary RGB color (0.0-1.0) |
-| `color_variation` | `(f32, f32, f32)` | Per-channel noise-driven color offset |
-| `noise_scale` | `f32` | Spatial frequency of the noise pattern |
-| `noise_octaves` | `u32` | FBM octaves (1 = smooth, 4+ = detailed) |
-| `pattern` | `PatternType` | Which noise function drives the look |
-| `roughness` | `f32` | PBR roughness (0.0 = mirror, 1.0 = matte). Used by 3D output; ignored by 2D pixel export. |
-| `speckle_density` | `f32` | Fraction of pixels that receive speckle dots (0.0-1.0) |
-| `speckle_color` | `(f32, f32, f32)` | Color of speckle dots |
-| `secondary_color` | `Option<(f32, f32, f32)>` | For two-tone patterns; blended with base via noise |
-| `stripe_angle` | `f32` | Angle in degrees for stripe patterns |
-| `seed` | `u32` | Noise seed for reproducibility |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | `String` | required | Identifier for referencing this surface from other assets |
+| `base_color` | `(f32, f32, f32)` | `(0.5, 0.5, 0.55)` | Primary RGB color (0.0-1.0) |
+| `color_variation` | `(f32, f32, f32)` | `(0.08, 0.06, 0.04)` | Per-channel noise-driven color offset |
+| `noise_scale` | `f32` | `8.0` | Spatial frequency of the noise pattern |
+| `noise_octaves` | `u32` | `3` | FBM octaves (1 = smooth, 4+ = detailed) |
+| `pattern` | `PatternType` | `"Perlin"` | Which noise function drives the look |
+| `roughness` | `f32` | `0.6` | PBR roughness (0.0 = mirror, 1.0 = matte). Used by 3D output; ignored by 2D pixel export. |
+| `speckle_density` | `f32` | `0.0` | Fraction of pixels that receive speckle dots (0.0-1.0) |
+| `speckle_color` | `(f32, f32, f32)` | `(1.0, 1.0, 1.0)` | Color of speckle dots |
+| `secondary_color` | `Option<(f32, f32, f32)>` | `None` | For two-tone patterns; blended with base via noise |
+| `stripe_angle` | `f32` | `90.0` | Angle in degrees for stripe patterns (math convention: 0° = horizontal, 90° = vertical) |
+| `seed` | `u32` | `42` | Noise seed for reproducibility |
 
 ### Pattern Types
 
@@ -204,7 +204,7 @@ Surfaces use `.surface.ron` extension:
 )
 ```
 
-Fields use `#[serde(default)]` so only non-default values need to be specified.
+Fields use `#[serde(default)]` so only non-default values need to be specified. The defaults above produce a neutral gray brushed-metal appearance.
 
 ## Command Line
 

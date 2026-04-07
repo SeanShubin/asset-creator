@@ -84,8 +84,8 @@ Objects are defined in RON files with this structure:
 | `color` | `(f32, f32, f32)` | RGB color (0.0-1.0), used when no surface is specified |
 | `surface` | `String` | Name of a [surface](surface-editor.md) to apply to this part |
 | `emissive` | `bool` | Whether the material emits light |
-| `orient` | `Axis` | Primary axis orientation |
-| `rotate` | `(f32, Axis)` | Static rotation in degrees around an axis |
+| `orient` | `Axis` | Reorient the shape's primary axis (default Y). `X` rotates 90° around Z (Y→X), `Z` rotates 90° around X (Y→Z). Useful for cylinders which are Y-up by default. |
+| `rotate` | `(f32, Axis)` | Static rotation in degrees around an axis. Converted to radians internally. |
 | `template` | `String` | Name of a template to instantiate |
 | `children` | `[ShapeNode]` | Child nodes in the hierarchy |
 | `mirror` | `Axis` | Duplicate this subtree mirrored across the given axis |
@@ -112,6 +112,17 @@ root: (
 )
 ```
 
+### Template Overrides
+
+Instance fields override template fields. If the instance specifies a property, it wins; otherwise the template's value is used. If the instance has children, they replace the template's children entirely.
+
+```ron
+// Red wheel -- overrides the template's color
+(template: "wheel", at: (0.4, 0.18, 0.15), color: (1.0, 0.0, 0.0))
+```
+
+Templates can be nested (a template can reference another template).
+
 ## Mirror Combinator
 
 The `mirror` property duplicates a node (and all its children) reflected across an axis. This is how you define symmetric robots, vehicles, or creatures with a single arm/leg definition:
@@ -136,6 +147,8 @@ The `repeat` property duplicates a node multiple times along an axis:
     repeat: (count: 5, spacing: 0.15, along: Z, center: true),
 )
 ```
+
+Repeat duplicates the entire subtree. If a repeated node has children, every copy includes all children.
 
 ## Animation System
 

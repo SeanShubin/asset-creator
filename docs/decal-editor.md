@@ -98,13 +98,13 @@ This is particularly useful for creating organic decal shapes like splatter patt
 
 Each shape in a decal composition has:
 
-| Property | Type | Range | Description |
-|----------|------|-------|-------------|
-| `primitive` | `PrimitiveType` | -- | Which SDF primitive |
-| `x, y` | `f64` | -0.5 to 0.5 | Position in normalized coordinates (for compact primitives) |
-| `rotation` | `f64` | -180 to 180 degrees | Rotation around shape center |
-| `op` | `BoolOp` | -- | How this shape combines with previous shapes |
-| `smooth_k` | `f64` | 0.001-0.2 | Blend radius for smooth operations |
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `primitive` | `PrimitiveType` | required | Which SDF primitive |
+| `x, y` | `f64` | `0.0` | Position in normalized coordinates (for compact primitives) |
+| `rotation` | `f64` | `0.0` | Rotation around shape center in degrees (math convention) |
+| `op` | `BoolOp` | `Union` | How this shape combines with previous shapes |
+| `smooth_k` | `f64` | `0.05` | Blend radius for smooth operations |
 
 Size parameters vary by primitive (see tables above). Stroke primitives use explicit point coordinates instead of `x, y` positioning.
 
@@ -230,23 +230,35 @@ The choice of projection mode depends on the decal's shape:
 
 Each decal instance on a 3D object has:
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `decal` | `String` | Name of the decal definition to apply |
-| `center` | `(f32, f32, f32)` | World-space center of the decal projection |
-| `scale` | `f32` | Size of the decal in world units |
-| `rotation` | `f32` | Rotation of the decal pattern in degrees |
-| `projection` | `ProjectionMode` | `Triplanar` (default), `Planar(axis)`, or `Cylindrical(axis)` |
-| `blend_sharpness` | `f32` | Triplanar blend exponent (default: 6.0). Only used with `Triplanar`. |
-| `opacity` | `f32` | Overall decal opacity (0.0-1.0, default: 1.0) |
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `decal` | `String` | required | Name of the decal definition to apply |
+| `center` | `(f32, f32, f32)` | `(0.0, 0.0, 0.0)` | World-space center of the decal projection |
+| `scale` | `f32` | `1.0` | Size of the decal in world units |
+| `rotation` | `f32` | `0.0` | Rotation of the decal pattern in degrees (math convention) |
+| `projection` | `ProjectionMode` | `Triplanar` | `Triplanar`, `Planar(axis)`, or `Cylindrical(axis)` |
+| `blend_sharpness` | `f32` | `6.0` | Triplanar blend exponent. Only used with `Triplanar`. |
+| `opacity` | `f32` | `1.0` | Overall decal opacity (0.0-1.0) |
+
+### Compositing
+
+Decals are alpha-blended over the base surface. The alpha value is derived from the SDF distance for anti-aliased edges:
+
+```
+coverage = 1.0 - smoothstep(-pixel_size, pixel_size, sdf_distance)
+final_alpha = coverage * decal_opacity
+final_color = decal_color * final_alpha + surface_color * (1.0 - final_alpha)
+```
+
+Inside the shape (`sdf_distance < 0`), coverage approaches 1.0. Outside, it approaches 0.0. The `smoothstep` transition spans exactly one pixel at the boundary for clean anti-aliasing.
 
 ### Layering
 
-Multiple decals can be layered on a single object. Each decal is evaluated independently and composited in order:
+Multiple decals can be layered on a single object. Each decal is composited in order over the result of the previous:
 
 1. Base surface is rendered
-2. Decal 1 is blended over (using SDF distance for anti-aliased edges)
-3. Decal 2 is blended over the result
+2. Decal 1 is alpha-blended over
+3. Decal 2 is alpha-blended over the result
 4. And so on
 
 Each decal has independent position, scale, rotation, projection mode, and opacity. Later decals occlude earlier ones where they overlap.
