@@ -30,6 +30,7 @@ impl Plugin for ObjectEditorPlugin {
                 orbit_camera::orbit_zoom.run_if(is_object_active),
                 keyboard_input.run_if(is_object_active),
                 animate_shapes.run_if(is_object_active),
+                update_light.run_if(is_object_active),
                 part_tree_ui.run_if(is_object_active),
                 draw_grid.run_if(is_object_active),
             ));
@@ -58,6 +59,9 @@ struct ObjectEditorState {
 
 #[derive(Component)]
 struct ObjectEditorEntity;
+
+#[derive(Component)]
+struct EditorLight;
 
 // =====================================================================
 // Activation / deactivation
@@ -129,17 +133,13 @@ fn spawn_scene(commands: &mut Commands) {
     // Rotating Y by -60° offsets the light strongly to one side.
     commands.spawn((
         ObjectEditorEntity,
+        EditorLight,
         DirectionalLight {
             illuminance: 6000.0,
             shadows_enabled: false,
             ..default()
         },
-        Transform::from_rotation(Quat::from_euler(
-            EulerRot::YXZ,
-            -60.0_f32.to_radians(),
-            -50.0_f32.to_radians(),
-            0.0,
-        )),
+        Transform::default(),
     ));
 
     commands.insert_resource(AmbientLight {
@@ -340,6 +340,40 @@ fn compute_scene_aabb(
 }
 
 // =====================================================================
+// Light — follows camera so lighting is consistent regardless of orbit
+// =====================================================================
+
+/// The light direction is computed relative to the camera so that the
+/// lit/shadowed pattern stays consistent as you orbit.
+/// At default camera (yaw=45, pitch=35), the original fixed light was
+/// Euler YXZ (-60°, -50°, 0°). We reproduce this by computing the light
+/// rotation from the camera rotation with a fixed offset.
+fn update_light(
+    orbit: Res<OrbitState>,
+    mut light: Query<&mut Transform, With<EditorLight>>,
+) {
+    let Ok(mut tf) = light.get_single_mut() else { return };
+
+    // Camera rotation
+    let cam_rot = Quat::from_euler(
+        EulerRot::YXZ,
+        -orbit.yaw.to_radians(),
+        -orbit.pitch.to_radians(),
+        0.0,
+    );
+
+    // Fixed offset: light comes from upper-left relative to camera view
+    let light_offset = Quat::from_euler(
+        EulerRot::YXZ,
+        15.0_f32.to_radians(),   // slightly left of camera
+        -30.0_f32.to_radians(),  // above camera view
+        0.0,
+    );
+
+    tf.rotation = cam_rot * light_offset;
+}
+
+// =====================================================================
 // Grid
 // =====================================================================
 
@@ -353,33 +387,47 @@ const AXIS_COLOR_Y: Color = Color::srgba(0.2, 0.8, 0.2, 0.6);
 const AXIS_COLOR_Z: Color = Color::srgba(0.2, 0.2, 0.8, 0.6);
 
 fn draw_grid(mut gizmos: Gizmos, orbit: Res<OrbitState>) {
-    let offsets = grid_offsets_behind_camera(orbit.yaw);
+    let yaw_rad = orbit.yaw.to_radians();
+    let pitch = orbit.pitch;
 
-    draw_offset_grid(&mut gizmos, GridPlane::XZ, offsets.floor, GRID_COLOR_XZ);
-    draw_offset_grid(&mut gizmos, GridPlane::XY, offsets.back_wall, GRID_COLOR_XY);
-    draw_offset_grid(&mut gizmos, GridPlane::YZ, offsets.side_wall, GRID_COLOR_YZ);
-    draw_axis_lines(&mut gizmos, &offsets);
-}
-
-struct GridOffsets {
-    floor: f32,      // Y offset for XZ plane
-    back_wall: f32,  // Z offset for XY plane
-    side_wall: f32,  // X offset for YZ plane
-}
-
-fn grid_offsets_behind_camera(yaw: f32) -> GridOffsets {
-    let yaw_rad = yaw.to_radians();
-    // From camera_debug example:
-    //   camera X ≈ -sin(yaw) * distance  (negative X at yaw > 0)
-    //   camera Z ≈  cos(yaw) * distance  (positive Z at yaw = 0..90)
-    // Walls go on the opposite side from camera:
-    //   XY back wall (Z offset): camera at +Z → wall at -Z
-    //   YZ side wall (X offset): camera at -X → wall at +X
-    GridOffsets {
-        floor: -GRID_HALF_SIZE,
-        back_wall: if yaw_rad.cos() > 0.0 { -GRID_HALF_SIZE } else { GRID_HALF_SIZE },
-        side_wall: if yaw_rad.sin() > 0.0 { GRID_HALF_SIZE } else { -GRID_HALF_SIZE },
+    // Floor (XZ plane): visible when looking from above (pitch > 0)
+    if pitch > 0.0 {
+        draw_offset_grid(&mut gizmos, GridPlane::XZ, -GRID_HALF_SIZE, GRID_COLOR_XZ);
+        draw_floor_axes(&mut gizmos, -GRID_HALF_SIZE);
     }
+    // Ceiling: visible when looking from below (pitch < 0)
+    if pitch < 0.0 {
+        draw_offset_grid(&mut gizmos, GridPlane::XZ, GRID_HALF_SIZE, GRID_COLOR_XZ);
+        draw_floor_axes(&mut gizmos, GRID_HALF_SIZE);
+    }
+
+    // XY back wall: visible when camera Z > 0 (cos(yaw) > 0)
+    let back_wall_z = if yaw_rad.cos() > 0.0 { -GRID_HALF_SIZE } else { GRID_HALF_SIZE };
+    draw_offset_grid(&mut gizmos, GridPlane::XY, back_wall_z, GRID_COLOR_XY);
+
+    // YZ side wall: visible when camera X < 0 (sin(yaw) > 0)
+    let side_wall_x = if yaw_rad.sin() > 0.0 { GRID_HALF_SIZE } else { -GRID_HALF_SIZE };
+    draw_offset_grid(&mut gizmos, GridPlane::YZ, side_wall_x, GRID_COLOR_YZ);
+
+    // Y axis line on the side wall
+    gizmos.line(
+        Vec3::new(side_wall_x, -GRID_HALF_SIZE, 0.0),
+        Vec3::new(side_wall_x, GRID_HALF_SIZE, 0.0),
+        AXIS_COLOR_Y,
+    );
+}
+
+fn draw_floor_axes(gizmos: &mut Gizmos, y: f32) {
+    gizmos.line(
+        Vec3::new(-GRID_HALF_SIZE, y, 0.0),
+        Vec3::new(GRID_HALF_SIZE, y, 0.0),
+        AXIS_COLOR_X,
+    );
+    gizmos.line(
+        Vec3::new(0.0, y, -GRID_HALF_SIZE),
+        Vec3::new(0.0, y, GRID_HALF_SIZE),
+        AXIS_COLOR_Z,
+    );
 }
 
 enum GridPlane { XZ, XY, YZ }
@@ -424,26 +472,6 @@ fn draw_offset_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, color: C
     }
 }
 
-fn draw_axis_lines(gizmos: &mut Gizmos, offsets: &GridOffsets) {
-    // X axis on floor
-    gizmos.line(
-        Vec3::new(-GRID_HALF_SIZE, offsets.floor, 0.0),
-        Vec3::new(GRID_HALF_SIZE, offsets.floor, 0.0),
-        AXIS_COLOR_X,
-    );
-    // Y axis on side wall
-    gizmos.line(
-        Vec3::new(offsets.side_wall, -GRID_HALF_SIZE, 0.0),
-        Vec3::new(offsets.side_wall, GRID_HALF_SIZE, 0.0),
-        AXIS_COLOR_Y,
-    );
-    // Z axis on floor
-    gizmos.line(
-        Vec3::new(0.0, offsets.floor, -GRID_HALF_SIZE),
-        Vec3::new(0.0, offsets.floor, GRID_HALF_SIZE),
-        AXIS_COLOR_Z,
-    );
-}
 
 // =====================================================================
 // Input

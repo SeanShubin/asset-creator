@@ -47,15 +47,9 @@ pub fn create_cone_mesh(rings: u32, segments: u32) -> Mesh {
 
     let mut indices = generate_grid_indices(rings, segments, true);
 
-    // Bottom cap
-    let center = positions.len() as u32;
-    positions.push([0.0, -0.5, 0.0]);
-    normals.push([0.0, -1.0, 0.0]);
-    uvs.push([0.5, 0.0]);
-
-    for seg in 0..segments {
-        indices.extend_from_slice(&[center, seg, seg + 1]);
-    }
+    // Bottom cap with its own downward-facing vertices
+    add_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
+        0.5, -0.5, segments, false);
 
     build_mesh(positions, normals, uvs, indices)
 }
@@ -223,9 +217,9 @@ fn add_disc(
         let b = center_idx + 1 + seg;
         let c = center_idx + 2 + seg;
         if normal_up {
-            indices.extend_from_slice(&[a, b, c]);
-        } else {
             indices.extend_from_slice(&[a, c, b]);
+        } else {
+            indices.extend_from_slice(&[a, b, c]);
         }
     }
 }
