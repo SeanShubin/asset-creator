@@ -223,12 +223,12 @@ let image = Image::new_fill(
 
 The shape interpreter (`shared/shape.rs`) converts RON data into a Bevy entity hierarchy:
 
-1. **Parse**: `ron::de::from_str` deserializes the RON text into `ShapeFile`
-2. **Template expansion**: Template references are resolved from the `templates` map
-3. **Mirror expansion**: Nodes with `mirror: X` are duplicated with negated X coordinates
+1. **Parse**: `ron::de::from_str` deserializes the RON text into a `ShapeNode` directly (no wrapper struct)
+2. **Import expansion**: Import references are resolved by loading the referenced `.shape.ron` file and scaling it to fit the placement bounds
+3. **Mirror expansion**: Nodes with `mirror: [X]` are duplicated with negated coordinates for each axis
 4. **Repeat expansion**: Nodes with `repeat` are duplicated along the specified axis
 5. **Entity spawning**: Each node becomes a Bevy entity with `Transform`, `Mesh3d`, `MeshMaterial3d`, and `ShapePart` components
-6. **Animation setup**: A `ShapeAnimator` component is attached to the root with all animation states
+6. **Animation setup**: Animation states defined on any node are collected into `ShapeAnimator` components
 
 ### Component Hierarchy
 

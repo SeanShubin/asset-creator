@@ -23,9 +23,10 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<ZoomLimits>()
             .add_systems(Update, (
                 handle_activation,
-                watch_shape_file.run_if(is_object_active),
+                watch_shape_changes.run_if(is_object_active),
                 reload_shape.run_if(is_object_active),
                 on_model_loaded.run_if(is_object_active),
+                compute_stats.run_if(is_object_active),
                 orbit_camera::orbit_camera.run_if(is_object_active),
                 orbit_camera::orbit_zoom.run_if(is_object_active),
                 keyboard_input.run_if(is_object_active),
@@ -53,8 +54,18 @@ struct ObjectEditorState {
     last_seen_editor: Option<ActiveEditor>,
     last_file_check: f64,
     last_mtime: Option<std::time::SystemTime>,
+    last_shape_generation: u64,
     needs_fit: bool,
+    needs_stats: bool,
     fit_scale: f32,
+    stats: SceneStats,
+}
+
+#[derive(Default, Clone)]
+struct SceneStats {
+    parts: usize,
+    triangles: usize,
+    draw_calls: usize,
 }
 
 #[derive(Component)]
@@ -153,28 +164,14 @@ fn spawn_scene(commands: &mut Commands) {
 // File watching — detect external edits to the shape file
 // =====================================================================
 
-fn watch_shape_file(
+fn watch_shape_changes(
     mut state: ResMut<ObjectEditorState>,
-    time: Res<Time>,
+    registry: Res<AssetRegistry>,
 ) {
-    let Some(path) = state.current_path.clone() else { return };
-
-    // Poll every 500ms
-    let now = time.elapsed_secs_f64();
-    if now - state.last_file_check < 0.5 { return; }
-    state.last_file_check = now;
-
-    let current_mtime = match std::fs::metadata(&path).and_then(|m| m.modified()) {
-        Ok(t) => t,
-        Err(_) => return,
-    };
-
-    if state.last_mtime.is_some_and(|prev| current_mtime <= prev) {
-        return;
+    if registry.shape_generation != state.last_shape_generation {
+        state.last_shape_generation = registry.shape_generation;
+        state.needs_reload = true;
     }
-
-    state.last_mtime = Some(current_mtime);
-    state.needs_reload = true;
 }
 
 // =====================================================================
@@ -186,45 +183,30 @@ fn reload_shape(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut state: ResMut<ObjectEditorState>,
-    mut registry: ResMut<AssetRegistry>,
+    registry: Res<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
 ) {
     if !state.needs_reload { return; }
     state.needs_reload = false;
 
     let Some(path) = &state.current_path else { return };
-    let path_str = path.display().to_string();
 
     let roots: Vec<Entity> = existing.iter().collect();
     despawn_shape(&mut commands, &roots);
 
-    let ron_str = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            registry.set_error(path_str, format!("Read error: {e}"));
-            return;
-        }
+    // Find the shape in the registry by matching the path
+    let shape_file = registry.shapes.values()
+        .find(|r| r.path == *path)
+        .map(|r| &r.data);
+
+    let Some(shape_file) = shape_file else {
+        error!("Shape at '{}' not found in registry", path.display());
+        return;
     };
 
-    let shape_file = match load_shape(&ron_str) {
-        Ok(f) => f,
-        Err(e) => {
-            registry.set_error(path_str.clone(), e);
-            return;
-        }
-    };
-
-    registry.clear_error_for(&path_str);
-
-    info!("Loaded shape from '{}' — {} children, {} templates, {} animations",
-        path.display(),
-        shape_file.root.children.len(),
-        shape_file.templates.len(),
-        shape_file.animations.len(),
-    );
-
-    spawn_shape(&mut commands, &mut meshes, &mut materials, &shape_file);
+    spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
     state.needs_fit = true;
+    state.needs_stats = true;
 }
 
 // =====================================================================
@@ -259,6 +241,35 @@ fn on_model_loaded(
             ortho.scale = fit_scale;
         }
     }
+}
+
+fn compute_stats(
+    mut state: ResMut<ObjectEditorState>,
+    parts: Query<&ShapePart>,
+    mesh_handles: Query<&Mesh3d>,
+    mesh_assets: Res<Assets<Mesh>>,
+) {
+    if !state.needs_stats { return; }
+    if mesh_handles.is_empty() { return; }
+    state.needs_stats = false;
+
+    let part_count = parts.iter().count();
+    let draw_calls = mesh_handles.iter().count();
+
+    let mut triangle_count = 0;
+    for mesh_handle in &mesh_handles {
+        if let Some(mesh) = mesh_assets.get(&mesh_handle.0) {
+            if let Some(indices) = mesh.indices() {
+                triangle_count += indices.len() / 3;
+            }
+        }
+    }
+
+    state.stats = SceneStats {
+        parts: part_count,
+        triangles: triangle_count,
+        draw_calls,
+    };
 }
 
 fn compute_fit_scale(
@@ -575,6 +586,11 @@ fn camera_controls(
             set_zoom_from_pct(camera, state, 100.0);
         }
     });
+
+    // Scene stats
+    ui.separator();
+    ui.label(format!("Parts: {}  Tris: {}  Draws: {}",
+        state.stats.parts, state.stats.triangles, state.stats.draw_calls));
 }
 
 fn current_zoom_pct(

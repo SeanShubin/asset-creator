@@ -1,8 +1,6 @@
 (
-    root: (
-        name: "cone",
-        children: [
-            (name: "cone", shape: Cone, bounds: (-1, -1, -1, 1, 1, 1), color: (0.6, 0.6, 0.3)),
-        ],
-    ),
+    name: "cone",
+    shape: Cone,
+    bounds: (-1, -1, -1, 1, 1, 1),
+    color: (0.6, 0.6, 0.3),
 )

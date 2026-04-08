@@ -1,0 +1,7 @@
+(
+    name: "wheel",
+    shape: Cylinder,
+    bounds: (-1, -1, -1, 1, 1, 1),
+    orient: X,
+    color: (0.25, 0.25, 0.28),
+)

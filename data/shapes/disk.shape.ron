@@ -1,19 +1,17 @@
 (
-    root: (
-        name: "disk",
-        children: [
-            (
-                name: "body",
-                shape: Cylinder,
-                bounds: (-4.0, -1.0, -4.0, 4.0, 0.0, 4.0),
-                color: (0.5, 0.5, 0.55),
-            ),
-            (
-                name: "dome",
-                shape: Dome,
-                bounds: (-4.0, 0.0, -4.0, 4.0, 1.0, 4.0),
-                color: (0.6, 0.5, 0.4),
-            ),
-        ],
-    ),
+    name: "disk",
+    children: [
+        (
+            name: "body",
+            shape: Cylinder,
+            bounds: (-4.0, -1.0, -4.0, 4.0, 0.0, 4.0),
+            color: (0.5, 0.5, 0.55),
+        ),
+        (
+            name: "dome",
+            shape: Dome,
+            bounds: (-4.0, 0.0, -4.0, 4.0, 1.0, 4.0),
+            color: (0.6, 0.5, 0.4),
+        ),
+    ],
 )

@@ -8,7 +8,7 @@ All assets in the application are defined in RON (Rusty Object Notation), a huma
 - **Procedural generation**: Scripts and tools can generate RON programmatically
 - **Human-readable**: Edit assets in any text editor
 - **Type-safe**: RON maps directly to Rust structs via serde deserialization
-- **Composable**: Templates and references allow reuse across files
+- **Composable**: Imports and references allow reuse across files
 
 ## Syntax Overview
 
@@ -23,18 +23,15 @@ RON is similar to Rust literal syntax:
     // Tuples
     position: (1.0, 2.0, 3.0),
 
-    // Enums
-    shape: Box(size: (0.5, 0.3, 0.4)),
+    // Enums (no parameters)
+    shape: Box,
+
+    // Bounding box (two corners)
+    bounds: (-0.25, -0.15, -0.2, 0.25, 0.15, 0.2),
 
     // Options
     color: Some((0.8, 0.2, 0.1)),
     secondary: None,
-
-    // Maps
-    templates: {
-        "wheel": ( /* ... */ ),
-        "arm": ( /* ... */ ),
-    },
 
     // Lists
     children: [
@@ -49,42 +46,34 @@ RON is similar to Rust literal syntax:
 | Extension      | Editor         | Root Type    | Description                                                     |
 | -------------- | -------------- | ------------ | --------------------------------------------------------------- |
 | `.surface.ron` | Surface Editor | `SurfaceDef` | Visual appearance definition (color, noise, pattern, roughness) |
-| `.shape.ron`   | Object Editor  | `ShapeFile`  | 3D object with templates and animations                         |
+| `.shape.ron`   | Object Editor  | `ShapeNode`  | 3D object with imports and animations                           |
 | `.tileset.ron` | Tileset Editor | `TilesetDef` | 47-blob tileset referencing face/edge surfaces                  |
 | `.decal.ron`   | Decal Editor   | `DecalDef`   | SDF shape composition for surface overlays                      |
 | `.world.ron`   | World Editor   | `WorldDef`   | Biome terrain generation parameters                             |
 
 ## Shape Files (`.shape.ron`)
 
-The most complex format, supporting hierarchical composition:
+A `.shape.ron` file is a `ShapeNode` directly -- no wrapper struct. The format supports hierarchical composition:
 
 ```ron
 (
-    templates: {
-        "wheel": (
-            shape: Cylinder(radius: 0.18, height: 0.1),
-            color: (0.25, 0.25, 0.28),
-            orient: Z,
+    name: "vehicle",
+    children: [
+        (
+            name: "chassis",
+            shape: Box,
+            bounds: (-0.7, 0.25, -0.4, 0.7, 0.75, 0.4),
+            surface: "rusted_steel",
+            decals: [
+                (decal: "insignia", center: (0.0, 0.0, 0.41), scale: 0.3),
+            ],
+            children: [
+                (name: "wheel", import: "wheel",
+                 bounds: (0.5, 0.0, 0.2, 0.7, 0.36, 0.5),
+                 mirror: [X, Z]),
+            ],
         ),
-    },
-    root: (
-        name: "vehicle",
-        children: [
-            (
-                name: "chassis",
-                shape: Box(size: (1.4, 0.5, 0.8)),
-                at: (0.0, 0.5, 0.0),
-                surface: "rusted_steel",
-                decals: [
-                    (decal: "insignia", center: (0.0, 0.0, 0.41), scale: 0.3),
-                ],
-                children: [
-                    (template: "wheel", at: (0.5, -0.3, 0.3), mirror: X),
-                    (template: "wheel", at: (0.5, -0.3, -0.3), mirror: X),
-                ],
-            ),
-        ],
-    ),
+    ],
     animations: [
         (
             name: "drive",
@@ -98,12 +87,13 @@ The most complex format, supporting hierarchical composition:
 ```
 
 Key features:
-- **Templates**: Reusable subtrees referenced by name
+- **Imports**: Reference other `.shape.ron` files by name, scaled to fit placement bounds
 - **Surfaces**: Named [surface](surface-editor.md) references for visual appearance
 - **Decals**: [Decal](decal-editor.md) instances placed on geometry via triplanar projection
-- **Mirror**: `mirror: X` duplicates a subtree reflected across an axis
+- **Bounds**: `(x1, y1, z1, x2, y2, z2)` two corners of bounding box; shape fills the box, center determines position
+- **Mirror**: `mirror: [X]` duplicates a subtree reflected across an axis. Multiple axes: `[X, Z]` = 4 copies
 - **Repeat**: `repeat: (count: 5, spacing: 0.15, along: Z)` for linear arrays
-- **Animations**: Named states with per-part motion channels
+- **Animations**: Named states with per-part motion channels (can be on any node)
 
 See [Object Editor](object-editor.md) for the complete node property reference.
 
@@ -207,7 +197,7 @@ All RON files are deserialized using `serde` with `ron::de::from_str`:
 
 ```rust
 let ron_str = std::fs::read_to_string(path)?;
-let shape_file: ShapeFile = ron::de::from_str(&ron_str)?;
+let shape_node: ShapeNode = ron::de::from_str(&ron_str)?;
 ```
 
 Fields use `#[serde(default)]` extensively so that most properties are optional -- you only need to specify what differs from defaults.

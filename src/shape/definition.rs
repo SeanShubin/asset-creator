@@ -1,15 +1,7 @@
 use serde::Deserialize;
-use std::collections::HashMap;
 
-#[derive(Deserialize, Clone, Debug)]
-pub struct ShapeFile {
-    #[serde(default)]
-    pub templates: HashMap<String, ShapeNode>,
-    pub root: ShapeNode,
-    #[serde(default)]
-    pub animations: Vec<AnimState>,
-}
-
+/// A shape node is both the file format and the node type.
+/// A `.shape.ron` file IS a ShapeNode.
 #[derive(Deserialize, Clone, Debug)]
 pub struct ShapeNode {
     #[serde(default)]
@@ -19,11 +11,7 @@ pub struct ShapeNode {
     #[serde(default)]
     pub bounds: Option<Bounds>,
     #[serde(default)]
-    pub at: (f32, f32, f32),
-    #[serde(default)]
     pub orient: Option<SignedAxis>,
-    #[serde(default)]
-    pub pivot: Option<(f32, f32, f32)>,
     #[serde(default)]
     pub color: Option<(f32, f32, f32)>,
     #[serde(default)]
@@ -31,17 +19,19 @@ pub struct ShapeNode {
     #[serde(default)]
     pub rotate: Option<(f32, Axis)>,
     #[serde(default)]
-    pub template: Option<String>,
+    pub import: Option<String>,
     #[serde(default)]
     pub children: Vec<ShapeNode>,
     #[serde(default)]
-    pub mirror: Option<Axis>,
+    pub mirror: Vec<Axis>,
     #[serde(default)]
     pub repeat: Option<RepeatSpec>,
+    #[serde(default)]
+    pub animations: Vec<AnimState>,
 }
 
 // =====================================================================
-// Primitives — no parameters, sized by bounds
+// Primitives
 // =====================================================================
 
 #[derive(Deserialize, Clone, Copy, Debug)]
@@ -56,7 +46,7 @@ pub enum PrimitiveShape {
 }
 
 // =====================================================================
-// Bounds — two corners of the bounding box
+// Bounds
 // =====================================================================
 
 #[derive(Deserialize, Clone, Copy, Debug)]

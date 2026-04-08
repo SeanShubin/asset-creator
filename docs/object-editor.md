@@ -1,6 +1,6 @@
 # Object Editor
 
-Live edit and preview 3D objects defined in RON format, with support for animations, hierarchical part trees, templates, and symmetry combinators.
+Live edit and preview 3D objects defined in RON format, with support for animations, hierarchical part trees, imports, and symmetry combinators.
 
 ## Overview
 
@@ -8,51 +8,43 @@ The object editor loads a RON shape file and renders it as a tree of Bevy entiti
 
 ## Shape Definition Format
 
-Objects are defined in RON files with this structure:
+A `.shape.ron` file is a `ShapeNode` directly -- no wrapper struct needed:
 
 ```ron
 (
-    templates: {
-        "wheel": (
-            shape: Cylinder(radius: 0.18, height: 0.1),
-            color: (0.25, 0.25, 0.28),
+    name: "robot",
+    children: [
+        (
+            name: "chassis",
+            shape: Box,
+            bounds: (-0.35, 0.375, -0.25, 0.35, 0.725, 0.25),
+            color: (0.45, 0.45, 0.50),
+            children: [
+                (
+                    name: "head",
+                    shape: Sphere,
+                    bounds: (-0.18, 0.725, -0.18, 0.18, 1.085, 0.18),
+                    color: (0.55, 0.55, 0.60),
+                    children: [
+                        (
+                            name: "eye",
+                            shape: Sphere,
+                            bounds: (-0.06, 0.87, 0.09, 0.06, 0.99, 0.21),
+                            color: (0.9, 0.2, 0.1),
+                            emissive: true,
+                        ),
+                    ],
+                ),
+                (
+                    name: "arm",
+                    shape: Box,
+                    bounds: (0.35, 0.475, -0.06, 0.47, 0.875, 0.06),
+                    color: (0.25, 0.25, 0.28),
+                    mirror: [X],
+                ),
+            ],
         ),
-    },
-    root: (
-        name: "robot",
-        children: [
-            (
-                name: "chassis",
-                shape: Box(size: (0.7, 0.35, 0.5)),
-                at: (0.0, 0.55, 0.0),
-                color: (0.45, 0.45, 0.50),
-                children: [
-                    (
-                        name: "head",
-                        shape: Sphere(radius: 0.18),
-                        at: (0.0, 0.35, 0.0),
-                        color: (0.55, 0.55, 0.60),
-                        children: [
-                            (
-                                name: "eye",
-                                shape: Sphere(radius: 0.06),
-                                at: (0.0, 0.0, 0.15),
-                                color: (0.9, 0.2, 0.1),
-                                emissive: true,
-                            ),
-                        ],
-                    ),
-                    (
-                        name: "arm",
-                        shape: Box(size: (0.12, 0.4, 0.12)),
-                        at: (0.41, 0.12, 0.0),
-                        color: (0.25, 0.25, 0.28),
-                        mirror: X,
-                    ),
-                ],
-            ),
-        ],
-    ),
+    ],
     animations: [
         (
             name: "walk",
@@ -67,74 +59,69 @@ Objects are defined in RON files with this structure:
 
 ## Primitive Shapes
 
-| Shape      | Parameters                 | Description         |
-| ---------- | -------------------------- | ------------------- |
-| `Box`      | `size: (w, h, d)`          | Axis-aligned cuboid |
-| `Sphere`   | `radius: f32`              | UV sphere           |
-| `Cylinder` | `radius: f32, height: f32` | Vertical cylinder   |
+Primitives have no parameters -- all sizing comes from `bounds`.
+
+| Shape      | Description                                |
+| ---------- | ------------------------------------------ |
+| `Box`      | Axis-aligned cuboid                        |
+| `Sphere`   | UV sphere                                  |
+| `Cylinder` | Cylinder along its orient axis (default Y) |
+| `Dome`     | Half-sphere along its orient axis          |
+| `Cone`     | Cone along its orient axis                 |
+| `Wedge`    | Triangular prism (ramp shape)              |
+| `Torus`    | Torus around its orient axis               |
 
 ## Node Properties
 
-| Property   | Type              | Description                                                                                                                                                    |
-| ---------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`     | `String`          | Identifier used for animation targeting and UI display                                                                                                         |
-| `shape`    | `PrimitiveShape`  | Optional geometry for this node                                                                                                                                |
-| `at`       | `(f32, f32, f32)` | Position relative to parent                                                                                                                                    |
-| `pivot`    | `(f32, f32, f32)` | Rotation pivot offset (defaults to node origin)                                                                                                                |
-| `color`    | `(f32, f32, f32)` | RGB color (0.0-1.0), used when no surface is specified                                                                                                         |
-| `surface`  | `String`          | Name of a [surface](surface-editor.md) to apply to this part                                                                                                   |
-| `emissive` | `bool`            | Whether the material emits light                                                                                                                               |
-| `orient`   | `Axis`            | Reorient the shape's primary axis (default Y). `X` rotates 90° around Z (Y→X), `Z` rotates 90° around X (Y→Z). Useful for cylinders which are Y-up by default. |
-| `rotate`   | `(f32, Axis)`     | Static rotation in degrees around an axis. Converted to radians internally.                                                                                    |
-| `template` | `String`          | Name of a template to instantiate                                                                                                                              |
-| `children` | `[ShapeNode]`     | Child nodes in the hierarchy                                                                                                                                   |
-| `mirror`   | `Axis`            | Duplicate this subtree mirrored across the given axis                                                                                                          |
-| `repeat`   | `RepeatSpec`      | Repeat this node along an axis                                                                                                                                 |
-| `decals`   | `[DecalInstance]` | [Decals](decal-editor.md) applied to this part's geometry                                                                                                      |
+| Property     | Type                             | Description                                                                                                  |
+| ------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `name`       | `String`                         | Identifier used for animation targeting and UI display                                                       |
+| `shape`      | `PrimitiveShape`                 | Optional geometry for this node (Box, Sphere, Cylinder, Dome, Cone, Wedge, Torus)                            |
+| `bounds`     | `(f32, f32, f32, f32, f32, f32)` | Two corners of the bounding box `(x1, y1, z1, x2, y2, z2)`. Shape fills the box; center determines position. |
+| `color`      | `(f32, f32, f32)`                | RGB color (0.0-1.0), used when no surface is specified                                                       |
+| `surface`    | `String`                         | Name of a [surface](surface-editor.md) to apply to this part                                                 |
+| `emissive`   | `bool`                           | Whether the material emits light                                                                             |
+| `orient`     | `SignedAxis`                     | Signed axis (X, -X, Y, -Y, Z, -Z) for directional shapes (Cylinder, Cone, Dome, Torus). Default Y.           |
+| `rotate`     | `(f32, Axis)`                    | Static rotation in degrees around an axis. Converted to radians internally.                                  |
+| `import`     | `String`                         | Name of another `.shape.ron` file to import. The imported shape is scaled to fit the placement bounds.       |
+| `children`   | `[ShapeNode]`                    | Child nodes in the hierarchy                                                                                 |
+| `mirror`     | `[Axis]`                         | List of axes to mirror across. `[X]` = 2 copies, `[X, Z]` = 4, `[X, Y, Z]` = 8.                              |
+| `repeat`     | `RepeatSpec`                     | Repeat this node along an axis                                                                               |
+| `animations` | `[Animation]`                    | Named animation states with per-part motion channels (can be on any node)                                    |
+| `decals`     | `[DecalInstance]`                | [Decals](decal-editor.md) applied to this part's geometry                                                    |
 
-## Templates
+## Imports
 
-Templates are reusable shape subtrees defined in the `templates` map. Reference them by name:
+Imports reference another `.shape.ron` file by name. The imported shape is scaled to fit the placement bounds:
 
 ```ron
-templates: {
-    "wheel": (
-        shape: Cylinder(radius: 0.18, height: 0.1),
-        color: (0.25, 0.25, 0.28),
-        orient: Z,
-    ),
-},
-root: (
+(
+    name: "vehicle",
     children: [
-        (template: "wheel", at: (0.4, 0.18, 0.15)),
-        (template: "wheel", at: (0.4, 0.18, -0.15)),
+        (name: "front_wheel", import: "wheel",
+         bounds: (0.4, 0.0, 0.15, 0.6, 0.36, 0.45),
+         mirror: [X]),
+        (name: "rear_wheel", import: "wheel",
+         bounds: (0.4, 0.0, -0.45, 0.6, 0.36, -0.15),
+         mirror: [X]),
     ],
 )
 ```
 
-### Template Overrides
-
-Instance fields override template fields. If the instance specifies a property, it wins; otherwise the template's value is used. If the instance has children, they replace the template's children entirely.
-
-```ron
-// Red wheel -- overrides the template's color
-(template: "wheel", at: (0.4, 0.18, 0.15), color: (1.0, 0.0, 0.0))
-```
-
-Templates can be nested (a template can reference another template).
-
 ## Mirror Combinator
 
-The `mirror` property duplicates a node (and all its children) reflected across an axis. This is how you define symmetric robots, vehicles, or creatures with a single arm/leg definition:
+The `mirror` property takes a list of axes and duplicates a node (and all its children) reflected across each axis. This is how you define symmetric robots, vehicles, or creatures with a single arm/leg definition:
 
 ```ron
 (
     name: "arm",
-    shape: Box(size: (0.12, 0.4, 0.12)),
-    at: (0.41, 0.0, 0.0),
-    mirror: X,  // creates a second arm at (-0.41, 0.0, 0.0)
+    shape: Box,
+    bounds: (0.35, 0.475, -0.06, 0.47, 0.875, 0.06),
+    mirror: [X],  // creates a second arm mirrored across X (2 copies total)
 )
 ```
+
+Multiple axes multiply copies: `[X]` = 2, `[X, Z]` = 4, `[X, Y, Z]` = 8.
 
 ## Repeat Combinator
 
@@ -143,7 +130,8 @@ The `repeat` property duplicates a node multiple times along an axis:
 ```ron
 (
     name: "segment",
-    shape: Box(size: (0.1, 0.1, 0.1)),
+    shape: Box,
+    bounds: (-0.05, -0.05, -0.05, 0.05, 0.05, 0.05),
     repeat: (count: 5, spacing: 0.15, along: Z, center: true),
 )
 ```
@@ -152,7 +140,7 @@ Repeat duplicates the entire subtree. If a repeated node has children, every cop
 
 ## Animation System
 
-Animations are defined as named states, each containing channels that target specific parts by name.
+Animations are defined as named states, each containing channels that target specific parts by name. Any node can have an `animations` field -- it is not limited to the root node.
 
 ### Motion Types
 
