@@ -1,0 +1,8 @@
+(
+    root: (
+        name: "torus",
+        children: [
+            (name: "torus", shape: Torus, bounds: (-1, -1, -1, 1, 1, 1), color: (0.5, 0.4, 0.6)),
+        ],
+    ),
+)

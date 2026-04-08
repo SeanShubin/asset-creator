@@ -50,6 +50,10 @@ pub enum PrimitiveShape {
     Sphere,
     Cylinder,
     Dome,
+    Bowl,
+    Cone,
+    Wedge,
+    Torus,
 }
 
 // =====================================================================

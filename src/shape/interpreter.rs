@@ -245,39 +245,62 @@ fn attach_geometry(
 fn mesh_scale_for_shape(shape: PrimitiveShape, bounds: &Bounds, orient: SignedAxis) -> Vec3 {
     let size = bounds.size();
     match shape {
-        PrimitiveShape::Box => Vec3::ONE, // Box mesh is already sized correctly
-        PrimitiveShape::Sphere => Vec3::new(size.0, size.1, size.2), // unit sphere (diameter 1) → ellipsoid
-        PrimitiveShape::Cylinder => {
-            // Unit cylinder: radius 0.5, height 1.0
-            // Scale to fill bounds based on orient axis
+        PrimitiveShape::Box => Vec3::ONE, // already sized correctly
+        PrimitiveShape::Sphere => Vec3::new(size.0, size.1, size.2),
+        PrimitiveShape::Cylinder | PrimitiveShape::Cone => {
+            // Unit meshes: radius 0.5, height 1.0 along Y
             match orient.unsigned() {
                 Axis::Y => Vec3::new(size.0, size.1, size.2),
-                Axis::X => Vec3::new(size.1, size.0, size.2), // swapped after rotation
-                Axis::Z => Vec3::new(size.0, size.2, size.1), // swapped after rotation
+                Axis::X => Vec3::new(size.1, size.0, size.2),
+                Axis::Z => Vec3::new(size.0, size.2, size.1),
             }
         }
-        PrimitiveShape::Dome => {
-            // Dome mesh is generated at the correct size, but needs orient rotation
+        PrimitiveShape::Dome | PrimitiveShape::Bowl => {
+            // Generated at correct size, only flip for negative orient
+            flip_scale_for_negative(orient)
+        }
+        PrimitiveShape::Wedge => Vec3::new(size.0, size.1, size.2), // unit wedge scaled to bounds
+        PrimitiveShape::Torus => {
+            // Unit torus is 1.0 wide, 0.3 tall, 1.0 deep
             match orient.unsigned() {
-                Axis::Y => if orient.is_negative() { Vec3::new(1.0, -1.0, 1.0) } else { Vec3::ONE },
-                Axis::X => if orient.is_negative() { Vec3::new(-1.0, 1.0, 1.0) } else { Vec3::ONE },
-                Axis::Z => if orient.is_negative() { Vec3::new(1.0, 1.0, -1.0) } else { Vec3::ONE },
+                Axis::Y => Vec3::new(size.0, size.1 / 0.3, size.2),
+                Axis::X => Vec3::new(size.1 / 0.3, size.0, size.2),
+                Axis::Z => Vec3::new(size.0, size.2 / 0.3, size.1),
             }
         }
+    }
+}
+
+fn flip_scale_for_negative(orient: SignedAxis) -> Vec3 {
+    if !orient.is_negative() { return Vec3::ONE; }
+    match orient.unsigned() {
+        Axis::Y => Vec3::new(1.0, -1.0, 1.0),
+        Axis::X => Vec3::new(-1.0, 1.0, 1.0),
+        Axis::Z => Vec3::new(1.0, 1.0, -1.0),
     }
 }
 
 /// Compute the rotation to orient a shape along the specified axis.
 fn mesh_rotation_for_orient(shape: PrimitiveShape, orient: SignedAxis) -> Quat {
     match shape {
-        PrimitiveShape::Box | PrimitiveShape::Sphere => Quat::IDENTITY,
-        PrimitiveShape::Cylinder | PrimitiveShape::Dome => {
+        PrimitiveShape::Box | PrimitiveShape::Sphere | PrimitiveShape::Wedge => Quat::IDENTITY,
+        PrimitiveShape::Cylinder | PrimitiveShape::Cone | PrimitiveShape::Dome
+        | PrimitiveShape::Bowl | PrimitiveShape::Torus => {
             match orient.unsigned() {
                 Axis::Y => Quat::IDENTITY,
                 Axis::X => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
                 Axis::Z => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
             }
         }
+    }
+}
+
+/// Extract base radius and height from bounds for oriented cap shapes (Dome, Bowl).
+fn oriented_dimensions(size: &(f32, f32, f32), orient: SignedAxis) -> (f32, f32) {
+    match orient.unsigned() {
+        Axis::Y => (size.0.min(size.2) / 2.0, size.1),
+        Axis::X => (size.1.min(size.2) / 2.0, size.0),
+        Axis::Z => (size.0.min(size.1) / 2.0, size.2),
     }
 }
 
@@ -296,16 +319,27 @@ fn make_mesh(
             meshes.add(Cuboid::new(size.0, size.1, size.2))
         }
         PrimitiveShape::Sphere => {
-            // Unit sphere scaled to fill bounds as an ellipsoid
             meshes.add(Sphere::new(0.5).mesh().build())
         }
         PrimitiveShape::Cylinder => {
-            // Unit cylinder scaled to fill bounds
             meshes.add(Cylinder::new(0.5, 1.0).mesh().build())
         }
+        PrimitiveShape::Cone => {
+            meshes.add(super::meshes::create_cone_mesh(24, 32))
+        }
         PrimitiveShape::Dome => {
-            let (dome_radius, dome_height) = dome_dimensions_from_bounds(&size, orient);
-            meshes.add(super::meshes::create_dome_mesh(dome_radius, dome_height, 24, 32))
+            let (r, h) = oriented_dimensions(&size, orient);
+            meshes.add(super::meshes::create_dome_mesh(r, h, 24, 32))
+        }
+        PrimitiveShape::Bowl => {
+            let (r, h) = oriented_dimensions(&size, orient);
+            meshes.add(super::meshes::create_bowl_mesh(r, h, 24, 32))
+        }
+        PrimitiveShape::Wedge => {
+            meshes.add(super::meshes::create_wedge_mesh())
+        }
+        PrimitiveShape::Torus => {
+            meshes.add(super::meshes::create_torus_mesh(32, 16))
         }
     };
 

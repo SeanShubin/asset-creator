@@ -9,7 +9,10 @@
       "Bash(timeout 10 cargo run)",
       "Bash(cargo build:*)",
       "Bash(chmod +x:*)",
-      "Bash(cargo run:*)"
+      "Bash(cargo run:*)",
+      "Bash(timeout 15 bash -c 'while [ ! -s \"C:\\\\Users\\\\seans\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--keep-github-sean-asset-creator\\\\2f45fc7e-2164-4f4b-86e5-939ae4b5f8fe\\\\tasks\\\\bz00zvsub.output\" ]; do sleep 1; done; cat \"C:\\\\Users\\\\seans\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--keep-github-sean-asset-creator\\\\2f45fc7e-2164-4f4b-86e5-939ae4b5f8fe\\\\tasks\\\\bz00zvsub.output\"')",
+      "Bash(tee /tmp/zoom_out.txt)",
+      "Read(//tmp/**)"
     ]
   }
 }

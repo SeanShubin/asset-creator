@@ -25,7 +25,7 @@ impl Plugin for ObjectEditorPlugin {
                 handle_activation,
                 watch_shape_file.run_if(is_object_active),
                 reload_shape.run_if(is_object_active),
-                fit_camera_to_shape.run_if(is_object_active),
+                on_model_loaded.run_if(is_object_active),
                 orbit_camera::orbit_camera.run_if(is_object_active),
                 orbit_camera::orbit_zoom.run_if(is_object_active),
                 keyboard_input.run_if(is_object_active),
@@ -123,19 +123,28 @@ fn despawn_all(
 fn spawn_scene(commands: &mut Commands) {
     orbit_camera::spawn_orbit_camera(commands, ObjectEditorEntity);
 
+    // Light direction chosen so that at default camera (yaw=45°, pitch=35°),
+    // the three visible box faces get distinct brightness:
+    //   top = brightest, one side = medium, other side = darkest
+    // Rotating Y by -60° offsets the light strongly to one side.
     commands.spawn((
         ObjectEditorEntity,
         DirectionalLight {
-            illuminance: 8000.0,
+            illuminance: 6000.0,
             shadows_enabled: true,
             ..default()
         },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.4, 0.0)),
+        Transform::from_rotation(Quat::from_euler(
+            EulerRot::YXZ,
+            -60.0_f32.to_radians(),
+            -50.0_f32.to_radians(),
+            0.0,
+        )),
     ));
 
     commands.insert_resource(AmbientLight {
         color: Color::WHITE,
-        brightness: 200.0,
+        brightness: 80.0,
         ..default()
     });
 }
@@ -226,44 +235,59 @@ const LEFT_PANEL_PX: f32 = 280.0;
 const RIGHT_PANEL_PX: f32 = 250.0;
 const FIT_BORDER: f32 = 1.1; // 5% border on each side ≈ 10% total
 
-fn fit_camera_to_shape(
+/// Runs after a model reload: computes AABB, sets fit scale, zoom limits, and initial zoom.
+fn on_model_loaded(
     mut state: ResMut<ObjectEditorState>,
     mut camera: Query<(&mut Projection, &Camera), With<OrbitCamera>>,
     mut limits: ResMut<ZoomLimits>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
 ) {
     if !state.needs_fit { return; }
-
-    // Wait until mesh AABBs are computed (takes one frame after spawning)
     if mesh_aabbs.is_empty() { return; }
     state.needs_fit = false;
 
-    let (scene_min, scene_max) = compute_scene_aabb(&mesh_aabbs);
+    let fit_scale = compute_fit_scale(&mesh_aabbs);
+    if fit_scale < 0.001 { return; }
+
+    state.fit_scale = fit_scale;
+    limits.min = fit_scale / 2.0;
+    limits.max = fit_scale * 10.0;
+
+    if let Ok((mut projection, _)) = camera.get_single_mut() {
+        if let Projection::Orthographic(ref mut ortho) = projection.as_mut() {
+            info!("Setting ortho.scale from {} to {}", ortho.scale, fit_scale);
+            ortho.scale = fit_scale;
+        }
+    } else {
+        info!("No orbit camera found for fit");
+    }
+}
+
+fn compute_fit_scale(
+    mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+) -> f32 {
+    let (scene_min, scene_max) = compute_scene_aabb(mesh_aabbs);
     let scene_size = scene_max - scene_min;
     let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
 
-    if max_extent < 0.001 { return; }
+    if max_extent < 0.001 { return 0.0; }
 
-    let Ok((mut projection, camera)) = camera.get_single_mut() else { return };
-    let Projection::Orthographic(ref mut ortho) = projection.as_mut() else { return };
+    // OrthographicProjection::default_3d() area is in half-pixels at scale 1.0.
+    // visible_height = viewport_height * scale
+    // visible_width  = viewport_width * scale
+    // To fit max_extent with 10% border in viewport height:
+    //   max_extent * 1.1 = 720 * scale  →  scale = max_extent * 1.1 / 720
+    // Also check usable width (panels eat into it):
+    //   max_extent * 1.1 = usable_width * scale  →  scale = max_extent * 1.1 / usable_width
+    let viewport_height = 720.0;
+    let usable_width = 1100.0 - LEFT_PANEL_PX - RIGHT_PANEL_PX;
 
-    // Account for panels reducing usable viewport width
-    let viewport_size = camera.logical_viewport_size().unwrap_or(Vec2::new(1100.0, 720.0));
-    let usable_width = (viewport_size.x - LEFT_PANEL_PX - RIGHT_PANEL_PX).max(100.0);
-    let usable_height = viewport_size.y;
-
-    // Orthographic scale = world units per pixel * viewport half-height
-    // We want the shape to fit in both width and height
+    let scale_for_height = max_extent * FIT_BORDER / viewport_height;
     let scale_for_width = max_extent * FIT_BORDER / usable_width;
-    let scale_for_height = max_extent * FIT_BORDER / usable_height;
-    let fit_scale = scale_for_width.max(scale_for_height);
+    let scale = scale_for_height.max(scale_for_width);
 
-    ortho.scale = fit_scale;
-    state.fit_scale = fit_scale;
-
-    // Zoom in up to 2x size (scale = fit/2), zoom out to 1/10 size (scale = fit*10)
-    limits.min = fit_scale / 2.0;
-    limits.max = fit_scale * 10.0;
+    info!("AABB max_extent: {:.2}, fit_scale: {:.6}", max_extent, scale);
+    scale
 }
 
 fn compute_scene_aabb(
@@ -294,7 +318,7 @@ fn compute_scene_aabb(
 // =====================================================================
 
 const GRID_HALF_SIZE: f32 = 5.0;
-const GRID_LINES: u32 = 20;
+const GRID_LINES: u32 = 10;
 const GRID_COLOR_XZ: Color = Color::srgba(0.3, 0.5, 0.3, 0.2);  // floor — greenish
 const GRID_COLOR_XY: Color = Color::srgba(0.5, 0.3, 0.3, 0.2);  // back-left — reddish
 const GRID_COLOR_YZ: Color = Color::srgba(0.3, 0.3, 0.5, 0.2);  // back-right — bluish

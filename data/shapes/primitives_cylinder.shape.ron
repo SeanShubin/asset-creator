@@ -1,0 +1,8 @@
+(
+    root: (
+        name: "cylinder",
+        children: [
+            (name: "cylinder", shape: Cylinder, bounds: (-1, -1, -1, 1, 1, 1), color: (0.4, 0.6, 0.4)),
+        ],
+    ),
+)
