@@ -131,7 +131,7 @@ fn spawn_scene(commands: &mut Commands) {
         ObjectEditorEntity,
         DirectionalLight {
             illuminance: 6000.0,
-            shadows_enabled: true,
+            shadows_enabled: false,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(
@@ -518,7 +518,7 @@ fn camera_controls(
     });
     ui.horizontal(|ui| {
         ui.label("Pitch:");
-        ui.add(egui::DragValue::new(&mut orbit.pitch).range(0.0..=90.0).suffix("°").speed(1.0));
+        ui.add(egui::DragValue::new(&mut orbit.pitch).range(-89.9..=89.9).suffix("°").speed(1.0));
     });
 
     // Editable zoom as percentage
@@ -534,11 +534,12 @@ fn camera_controls(
     ui.horizontal(|ui| {
         if ui.button("Front").clicked() { orbit.yaw = 0.0; orbit.pitch = 0.0; }
         if ui.button("Right").clicked() { orbit.yaw = 90.0; orbit.pitch = 0.0; }
-        if ui.button("Top").clicked() { orbit.yaw = 0.0; orbit.pitch = 90.0; }
+        if ui.button("Top").clicked() { orbit.yaw = 0.0; orbit.pitch = 89.9; }
     });
     ui.horizontal(|ui| {
         if ui.button("Back").clicked() { orbit.yaw = 180.0; orbit.pitch = 0.0; }
         if ui.button("Left").clicked() { orbit.yaw = 270.0; orbit.pitch = 0.0; }
+        if ui.button("Bottom").clicked() { orbit.yaw = 0.0; orbit.pitch = -89.9; }
         if ui.button("Reset").clicked() {
             orbit.yaw = DEFAULT_YAW;
             orbit.pitch = DEFAULT_PITCH;

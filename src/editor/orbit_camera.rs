@@ -105,7 +105,7 @@ fn handle_orbit_input(
     } else if mouse.pressed(MouseButton::Left) && !egui_wants {
         for ev in motion.read() {
             orbit.yaw += ev.delta.x * 0.3;
-            orbit.pitch = (orbit.pitch + ev.delta.y * 0.3).clamp(0.0, 90.0);
+            orbit.pitch = (orbit.pitch + ev.delta.y * 0.3).clamp(-89.9, 89.9);
         }
     } else {
         motion.clear();
@@ -114,8 +114,8 @@ fn handle_orbit_input(
     let speed = 60.0 * time.delta_secs();
     if keys.pressed(KeyCode::ArrowLeft) { orbit.yaw += speed; }
     if keys.pressed(KeyCode::ArrowRight) { orbit.yaw -= speed; }
-    if keys.pressed(KeyCode::ArrowUp) { orbit.pitch = (orbit.pitch + speed).min(90.0); }
-    if keys.pressed(KeyCode::ArrowDown) { orbit.pitch = (orbit.pitch - speed).max(0.0); }
+    if keys.pressed(KeyCode::ArrowUp) { orbit.pitch = (orbit.pitch + speed).min(89.9); }
+    if keys.pressed(KeyCode::ArrowDown) { orbit.pitch = (orbit.pitch - speed).max(-89.9); }
 }
 
 fn update_camera_transform(tf: &mut Transform, orbit: &OrbitState) {

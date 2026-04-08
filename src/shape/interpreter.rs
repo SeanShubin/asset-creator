@@ -255,7 +255,7 @@ fn mesh_scale_for_shape(shape: PrimitiveShape, bounds: &Bounds, orient: SignedAx
                 Axis::Z => Vec3::new(size.0, size.2, size.1),
             }
         }
-        PrimitiveShape::Dome | PrimitiveShape::Bowl => {
+        PrimitiveShape::Dome => {
             // Generated at correct size, only flip for negative orient
             flip_scale_for_negative(orient)
         }
@@ -285,7 +285,7 @@ fn mesh_rotation_for_orient(shape: PrimitiveShape, orient: SignedAxis) -> Quat {
     match shape {
         PrimitiveShape::Box | PrimitiveShape::Sphere | PrimitiveShape::Wedge => Quat::IDENTITY,
         PrimitiveShape::Cylinder | PrimitiveShape::Cone | PrimitiveShape::Dome
-        | PrimitiveShape::Bowl | PrimitiveShape::Torus => {
+        | PrimitiveShape::Torus => {
             match orient.unsigned() {
                 Axis::Y => Quat::IDENTITY,
                 Axis::X => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
@@ -330,10 +330,6 @@ fn make_mesh(
         PrimitiveShape::Dome => {
             let (r, h) = oriented_dimensions(&size, orient);
             meshes.add(super::meshes::create_dome_mesh(r, h, 24, 32))
-        }
-        PrimitiveShape::Bowl => {
-            let (r, h) = oriented_dimensions(&size, orient);
-            meshes.add(super::meshes::create_bowl_mesh(r, h, 24, 32))
         }
         PrimitiveShape::Wedge => {
             meshes.add(super::meshes::create_wedge_mesh())
