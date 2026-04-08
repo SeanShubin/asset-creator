@@ -40,6 +40,7 @@ pub enum PrimitiveShape {
     Sphere,
     Cylinder,
     Dome,
+    Cap,
     Cone,
     Wedge,
     Torus,

@@ -18,6 +18,113 @@ pub fn create_dome_mesh(base_radius: f32, height: f32, rings: u32, segments: u32
 }
 
 // =====================================================================
+// Cap — sphere slice, clips to bounding box
+// =====================================================================
+
+/// Creates a sphere cap mesh that clips to the given half-extents.
+/// `half_w` and `half_d` are the half-widths in X and Z.
+/// `height` is the total height of the cap.
+/// The sphere radius is computed from the larger of half_w/half_d and height.
+/// Vertices outside the bounding box are clamped and the mesh is closed.
+pub fn create_cap_mesh(half_w: f32, half_d: f32, height: f32, rings: u32, segments: u32) -> Mesh {
+    let base_radius = half_w.max(half_d);
+    let sphere_radius = compute_sphere_radius(base_radius, height);
+
+    let half_h = height / 2.0;
+
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+
+    // Ring 0 = outer edge, Ring N = peak
+    for ring in 0..=rings {
+        let t = ring as f32 / rings as f32;
+        let angle = t * std::f32::consts::FRAC_PI_2;
+        let r = base_radius * angle.cos();
+        let y = -half_h + height * angle.sin();
+
+        for seg in 0..=segments {
+            let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
+            let raw_x = r * phi.cos();
+            let raw_z = r * phi.sin();
+
+            // Clip to bounding box
+            let x = raw_x.clamp(-half_w, half_w);
+            let z = raw_z.clamp(-half_d, half_d);
+
+            positions.push([x, y, z]);
+
+            // Normal: for unclipped vertices, use sphere normal.
+            // For clipped vertices, the normal should point outward from the clip face.
+            let clipped_x = raw_x.abs() > half_w;
+            let clipped_z = raw_z.abs() > half_d;
+
+            let (nx, ny, nz) = if clipped_x && clipped_z {
+                // Corner: blend between the two clip normals
+                (raw_x.signum(), 0.0, raw_z.signum())
+            } else if clipped_x {
+                (raw_x.signum(), 0.0, 0.0)
+            } else if clipped_z {
+                (0.0, 0.0, raw_z.signum())
+            } else {
+                // Unclipped: sphere normal
+                let sx = raw_x / sphere_radius;
+                let sy = (y + half_h) / sphere_radius;
+                let sz = raw_z / sphere_radius;
+                (sx, sy, sz)
+            };
+
+            let len = (nx * nx + ny * ny + nz * nz).sqrt().max(0.0001);
+            normals.push([nx / len, ny / len, nz / len]);
+            uvs.push([seg as f32 / segments as f32, t]);
+        }
+    }
+
+    let mut indices = generate_grid_indices(rings, segments, true);
+
+    // Bottom disc — clipped to half_w × half_d rectangle
+    add_clipped_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
+        half_w, half_d, -half_h, segments);
+
+    build_mesh(positions, normals, uvs, indices)
+}
+
+/// Add a flat disc clipped to a rectangle (for Cap bottom).
+fn add_clipped_disc(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    indices: &mut Vec<u32>,
+    half_w: f32,
+    half_d: f32,
+    y: f32,
+    segments: u32,
+) {
+    let base_radius = half_w.max(half_d);
+    let center_idx = positions.len() as u32;
+
+    positions.push([0.0, y, 0.0]);
+    normals.push([0.0, -1.0, 0.0]);
+    uvs.push([0.5, 0.5]);
+
+    for seg in 0..=segments {
+        let angle = seg as f32 / segments as f32 * std::f32::consts::TAU;
+        let x = (base_radius * angle.cos()).clamp(-half_w, half_w);
+        let z = (base_radius * angle.sin()).clamp(-half_d, half_d);
+        positions.push([x, y, z]);
+        normals.push([0.0, -1.0, 0.0]);
+        uvs.push([0.5 + 0.5 * angle.cos(), 0.5 + 0.5 * angle.sin()]);
+    }
+
+    for seg in 0..segments {
+        let a = center_idx;
+        let b = center_idx + 1 + seg;
+        let c = center_idx + 2 + seg;
+        indices.extend_from_slice(&[a, b, c]);
+    }
+}
+
+// =====================================================================
 // Cone — tapers from oval base to a point
 // =====================================================================
 
@@ -137,6 +244,10 @@ pub fn create_torus_mesh(ring_segments: u32, cross_segments: u32) -> Mesh {
 /// Generate an ellipsoidal cap. The cap has base radius `base_radius` in XZ
 /// and rises `height` in Y. Centered so base is at `y = -height/2` and peak at `y = height/2`.
 /// `normal_sign`: 1.0 for outward (dome), -1.0 for inward (bowl).
+fn compute_sphere_radius(base_radius: f32, height: f32) -> f32 {
+    (base_radius * base_radius + height * height) / (2.0 * height)
+}
+
 fn generate_ellipsoid_cap(
     base_radius: f32,
     height: f32,

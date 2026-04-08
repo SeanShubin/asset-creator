@@ -1,0 +1,14 @@
+// Mirror test: cube in center, wheel mirrored on all 3 axes
+// X offset: 2, Y offset: 3, Z offset: 4 (different to identify each axis)
+(
+    name: "mirror_test",
+    children: [
+        (name: "center", shape: Box,
+         bounds: (-0.5, -0.5, -0.5, 0.5, 0.5, 0.5),
+         color: (0.5, 0.5, 0.5)),
+
+        (name: "wheel", import: "wheel",
+         bounds: (1.5, 2.5, 3.5, 2.5, 3.5, 4.5),
+         mirror: [X, Y, Z]),
+    ],
+)

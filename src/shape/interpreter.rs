@@ -72,8 +72,8 @@ fn process_node(
 ) {
     let color = node.color.unwrap_or(inherited_color);
 
-    if let Some(import_name) = &node.import {
-        process_import(commands, meshes, materials, parent, node, import_name, color, registry);
+    if !node.mirror.is_empty() {
+        process_mirror(commands, meshes, materials, parent, node, &node.mirror, color, registry);
         return;
     }
 
@@ -82,8 +82,8 @@ fn process_node(
         return;
     }
 
-    if !node.mirror.is_empty() {
-        process_mirror(commands, meshes, materials, parent, node, &node.mirror, color, registry);
+    if let Some(import_name) = &node.import {
+        process_import(commands, meshes, materials, parent, node, import_name, color, registry);
         return;
     }
 
@@ -266,7 +266,7 @@ fn build_child_transform(node: &ShapeNode) -> Transform {
     // Nodes with combinators (mirror, repeat, import) are pass-through containers.
     // Their children carry the actual positioning, so the combinator node itself
     // should not add a position offset — otherwise the position is applied twice.
-    let is_combinator = !node.mirror.is_empty() || node.repeat.is_some() || node.import.is_some();
+    let is_combinator = !node.mirror.is_empty() || node.repeat.is_some();
     let position = if is_combinator {
         Vec3::ZERO
     } else {
@@ -349,7 +349,7 @@ fn mesh_scale_for_shape(shape: PrimitiveShape, bounds: &Bounds, orient: SignedAx
                 Axis::Z => Vec3::new(size.0, size.2, size.1),
             }
         }
-        PrimitiveShape::Dome => flip_scale_for_negative(orient),
+        PrimitiveShape::Dome | PrimitiveShape::Cap => flip_scale_for_negative(orient),
         PrimitiveShape::Wedge => Vec3::new(size.0, size.1, size.2),
         PrimitiveShape::Torus => {
             match orient.unsigned() {
@@ -374,7 +374,7 @@ fn mesh_rotation_for_orient(shape: PrimitiveShape, orient: SignedAxis) -> Quat {
     match shape {
         PrimitiveShape::Box | PrimitiveShape::Sphere | PrimitiveShape::Wedge => Quat::IDENTITY,
         PrimitiveShape::Cylinder | PrimitiveShape::Cone | PrimitiveShape::Dome
-        | PrimitiveShape::Torus => {
+        | PrimitiveShape::Cap | PrimitiveShape::Torus => {
             match orient.unsigned() {
                 Axis::Y => Quat::IDENTITY,
                 Axis::X => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
@@ -389,6 +389,15 @@ fn oriented_dimensions(size: &(f32, f32, f32), orient: SignedAxis) -> (f32, f32)
         Axis::Y => (size.0.min(size.2) / 2.0, size.1),
         Axis::X => (size.1.min(size.2) / 2.0, size.0),
         Axis::Z => (size.0.min(size.1) / 2.0, size.2),
+    }
+}
+
+/// Extract half-width, half-depth, and height for Cap from bounds.
+fn cap_dimensions(size: &(f32, f32, f32), orient: SignedAxis) -> (f32, f32, f32) {
+    match orient.unsigned() {
+        Axis::Y => (size.0 / 2.0, size.2 / 2.0, size.1),
+        Axis::X => (size.1 / 2.0, size.2 / 2.0, size.0),
+        Axis::Z => (size.0 / 2.0, size.1 / 2.0, size.2),
     }
 }
 
@@ -410,6 +419,10 @@ fn make_mesh(
         PrimitiveShape::Dome => {
             let (r, h) = oriented_dimensions(&size, orient);
             meshes.add(super::meshes::create_dome_mesh(r, h, 24, 32))
+        }
+        PrimitiveShape::Cap => {
+            let (hw, hd, h) = cap_dimensions(&size, orient);
+            meshes.add(super::meshes::create_cap_mesh(hw, hd, h, 24, 32))
         }
         PrimitiveShape::Wedge => meshes.add(super::meshes::create_wedge_mesh()),
         PrimitiveShape::Torus => meshes.add(super::meshes::create_torus_mesh(32, 16)),

@@ -8,8 +8,8 @@
             color: (0.5, 0.5, 0.55),
         ),
         (
-            name: "dome",
-            shape: Dome,
+            name: "top",
+            shape: Cap,
             bounds: (-4.0, 0.0, -4.0, 4.0, 1.0, 4.0),
             color: (0.6, 0.5, 0.4),
         ),
