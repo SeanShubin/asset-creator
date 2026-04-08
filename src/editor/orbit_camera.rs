@@ -56,9 +56,22 @@ pub fn orbit_camera(
     update_camera_transform(&mut tf, &orbit);
 }
 
+#[derive(Resource)]
+pub struct ZoomLimits {
+    pub min: f32,
+    pub max: f32,
+}
+
+impl Default for ZoomLimits {
+    fn default() -> Self {
+        Self { min: ZOOM_MIN, max: ZOOM_MAX }
+    }
+}
+
 pub fn orbit_zoom(
     mut camera: Query<&mut Projection, With<OrbitCamera>>,
     mut scroll: EventReader<MouseWheel>,
+    limits: Res<ZoomLimits>,
 ) {
     for ev in scroll.read() {
         for mut proj in &mut camera {
@@ -67,7 +80,7 @@ pub fn orbit_zoom(
                     MouseScrollUnit::Line => -ev.y * 0.15,
                     MouseScrollUnit::Pixel => -ev.y * 0.002,
                 };
-                ortho.scale = (ortho.scale * (1.0 + delta)).clamp(ZOOM_MIN, ZOOM_MAX);
+                ortho.scale = (ortho.scale * (1.0 + delta)).clamp(limits.min, limits.max);
             }
         }
     }
@@ -92,7 +105,7 @@ fn handle_orbit_input(
     } else if mouse.pressed(MouseButton::Left) && !egui_wants {
         for ev in motion.read() {
             orbit.yaw += ev.delta.x * 0.3;
-            orbit.pitch = (orbit.pitch + ev.delta.y * 0.3).clamp(5.0, 85.0);
+            orbit.pitch = (orbit.pitch + ev.delta.y * 0.3).clamp(0.0, 90.0);
         }
     } else {
         motion.clear();
@@ -101,8 +114,8 @@ fn handle_orbit_input(
     let speed = 60.0 * time.delta_secs();
     if keys.pressed(KeyCode::ArrowLeft) { orbit.yaw += speed; }
     if keys.pressed(KeyCode::ArrowRight) { orbit.yaw -= speed; }
-    if keys.pressed(KeyCode::ArrowUp) { orbit.pitch = (orbit.pitch + speed).min(85.0); }
-    if keys.pressed(KeyCode::ArrowDown) { orbit.pitch = (orbit.pitch - speed).max(5.0); }
+    if keys.pressed(KeyCode::ArrowUp) { orbit.pitch = (orbit.pitch + speed).min(90.0); }
+    if keys.pressed(KeyCode::ArrowDown) { orbit.pitch = (orbit.pitch - speed).max(0.0); }
 }
 
 fn update_camera_transform(tf: &mut Transform, orbit: &OrbitState) {

@@ -52,6 +52,11 @@ fn browser_ui(
         surface_list(ui, &mut registry, &mut active);
         ui.separator();
         shape_list(ui, &mut active);
+
+        if !registry.errors.is_empty() {
+            ui.separator();
+            error_list(ui, &registry);
+        }
     });
 }
 
@@ -142,6 +147,23 @@ fn shape_list(
                 *active = ActiveEditor::Object { path: path.clone() };
             }
         }
+    }
+}
+
+// =====================================================================
+// Error display
+// =====================================================================
+
+fn error_list(ui: &mut egui::Ui, registry: &AssetRegistry) {
+    ui.colored_label(egui::Color32::RED, "Errors");
+    for error in &registry.errors {
+        let filename = std::path::Path::new(&error.path)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(&error.path);
+        ui.colored_label(egui::Color32::YELLOW, filename);
+        ui.label(&error.message);
+        ui.add_space(4.0);
     }
 }
 

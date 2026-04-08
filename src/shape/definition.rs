@@ -17,15 +17,17 @@ pub struct ShapeNode {
     #[serde(default)]
     pub shape: Option<PrimitiveShape>,
     #[serde(default)]
+    pub bounds: Option<Bounds>,
+    #[serde(default)]
     pub at: (f32, f32, f32),
+    #[serde(default)]
+    pub orient: Option<SignedAxis>,
     #[serde(default)]
     pub pivot: Option<(f32, f32, f32)>,
     #[serde(default)]
     pub color: Option<(f32, f32, f32)>,
     #[serde(default)]
     pub emissive: bool,
-    #[serde(default)]
-    pub orient: Option<Axis>,
     #[serde(default)]
     pub rotate: Option<(f32, Axis)>,
     #[serde(default)]
@@ -38,12 +40,38 @@ pub struct ShapeNode {
     pub repeat: Option<RepeatSpec>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+// =====================================================================
+// Primitives — no parameters, sized by bounds
+// =====================================================================
+
+#[derive(Deserialize, Clone, Copy, Debug)]
 pub enum PrimitiveShape {
-    Box { size: (f32, f32, f32) },
-    Sphere { radius: f32 },
-    Cylinder { radius: f32, height: f32 },
+    Box,
+    Sphere,
+    Cylinder,
+    Dome,
 }
+
+// =====================================================================
+// Bounds — two corners of the bounding box
+// =====================================================================
+
+#[derive(Deserialize, Clone, Copy, Debug)]
+pub struct Bounds(pub f32, pub f32, pub f32, pub f32, pub f32, pub f32);
+
+impl Bounds {
+    pub fn center(&self) -> (f32, f32, f32) {
+        ((self.0 + self.3) / 2.0, (self.1 + self.4) / 2.0, (self.2 + self.5) / 2.0)
+    }
+
+    pub fn size(&self) -> (f32, f32, f32) {
+        ((self.3 - self.0).abs(), (self.4 - self.1).abs(), (self.5 - self.2).abs())
+    }
+}
+
+// =====================================================================
+// Axes
+// =====================================================================
 
 #[derive(Deserialize, Clone, Copy, Debug)]
 pub enum Axis {
@@ -51,6 +79,43 @@ pub enum Axis {
     Y,
     Z,
 }
+
+#[derive(Deserialize, Clone, Copy, Debug)]
+pub enum SignedAxis {
+    X,
+    #[serde(rename = "-X")]
+    NegX,
+    Y,
+    #[serde(rename = "-Y")]
+    NegY,
+    Z,
+    #[serde(rename = "-Z")]
+    NegZ,
+}
+
+impl SignedAxis {
+    pub fn unsigned(self) -> Axis {
+        match self {
+            Self::X | Self::NegX => Axis::X,
+            Self::Y | Self::NegY => Axis::Y,
+            Self::Z | Self::NegZ => Axis::Z,
+        }
+    }
+
+    pub fn is_negative(self) -> bool {
+        matches!(self, Self::NegX | Self::NegY | Self::NegZ)
+    }
+}
+
+impl Default for SignedAxis {
+    fn default() -> Self {
+        Self::Y
+    }
+}
+
+// =====================================================================
+// Repeat
+// =====================================================================
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct RepeatSpec {

@@ -21,11 +21,27 @@ pub struct RegisteredAsset<T> {
 pub struct AssetRegistry {
     pub surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
     pub generation: u64,
+    pub errors: Vec<AssetError>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetError {
+    pub path: String,
+    pub message: String,
 }
 
 impl AssetRegistry {
     pub fn get_surface(&self, name: &str) -> Option<&SurfaceDef> {
         self.surfaces.get(name).map(|r| &r.data)
+    }
+
+    pub fn clear_error_for(&mut self, path: &str) {
+        self.errors.retain(|e| e.path != path);
+    }
+
+    pub fn set_error(&mut self, path: String, message: String) {
+        self.clear_error_for(&path);
+        self.errors.push(AssetError { path, message });
     }
 }
 
@@ -77,10 +93,12 @@ fn load_all_surfaces(data_dir: &Path, registry: &mut AssetRegistry) {
 }
 
 fn load_surface_into_registry(path: &Path, registry: &mut AssetRegistry) {
+    let path_str = path.display().to_string();
+
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            warn!("Failed to read '{}': {}", path.display(), e);
+            registry.set_error(path_str, format!("Read error: {e}"));
             return;
         }
     };
@@ -89,10 +107,12 @@ fn load_surface_into_registry(path: &Path, registry: &mut AssetRegistry) {
     let surface: SurfaceDef = match options.from_str(&contents) {
         Ok(s) => s,
         Err(e) => {
-            warn!("Failed to parse '{}': {}", path.display(), e);
+            registry.set_error(path_str, format!("{e}"));
             return;
         }
     };
+
+    registry.clear_error_for(&path_str);
 
     let last_modified = std::fs::metadata(path)
         .and_then(|m| m.modified())

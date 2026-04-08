@@ -137,7 +137,7 @@ fn spawn_editor(commands: &mut Commands, images: &mut ResMut<Assets<Image>>) {
 
 fn despawn_editor(commands: &mut Commands, entities: &Query<Entity, With<SurfaceEditorEntity>>) {
     for entity in entities {
-        commands.entity(entity).despawn();
+        commands.entity(entity).despawn_recursive();
     }
 }
 

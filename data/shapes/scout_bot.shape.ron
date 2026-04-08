@@ -1,9 +1,10 @@
 (
     templates: {
         "wheel": (
-            shape: Cylinder(radius: 0.18, height: 0.1),
+            shape: Cylinder,
+            bounds: (-0.1, -0.18, -0.18, 0.1, 0.18, 0.18),
+            orient: X,
             color: (0.25, 0.25, 0.28),
-            orient: Z,
         ),
     },
     root: (
@@ -11,20 +12,20 @@
         children: [
             (
                 name: "chassis",
-                shape: Box(size: (0.7, 0.35, 0.5)),
-                at: (0.0, 0.55, 0.0),
+                shape: Box,
+                bounds: (-0.35, 0.375, -0.25, 0.35, 0.725, 0.25),
                 color: (0.45, 0.45, 0.50),
                 children: [
                     (
                         name: "head",
-                        shape: Sphere(radius: 0.18),
-                        at: (0.0, 0.35, 0.0),
+                        shape: Sphere,
+                        bounds: (-0.18, 0.72, -0.18, 0.18, 1.08, 0.18),
                         color: (0.55, 0.55, 0.60),
                         children: [
                             (
                                 name: "eye",
-                                shape: Sphere(radius: 0.06),
-                                at: (0.0, 0.0, 0.15),
+                                shape: Sphere,
+                                bounds: (-0.06, -0.06, 0.09, 0.06, 0.06, 0.21),
                                 color: (0.9, 0.2, 0.1),
                                 emissive: true,
                             ),
@@ -32,8 +33,8 @@
                     ),
                     (
                         name: "arm",
-                        shape: Box(size: (0.12, 0.4, 0.12)),
-                        at: (0.41, 0.0, 0.0),
+                        shape: Box,
+                        bounds: (0.35, 0.35, -0.06, 0.47, 0.75, 0.06),
                         color: (0.25, 0.25, 0.28),
                         mirror: X,
                     ),
@@ -64,9 +65,9 @@
         (
             name: "drive",
             channels: [
-                (part: "wheel", property: Rotation, axis: Z,
+                (part: "wheel", property: Rotation, axis: X,
                  motion: Spin(rate: 8.0)),
-                (part: "wheel_rear", property: Rotation, axis: Z,
+                (part: "wheel_rear", property: Rotation, axis: X,
                  motion: Spin(rate: 8.0)),
                 (part: "arm", property: Rotation, axis: X,
                  motion: Oscillate(amplitude: 0.2, speed: 6.0, offset: 0.0)),

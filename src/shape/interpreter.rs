@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use super::animation::ShapeAnimator;
-use super::definition::{Axis, PrimitiveShape, RepeatSpec, ShapeFile, ShapeNode};
+use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeFile, ShapeNode, SignedAxis};
 
 // =====================================================================
 // Components
@@ -51,12 +51,12 @@ pub fn spawn_shape(
 
 pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
     for &e in roots {
-        commands.entity(e).despawn();
+        commands.entity(e).despawn_recursive();
     }
 }
 
 // =====================================================================
-// Node processing — dispatches template, repeat, mirror, then geometry
+// Node processing
 // =====================================================================
 
 fn process_node(
@@ -136,12 +136,10 @@ fn process_mirror(
     templates: &HashMap<String, ShapeNode>,
     color: (f32, f32, f32),
 ) {
-    // Spawn the original node without the mirror flag
     let mut original = node.clone();
     original.mirror = None;
     spawn_child(commands, meshes, materials, parent, &original, templates, color);
 
-    // Spawn the mirrored copy
     let mirrored = mirror_node(&original, axis);
     spawn_child(commands, meshes, materials, parent, &mirrored, templates, color);
 }
@@ -173,7 +171,16 @@ fn spawn_child(
 }
 
 fn build_child_transform(node: &ShapeNode) -> Transform {
-    let mut tf = Transform::from_translation(to_vec3(node.at));
+    // If bounds are specified, position is the center of the bounds.
+    // Otherwise, use `at`.
+    let position = if let Some(bounds) = &node.bounds {
+        let c = bounds.center();
+        Vec3::new(c.0, c.1, c.2)
+    } else {
+        to_vec3(node.at)
+    };
+
+    let mut tf = Transform::from_translation(position);
     if let Some((degrees, axis)) = node.rotate {
         let rad = degrees.to_radians();
         tf.rotation = match axis {
@@ -198,11 +205,16 @@ fn attach_geometry(
     color: (f32, f32, f32),
 ) {
     let Some(shape) = &node.shape else { return };
+    let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
+    let orient = node.orient.unwrap_or(SignedAxis::Y);
 
-    let (mesh, material) = make_mesh(meshes, materials, shape, color, node.emissive);
+    let (mesh, material) = make_mesh(meshes, materials, *shape, &bounds, orient, color, node.emissive);
     let mesh_offset = node.pivot.map(to_vec3).unwrap_or(Vec3::ZERO);
-    let orient = orient_rotation(node.orient);
-    let mesh_tf = Transform::from_translation(mesh_offset).with_rotation(orient);
+    let mesh_scale = mesh_scale_for_shape(*shape, &bounds, orient);
+    let mesh_rotation = mesh_rotation_for_orient(*shape, orient);
+    let mesh_tf = Transform::from_translation(mesh_offset)
+        .with_scale(mesh_scale)
+        .with_rotation(mesh_rotation);
 
     if node.children.is_empty() {
         commands.entity(parent).with_child((
@@ -229,18 +241,78 @@ fn attach_geometry(
     }
 }
 
+/// Compute the scale to apply to a unit mesh to fill the bounds.
+fn mesh_scale_for_shape(shape: PrimitiveShape, bounds: &Bounds, orient: SignedAxis) -> Vec3 {
+    let size = bounds.size();
+    match shape {
+        PrimitiveShape::Box => Vec3::ONE, // Box mesh is already sized correctly
+        PrimitiveShape::Sphere => Vec3::new(size.0, size.1, size.2), // unit sphere (diameter 1) → ellipsoid
+        PrimitiveShape::Cylinder => {
+            // Unit cylinder: radius 0.5, height 1.0
+            // Scale to fill bounds based on orient axis
+            match orient.unsigned() {
+                Axis::Y => Vec3::new(size.0, size.1, size.2),
+                Axis::X => Vec3::new(size.1, size.0, size.2), // swapped after rotation
+                Axis::Z => Vec3::new(size.0, size.2, size.1), // swapped after rotation
+            }
+        }
+        PrimitiveShape::Dome => {
+            // Dome mesh is generated at the correct size, but needs orient rotation
+            match orient.unsigned() {
+                Axis::Y => if orient.is_negative() { Vec3::new(1.0, -1.0, 1.0) } else { Vec3::ONE },
+                Axis::X => if orient.is_negative() { Vec3::new(-1.0, 1.0, 1.0) } else { Vec3::ONE },
+                Axis::Z => if orient.is_negative() { Vec3::new(1.0, 1.0, -1.0) } else { Vec3::ONE },
+            }
+        }
+    }
+}
+
+/// Compute the rotation to orient a shape along the specified axis.
+fn mesh_rotation_for_orient(shape: PrimitiveShape, orient: SignedAxis) -> Quat {
+    match shape {
+        PrimitiveShape::Box | PrimitiveShape::Sphere => Quat::IDENTITY,
+        PrimitiveShape::Cylinder | PrimitiveShape::Dome => {
+            match orient.unsigned() {
+                Axis::Y => Quat::IDENTITY,
+                Axis::X => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                Axis::Z => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+            }
+        }
+    }
+}
+
 fn make_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    shape: &PrimitiveShape,
+    shape: PrimitiveShape,
+    bounds: &Bounds,
+    orient: SignedAxis,
     color: (f32, f32, f32),
     emissive: bool,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
+    let size = bounds.size();
     let mesh = match shape {
-        PrimitiveShape::Box { size } => meshes.add(Cuboid::new(size.0, size.1, size.2)),
-        PrimitiveShape::Sphere { radius } => meshes.add(Sphere::new(*radius)),
-        PrimitiveShape::Cylinder { radius, height } => meshes.add(Cylinder::new(*radius, *height)),
+        PrimitiveShape::Box => {
+            meshes.add(Cuboid::new(size.0, size.1, size.2))
+        }
+        PrimitiveShape::Sphere => {
+            // Unit sphere scaled to fill bounds as an ellipsoid
+            meshes.add(Sphere::new(0.5).mesh().build())
+        }
+        PrimitiveShape::Cylinder => {
+            // Unit cylinder scaled to fill bounds
+            meshes.add(Cylinder::new(0.5, 1.0).mesh().build())
+        }
+        PrimitiveShape::Dome => {
+            let (dome_radius, dome_height) = dome_dimensions_from_bounds(&size, orient);
+            meshes.add(super::meshes::create_dome_mesh(dome_radius, dome_height, 24, 32))
+        }
     };
+
+    // Apply scaling and orientation to make the unit mesh fill the bounds
+    // This is handled via the parent entity's transform, not the mesh itself
+    // For Box, the mesh is already the right size
+    // For Sphere, Cylinder, and Dome we need to apply scale
 
     let base_color = Color::srgb(color.0, color.1, color.2);
     let material = if emissive {
@@ -256,20 +328,30 @@ fn make_mesh(
     (mesh, material)
 }
 
+/// Compute dome base radius and height from bounds, considering orientation.
+fn dome_dimensions_from_bounds(size: &(f32, f32, f32), orient: SignedAxis) -> (f32, f32) {
+    match orient.unsigned() {
+        Axis::Y => {
+            let radius = size.0.min(size.2) / 2.0;
+            (radius, size.1)
+        }
+        Axis::X => {
+            let radius = size.1.min(size.2) / 2.0;
+            (radius, size.0)
+        }
+        Axis::Z => {
+            let radius = size.0.min(size.1) / 2.0;
+            (radius, size.2)
+        }
+    }
+}
+
 // =====================================================================
 // Transform helpers
 // =====================================================================
 
 fn to_vec3(t: (f32, f32, f32)) -> Vec3 {
     Vec3::new(t.0, t.1, t.2)
-}
-
-fn orient_rotation(orient: Option<Axis>) -> Quat {
-    match orient {
-        Some(Axis::X) => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        Some(Axis::Z) => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
-        _ => Quat::IDENTITY,
-    }
 }
 
 fn offset_along_axis(at: &mut (f32, f32, f32), axis: Axis, offset: f32) {
@@ -289,14 +371,29 @@ fn mirror_node(node: &ShapeNode, axis: Axis) -> ShapeNode {
     match axis {
         Axis::X => {
             m.at.0 = -m.at.0;
+            if let Some(ref mut b) = m.bounds {
+                let tmp = -b.0;
+                b.0 = -b.3;
+                b.3 = tmp;
+            }
             if let Some(ref mut p) = m.pivot { p.0 = -p.0; }
         }
         Axis::Y => {
             m.at.1 = -m.at.1;
+            if let Some(ref mut b) = m.bounds {
+                let tmp = -b.1;
+                b.1 = -b.4;
+                b.4 = tmp;
+            }
             if let Some(ref mut p) = m.pivot { p.1 = -p.1; }
         }
         Axis::Z => {
             m.at.2 = -m.at.2;
+            if let Some(ref mut b) = m.bounds {
+                let tmp = -b.2;
+                b.2 = -b.5;
+                b.5 = tmp;
+            }
             if let Some(ref mut p) = m.pivot { p.2 = -p.2; }
         }
     }
@@ -310,12 +407,13 @@ fn mirror_node(node: &ShapeNode, axis: Axis) -> ShapeNode {
 fn merge_template(instance: &ShapeNode, template: &ShapeNode) -> ShapeNode {
     ShapeNode {
         name: instance.name.clone().or(template.name.clone()),
-        shape: instance.shape.clone().or(template.shape.clone()),
+        shape: instance.shape.or(template.shape),
+        bounds: instance.bounds.or(template.bounds),
         at: instance.at,
+        orient: instance.orient.or(template.orient),
         pivot: instance.pivot.or(template.pivot),
         color: instance.color.or(template.color),
         emissive: instance.emissive || template.emissive,
-        orient: instance.orient.or(template.orient),
         rotate: instance.rotate.or(template.rotate),
         template: None,
         children: if instance.children.is_empty() {

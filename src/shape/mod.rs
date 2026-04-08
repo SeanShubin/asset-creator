@@ -1,6 +1,7 @@
 mod animation;
 mod definition;
 mod interpreter;
+mod meshes;
 
 pub use animation::{animate_shapes, ShapeAnimator};
 pub use definition::{AnimState, Axis, PrimitiveShape, ShapeFile, ShapeNode};

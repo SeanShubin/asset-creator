@@ -3,11 +3,12 @@ use bevy_egui::{EguiContexts, egui};
 use std::path::PathBuf;
 
 use crate::browser::ActiveEditor;
+use crate::registry::AssetRegistry;
 use crate::shape::{
     animate_shapes, ShapeAnimator, ShapePart, ShapeRoot,
     despawn_shape, load_shape, spawn_shape,
 };
-use super::orbit_camera::{self, OrbitCamera, OrbitState};
+use super::orbit_camera::{self, OrbitCamera, OrbitState, ZoomLimits};
 
 // =====================================================================
 // Plugin
@@ -19,9 +20,12 @@ impl Plugin for ObjectEditorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ObjectEditorState>()
             .init_resource::<OrbitState>()
+            .init_resource::<ZoomLimits>()
             .add_systems(Update, (
                 handle_activation,
+                watch_shape_file.run_if(is_object_active),
                 reload_shape.run_if(is_object_active),
+                fit_camera_to_shape.run_if(is_object_active),
                 orbit_camera::orbit_camera.run_if(is_object_active),
                 orbit_camera::orbit_zoom.run_if(is_object_active),
                 keyboard_input.run_if(is_object_active),
@@ -45,6 +49,10 @@ struct ObjectEditorState {
     needs_reload: bool,
     spawned: bool,
     last_seen_editor: Option<ActiveEditor>,
+    last_file_check: f64,
+    last_mtime: Option<std::time::SystemTime>,
+    needs_fit: bool,
+    fit_scale: f32,
 }
 
 #[derive(Component)]
@@ -70,27 +78,45 @@ fn handle_activation(
 
     // Despawn if leaving object editor
     if was_object && !is_object {
-        for entity in &existing_editor {
-            commands.entity(entity).despawn();
-        }
-        let roots: Vec<Entity> = existing_shapes.iter().collect();
-        despawn_shape(&mut commands, &roots);
+        despawn_all(&mut commands, &existing_editor, &existing_shapes);
         state.spawned = false;
         state.current_path = None;
+        state.last_mtime = None;
     }
 
-    // Spawn if entering object editor
+    // Switching between shapes — despawn old shape, keep scene
+    if was_object && is_object {
+        let roots: Vec<Entity> = existing_shapes.iter().collect();
+        despawn_shape(&mut commands, &roots);
+    }
+
+    // Spawn scene if entering object editor for the first time
+    if is_object && !state.spawned {
+        spawn_scene(&mut commands);
+        state.spawned = true;
+    }
+
+    // Load the new shape
     if let ActiveEditor::Object { ref path } = current {
-        if !state.spawned {
-            spawn_scene(&mut commands);
-            state.spawned = true;
-        }
         state.current_path = Some(path.clone());
         state.needs_reload = true;
+        state.last_mtime = None;
         info!("Object editor activated for '{}'", path.display());
     }
 
     state.last_seen_editor = Some(current);
+}
+
+fn despawn_all(
+    commands: &mut Commands,
+    editor_entities: &Query<Entity, With<ObjectEditorEntity>>,
+    shape_roots: &Query<Entity, With<ShapeRoot>>,
+) {
+    for entity in editor_entities {
+        commands.entity(entity).despawn_recursive();
+    }
+    let roots: Vec<Entity> = shape_roots.iter().collect();
+    despawn_shape(commands, &roots);
 }
 
 fn spawn_scene(commands: &mut Commands) {
@@ -114,6 +140,34 @@ fn spawn_scene(commands: &mut Commands) {
 }
 
 // =====================================================================
+// File watching — detect external edits to the shape file
+// =====================================================================
+
+fn watch_shape_file(
+    mut state: ResMut<ObjectEditorState>,
+    time: Res<Time>,
+) {
+    let Some(path) = state.current_path.clone() else { return };
+
+    // Poll every 500ms
+    let now = time.elapsed_secs_f64();
+    if now - state.last_file_check < 0.5 { return; }
+    state.last_file_check = now;
+
+    let current_mtime = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    if state.last_mtime.is_some_and(|prev| current_mtime <= prev) {
+        return;
+    }
+
+    state.last_mtime = Some(current_mtime);
+    state.needs_reload = true;
+}
+
+// =====================================================================
 // Shape loading
 // =====================================================================
 
@@ -122,12 +176,14 @@ fn reload_shape(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut state: ResMut<ObjectEditorState>,
+    mut registry: ResMut<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
 ) {
     if !state.needs_reload { return; }
     state.needs_reload = false;
 
     let Some(path) = &state.current_path else { return };
+    let path_str = path.display().to_string();
 
     let roots: Vec<Entity> = existing.iter().collect();
     despawn_shape(&mut commands, &roots);
@@ -135,7 +191,7 @@ fn reload_shape(
     let ron_str = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            error!("Failed to read '{}': {}", path.display(), e);
+            registry.set_error(path_str, format!("Read error: {e}"));
             return;
         }
     };
@@ -143,10 +199,12 @@ fn reload_shape(
     let shape_file = match load_shape(&ron_str) {
         Ok(f) => f,
         Err(e) => {
-            error!("Failed to parse '{}': {}", path.display(), e);
+            registry.set_error(path_str.clone(), e);
             return;
         }
     };
+
+    registry.clear_error_for(&path_str);
 
     info!("Loaded shape from '{}' — {} children, {} templates, {} animations",
         path.display(),
@@ -156,6 +214,78 @@ fn reload_shape(
     );
 
     spawn_shape(&mut commands, &mut meshes, &mut materials, &shape_file);
+    state.needs_fit = true;
+}
+
+// =====================================================================
+// Camera fitting
+// =====================================================================
+
+const LEFT_PANEL_PX: f32 = 280.0;
+const RIGHT_PANEL_PX: f32 = 250.0;
+const FIT_BORDER: f32 = 1.1; // 5% border on each side ≈ 10% total
+
+fn fit_camera_to_shape(
+    mut state: ResMut<ObjectEditorState>,
+    mut camera: Query<(&mut Projection, &Camera), With<OrbitCamera>>,
+    mut limits: ResMut<ZoomLimits>,
+    mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+) {
+    if !state.needs_fit { return; }
+
+    // Wait until mesh AABBs are computed (takes one frame after spawning)
+    if mesh_aabbs.is_empty() { return; }
+    state.needs_fit = false;
+
+    let (scene_min, scene_max) = compute_scene_aabb(&mesh_aabbs);
+    let scene_size = scene_max - scene_min;
+    let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
+
+    if max_extent < 0.001 { return; }
+
+    let Ok((mut projection, camera)) = camera.get_single_mut() else { return };
+    let Projection::Orthographic(ref mut ortho) = projection.as_mut() else { return };
+
+    // Account for panels reducing usable viewport width
+    let viewport_size = camera.logical_viewport_size().unwrap_or(Vec2::new(1100.0, 720.0));
+    let usable_width = (viewport_size.x - LEFT_PANEL_PX - RIGHT_PANEL_PX).max(100.0);
+    let usable_height = viewport_size.y;
+
+    // Orthographic scale = world units per pixel * viewport half-height
+    // We want the shape to fit in both width and height
+    let scale_for_width = max_extent * FIT_BORDER / usable_width;
+    let scale_for_height = max_extent * FIT_BORDER / usable_height;
+    let fit_scale = scale_for_width.max(scale_for_height);
+
+    ortho.scale = fit_scale;
+    state.fit_scale = fit_scale;
+
+    // Zoom in up to 2x size (scale = fit/2), zoom out to 1/10 size (scale = fit*10)
+    limits.min = fit_scale / 2.0;
+    limits.max = fit_scale * 10.0;
+}
+
+fn compute_scene_aabb(
+    mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+) -> (Vec3, Vec3) {
+    let mut scene_min = Vec3::splat(f32::MAX);
+    let mut scene_max = Vec3::splat(f32::MIN);
+
+    for (gtf, aabb) in mesh_aabbs {
+        let world_center = gtf.transform_point(aabb.center.into());
+        let scale = gtf.compute_transform().scale;
+        let half_extents = Vec3::from(aabb.half_extents) * scale.abs();
+
+        scene_min = scene_min.min(world_center - half_extents);
+        scene_max = scene_max.max(world_center + half_extents);
+    }
+
+    if (scene_max - scene_min).length() < 0.01 {
+        scene_min -= Vec3::splat(0.5);
+        scene_max += Vec3::splat(0.5);
+    }
+
+    (scene_min, scene_max)
 }
 
 // =====================================================================
@@ -189,11 +319,16 @@ fn part_tree_ui(
     parts: Query<(&ShapePart, Option<&Children>, &Visibility)>,
     mut animators: Query<&mut ShapeAnimator>,
     mut commands: Commands,
+    orbit: Res<OrbitState>,
+    camera: Query<&Projection, With<OrbitCamera>>,
+    state: Res<ObjectEditorState>,
 ) {
     let ctx = contexts.ctx_mut();
     let mut toggles: Vec<(Entity, Visibility)> = Vec::new();
 
     egui::SidePanel::left("part_tree").min_width(200.0).show(ctx, |ui| {
+        camera_info(ui, &orbit, &camera, &state);
+        ui.separator();
         animation_controls(ui, &roots, &mut animators);
         ui.heading("Part Tree");
         ui.separator();
@@ -206,6 +341,24 @@ fn part_tree_ui(
     for (entity, vis) in toggles {
         commands.entity(entity).insert(vis);
     }
+}
+
+fn camera_info(
+    ui: &mut egui::Ui,
+    orbit: &OrbitState,
+    camera: &Query<&Projection, With<OrbitCamera>>,
+    state: &ObjectEditorState,
+) {
+    let zoom_pct = if state.fit_scale > 0.0 {
+        if let Ok(proj) = camera.get_single() {
+            if let Projection::Orthographic(ortho) = proj {
+                state.fit_scale / ortho.scale * 100.0
+            } else { 100.0 }
+        } else { 100.0 }
+    } else { 100.0 };
+
+    ui.label(format!("Yaw: {:.0}°  Pitch: {:.0}°", orbit.yaw, orbit.pitch));
+    ui.label(format!("Zoom: {:.0}%", zoom_pct));
 }
 
 fn animation_controls(
