@@ -240,13 +240,14 @@ fn on_model_loaded(
     mut state: ResMut<ObjectEditorState>,
     mut camera: Query<(&mut Projection, &Camera), With<OrbitCamera>>,
     mut limits: ResMut<ZoomLimits>,
+    orbit: Res<OrbitState>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
 ) {
     if !state.needs_fit { return; }
     if mesh_aabbs.is_empty() { return; }
     state.needs_fit = false;
 
-    let fit_scale = compute_fit_scale(&mesh_aabbs);
+    let fit_scale = compute_fit_scale(&mesh_aabbs, &orbit);
     if fit_scale < 0.001 { return; }
 
     state.fit_scale = fit_scale;
@@ -255,39 +256,64 @@ fn on_model_loaded(
 
     if let Ok((mut projection, _)) = camera.get_single_mut() {
         if let Projection::Orthographic(ref mut ortho) = projection.as_mut() {
-            info!("Setting ortho.scale from {} to {}", ortho.scale, fit_scale);
             ortho.scale = fit_scale;
         }
-    } else {
-        info!("No orbit camera found for fit");
     }
 }
 
 fn compute_fit_scale(
     mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+    orbit: &OrbitState,
 ) -> f32 {
     let (scene_min, scene_max) = compute_scene_aabb(mesh_aabbs);
     let scene_size = scene_max - scene_min;
-    let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
 
-    if max_extent < 0.001 { return 0.0; }
+    if scene_size.length() < 0.001 { return 0.0; }
 
-    // OrthographicProjection::default_3d() area is in half-pixels at scale 1.0.
-    // visible_height = viewport_height * scale
-    // visible_width  = viewport_width * scale
-    // To fit max_extent with 10% border in viewport height:
-    //   max_extent * 1.1 = 720 * scale  →  scale = max_extent * 1.1 / 720
-    // Also check usable width (panels eat into it):
-    //   max_extent * 1.1 = usable_width * scale  →  scale = max_extent * 1.1 / usable_width
+    // Project the 3D AABB onto the 2D screen plane using the camera rotation.
+    let projected = project_aabb_to_screen(scene_min, scene_max, orbit.yaw, orbit.pitch);
+
+    // visible_width = viewport_width_pixels * scale
+    // visible_height = viewport_height_pixels * scale
     let viewport_height = 720.0;
     let usable_width = 1100.0 - LEFT_PANEL_PX - RIGHT_PANEL_PX;
 
-    let scale_for_height = max_extent * FIT_BORDER / viewport_height;
-    let scale_for_width = max_extent * FIT_BORDER / usable_width;
-    let scale = scale_for_height.max(scale_for_width);
+    let scale_for_height = projected.1 * FIT_BORDER / viewport_height;
+    let scale_for_width = projected.0 * FIT_BORDER / usable_width;
 
-    info!("AABB max_extent: {:.2}, fit_scale: {:.6}", max_extent, scale);
-    scale
+    scale_for_height.max(scale_for_width)
+}
+
+/// Project a 3D AABB through an orthographic camera and return the 2D bounding size.
+fn project_aabb_to_screen(min: Vec3, max: Vec3, yaw: f32, pitch: f32) -> (f32, f32) {
+    let rotation = Quat::from_euler(EulerRot::YXZ, -yaw.to_radians(), -pitch.to_radians(), 0.0);
+    let cam_right = rotation * Vec3::X;
+    let cam_up = rotation * Vec3::Y;
+
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
+
+    for corner in aabb_corners(min, max) {
+        let sx = corner.dot(cam_right);
+        let sy = corner.dot(cam_up);
+        min_x = min_x.min(sx);
+        max_x = max_x.max(sx);
+        min_y = min_y.min(sy);
+        max_y = max_y.max(sy);
+    }
+
+    (max_x - min_x, max_y - min_y)
+}
+
+fn aabb_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
+    [
+        Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z),
+        Vec3::new(min.x, max.y, min.z), Vec3::new(max.x, max.y, min.z),
+        Vec3::new(min.x, min.y, max.z), Vec3::new(max.x, min.y, max.z),
+        Vec3::new(min.x, max.y, max.z), Vec3::new(max.x, max.y, max.z),
+    ]
 }
 
 fn compute_scene_aabb(
