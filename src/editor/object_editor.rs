@@ -319,15 +319,15 @@ fn part_tree_ui(
     parts: Query<(&ShapePart, Option<&Children>, &Visibility)>,
     mut animators: Query<&mut ShapeAnimator>,
     mut commands: Commands,
-    orbit: Res<OrbitState>,
-    camera: Query<&Projection, With<OrbitCamera>>,
+    mut orbit: ResMut<OrbitState>,
+    mut camera: Query<&mut Projection, With<OrbitCamera>>,
     state: Res<ObjectEditorState>,
 ) {
     let ctx = contexts.ctx_mut();
     let mut toggles: Vec<(Entity, Visibility)> = Vec::new();
 
     egui::SidePanel::left("part_tree").min_width(200.0).show(ctx, |ui| {
-        camera_info(ui, &orbit, &camera, &state);
+        camera_controls(ui, &mut orbit, &mut camera, &state);
         ui.separator();
         animation_controls(ui, &roots, &mut animators);
         ui.heading("Part Tree");
@@ -343,22 +343,78 @@ fn part_tree_ui(
     }
 }
 
-fn camera_info(
+const DEFAULT_YAW: f32 = 45.0;
+const DEFAULT_PITCH: f32 = 35.264;
+
+fn camera_controls(
     ui: &mut egui::Ui,
-    orbit: &OrbitState,
-    camera: &Query<&Projection, With<OrbitCamera>>,
+    orbit: &mut OrbitState,
+    camera: &mut Query<&mut Projection, With<OrbitCamera>>,
     state: &ObjectEditorState,
 ) {
-    let zoom_pct = if state.fit_scale > 0.0 {
-        if let Ok(proj) = camera.get_single() {
-            if let Projection::Orthographic(ortho) = proj {
-                state.fit_scale / ortho.scale * 100.0
-            } else { 100.0 }
-        } else { 100.0 }
-    } else { 100.0 };
+    ui.heading("Camera");
 
-    ui.label(format!("Yaw: {:.0}°  Pitch: {:.0}°", orbit.yaw, orbit.pitch));
-    ui.label(format!("Zoom: {:.0}%", zoom_pct));
+    // Editable yaw and pitch
+    ui.horizontal(|ui| {
+        ui.label("Yaw:");
+        ui.add(egui::DragValue::new(&mut orbit.yaw).range(0.0..=360.0).suffix("°").speed(1.0));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Pitch:");
+        ui.add(egui::DragValue::new(&mut orbit.pitch).range(0.0..=90.0).suffix("°").speed(1.0));
+    });
+
+    // Editable zoom as percentage
+    let mut zoom_pct = current_zoom_pct(camera, state);
+    ui.horizontal(|ui| {
+        ui.label("Zoom:");
+        if ui.add(egui::DragValue::new(&mut zoom_pct).range(10.0..=200.0).suffix("%").speed(1.0)).changed() {
+            set_zoom_from_pct(camera, state, zoom_pct);
+        }
+    });
+
+    // View direction buttons
+    ui.horizontal(|ui| {
+        if ui.button("Front").clicked() { orbit.yaw = 0.0; orbit.pitch = 0.0; }
+        if ui.button("Right").clicked() { orbit.yaw = 90.0; orbit.pitch = 0.0; }
+        if ui.button("Top").clicked() { orbit.yaw = 0.0; orbit.pitch = 90.0; }
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Back").clicked() { orbit.yaw = 180.0; orbit.pitch = 0.0; }
+        if ui.button("Left").clicked() { orbit.yaw = 270.0; orbit.pitch = 0.0; }
+        if ui.button("Reset").clicked() {
+            orbit.yaw = DEFAULT_YAW;
+            orbit.pitch = DEFAULT_PITCH;
+            orbit.target = Vec3::ZERO;
+            set_zoom_from_pct(camera, state, 100.0);
+        }
+    });
+}
+
+fn current_zoom_pct(
+    camera: &Query<&mut Projection, With<OrbitCamera>>,
+    state: &ObjectEditorState,
+) -> f32 {
+    if state.fit_scale <= 0.0 { return 100.0; }
+    if let Ok(proj) = camera.get_single() {
+        if let Projection::Orthographic(ref ortho) = *proj {
+            return state.fit_scale / ortho.scale * 100.0;
+        }
+    }
+    100.0
+}
+
+fn set_zoom_from_pct(
+    camera: &mut Query<&mut Projection, With<OrbitCamera>>,
+    state: &ObjectEditorState,
+    pct: f32,
+) {
+    if state.fit_scale <= 0.0 { return; }
+    if let Ok(mut proj) = camera.get_single_mut() {
+        if let Projection::Orthographic(ortho) = proj.as_mut() {
+            ortho.scale = state.fit_scale / (pct / 100.0);
+        }
+    }
 }
 
 fn animation_controls(
