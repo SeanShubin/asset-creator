@@ -8,7 +8,8 @@
       "Bash(cargo update:*)",
       "Bash(timeout 10 cargo run)",
       "Bash(cargo build:*)",
-      "Bash(chmod +x:*)"
+      "Bash(chmod +x:*)",
+      "Bash(cargo run:*)"
     ]
   }
 }

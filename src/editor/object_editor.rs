@@ -31,6 +31,7 @@ impl Plugin for ObjectEditorPlugin {
                 keyboard_input.run_if(is_object_active),
                 animate_shapes.run_if(is_object_active),
                 part_tree_ui.run_if(is_object_active),
+                draw_grid.run_if(is_object_active),
             ));
     }
 }
@@ -286,6 +287,112 @@ fn compute_scene_aabb(
     }
 
     (scene_min, scene_max)
+}
+
+// =====================================================================
+// Grid
+// =====================================================================
+
+const GRID_HALF_SIZE: f32 = 5.0;
+const GRID_LINES: u32 = 20;
+const GRID_COLOR_XZ: Color = Color::srgba(0.3, 0.5, 0.3, 0.2);  // floor — greenish
+const GRID_COLOR_XY: Color = Color::srgba(0.5, 0.3, 0.3, 0.2);  // back-left — reddish
+const GRID_COLOR_YZ: Color = Color::srgba(0.3, 0.3, 0.5, 0.2);  // back-right — bluish
+const AXIS_COLOR_X: Color = Color::srgba(0.8, 0.2, 0.2, 0.6);
+const AXIS_COLOR_Y: Color = Color::srgba(0.2, 0.8, 0.2, 0.6);
+const AXIS_COLOR_Z: Color = Color::srgba(0.2, 0.2, 0.8, 0.6);
+
+fn draw_grid(mut gizmos: Gizmos, orbit: Res<OrbitState>) {
+    let offsets = grid_offsets_behind_camera(orbit.yaw);
+
+    draw_offset_grid(&mut gizmos, GridPlane::XZ, offsets.floor, GRID_COLOR_XZ);
+    draw_offset_grid(&mut gizmos, GridPlane::XY, offsets.back_wall, GRID_COLOR_XY);
+    draw_offset_grid(&mut gizmos, GridPlane::YZ, offsets.side_wall, GRID_COLOR_YZ);
+    draw_axis_lines(&mut gizmos, &offsets);
+}
+
+struct GridOffsets {
+    floor: f32,      // Y offset for XZ plane
+    back_wall: f32,  // Z offset for XY plane
+    side_wall: f32,  // X offset for YZ plane
+}
+
+fn grid_offsets_behind_camera(yaw: f32) -> GridOffsets {
+    let yaw_rad = yaw.to_radians();
+    // From camera_debug example:
+    //   camera X ≈ -sin(yaw) * distance  (negative X at yaw > 0)
+    //   camera Z ≈  cos(yaw) * distance  (positive Z at yaw = 0..90)
+    // Walls go on the opposite side from camera:
+    //   XY back wall (Z offset): camera at +Z → wall at -Z
+    //   YZ side wall (X offset): camera at -X → wall at +X
+    GridOffsets {
+        floor: -GRID_HALF_SIZE,
+        back_wall: if yaw_rad.cos() > 0.0 { -GRID_HALF_SIZE } else { GRID_HALF_SIZE },
+        side_wall: if yaw_rad.sin() > 0.0 { GRID_HALF_SIZE } else { -GRID_HALF_SIZE },
+    }
+}
+
+enum GridPlane { XZ, XY, YZ }
+
+fn draw_offset_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, color: Color) {
+    let step = GRID_HALF_SIZE * 2.0 / GRID_LINES as f32;
+
+    for i in 0..=GRID_LINES {
+        let t = -GRID_HALF_SIZE + i as f32 * step;
+
+        let (a, b) = match plane {
+            GridPlane::XZ => (
+                Vec3::new(t, offset, -GRID_HALF_SIZE),
+                Vec3::new(t, offset, GRID_HALF_SIZE),
+            ),
+            GridPlane::XY => (
+                Vec3::new(t, -GRID_HALF_SIZE, offset),
+                Vec3::new(t, GRID_HALF_SIZE, offset),
+            ),
+            GridPlane::YZ => (
+                Vec3::new(offset, t, -GRID_HALF_SIZE),
+                Vec3::new(offset, t, GRID_HALF_SIZE),
+            ),
+        };
+        gizmos.line(a, b, color);
+
+        let (c, d) = match plane {
+            GridPlane::XZ => (
+                Vec3::new(-GRID_HALF_SIZE, offset, t),
+                Vec3::new(GRID_HALF_SIZE, offset, t),
+            ),
+            GridPlane::XY => (
+                Vec3::new(-GRID_HALF_SIZE, t, offset),
+                Vec3::new(GRID_HALF_SIZE, t, offset),
+            ),
+            GridPlane::YZ => (
+                Vec3::new(offset, -GRID_HALF_SIZE, t),
+                Vec3::new(offset, GRID_HALF_SIZE, t),
+            ),
+        };
+        gizmos.line(c, d, color);
+    }
+}
+
+fn draw_axis_lines(gizmos: &mut Gizmos, offsets: &GridOffsets) {
+    // X axis on floor
+    gizmos.line(
+        Vec3::new(-GRID_HALF_SIZE, offsets.floor, 0.0),
+        Vec3::new(GRID_HALF_SIZE, offsets.floor, 0.0),
+        AXIS_COLOR_X,
+    );
+    // Y axis on side wall
+    gizmos.line(
+        Vec3::new(offsets.side_wall, -GRID_HALF_SIZE, 0.0),
+        Vec3::new(offsets.side_wall, GRID_HALF_SIZE, 0.0),
+        AXIS_COLOR_Y,
+    );
+    // Z axis on floor
+    gizmos.line(
+        Vec3::new(0.0, offsets.floor, -GRID_HALF_SIZE),
+        Vec3::new(0.0, offsets.floor, GRID_HALF_SIZE),
+        AXIS_COLOR_Z,
+    );
 }
 
 // =====================================================================
