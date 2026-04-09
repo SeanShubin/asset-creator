@@ -195,12 +195,7 @@ fn reload_shape(
     let roots: Vec<Entity> = existing.iter().collect();
     despawn_shape(&mut commands, &roots);
 
-    // Find the shape in the registry by matching the path
-    let shape_file = registry.shapes.values()
-        .find(|r| r.path == *path)
-        .map(|r| &r.data);
-
-    let Some(shape_file) = shape_file else {
+    let Some(shape_file) = registry.get_shape_by_path(path) else {
         error!("Shape at '{}' not found in registry", path.display());
         return;
     };

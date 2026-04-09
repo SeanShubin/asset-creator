@@ -38,8 +38,34 @@ impl AssetRegistry {
         self.surfaces.get(name).map(|r| &r.data)
     }
 
+    /// Look up a shape by key (relative path) or import name.
+    /// Tries exact key first, then "{name}.shape.ron", then any key ending with the name.
     pub fn get_shape(&self, name: &str) -> Option<&ShapeNode> {
-        self.shapes.get(name).map(|r| &r.data)
+        // Exact key match
+        if let Some(r) = self.shapes.get(name) {
+            return Some(&r.data);
+        }
+        // Try with .shape.ron suffix
+        let with_ext = format!("{name}.shape.ron");
+        if let Some(r) = self.shapes.get(&with_ext) {
+            return Some(&r.data);
+        }
+        // Try matching the end of any key (for subdirectory imports)
+        let suffix = format!("/{name}.shape.ron");
+        let backslash_suffix = format!("\\{name}.shape.ron");
+        for (key, r) in &self.shapes {
+            if key.ends_with(&suffix) || key.ends_with(&backslash_suffix) || key == &with_ext {
+                return Some(&r.data);
+            }
+        }
+        None
+    }
+
+    /// Look up a shape by its file path.
+    pub fn get_shape_by_path(&self, path: &std::path::Path) -> Option<&ShapeNode> {
+        self.shapes.values()
+            .find(|r| r.path == path)
+            .map(|r| &r.data)
     }
 
     pub fn clear_error_for(&mut self, path: &str) {
@@ -180,18 +206,26 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
         .and_then(|m| m.modified())
         .unwrap_or(SystemTime::UNIX_EPOCH);
 
-    let name = shape.name.clone().unwrap_or_else(|| {
-        path.file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown")
-            .to_string()
-    });
+    let key = shape_key_from_path(path);
 
-    registry.shapes.insert(name, RegisteredAsset {
+    registry.shapes.insert(key, RegisteredAsset {
         data: shape,
         path: path.to_path_buf(),
         last_modified,
     });
+}
+
+/// Compute the registry key for a shape file: relative path from data/shapes/.
+/// e.g., "data/shapes/wheel.shape.ron" → "wheel.shape.ron"
+///        "data/shapes/robots/arm.shape.ron" → "robots/arm.shape.ron"
+fn shape_key_from_path(path: &Path) -> String {
+    // Try to strip the data/shapes/ prefix
+    let shapes_dir = Path::new("data").join("shapes");
+    if let Ok(relative) = path.strip_prefix(&shapes_dir) {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    // Fallback: use the full path
+    path.to_string_lossy().replace('\\', "/")
 }
 
 pub fn save_surface_to_file(surface: &SurfaceDef, path: &Path) {

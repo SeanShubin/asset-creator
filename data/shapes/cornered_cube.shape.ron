@@ -5,37 +5,52 @@
             name:"x-box",
             shape: Box,
             bounds: (1, -1, -1, 3, 1, 1),
-            color: (0.0, 0.5, 0.5),
+            color: (0.5, 0.5, 0.5),
             mirror: [X]
         ),
         (
             name:"y-box",
             shape: Box,
             bounds: (-1, 1, -1, 1, 3, 1),
-            color: (0.0, 0.5, 0.5),
+            color: (0.5, 0.5, 0.5),
             mirror: [Y]
         ),
         (
             name:"z-box",
             shape: Box,
             bounds: (-1, -1, 1, 1, 1, 3),
-            color: (0.0, 0.5, 0.5),
+            color: (0.5, 0.5, 0.5),
             mirror: [Z]
         ),
         (
-            name:"z-wedge",
+            name:"wedge-x",
             shape: Wedge,
             bounds: (-1, 1, 1, 1, 3, 3),
-            color: (0.0, 0.5, 0.5),
-            orient: [X,Y,Z],
-            mirror: []
+            color: (0.5, 0.5, 0.5),
+            mirror: [Y, Z]
         ),
         (
-            name:"z-wedge",
+            name:"wedge-y",
             shape: Wedge,
-            bounds: (-1, 1, -1, 1, 3, -3),
-            color: (0.5, 0.5, 0.0),
-            mirror: [],
+            bounds: (1, -1, 1, 3, 1, 3),
+            color: (0.5, 0.5, 0.5),
+            orient: [NegY, X, Z],
+            mirror: [X, Z]
+        ),
+        (
+            name:"wedge-z",
+            shape: Wedge,
+            bounds: (1, 1, -1, 3, 3, 1),
+            color: (0.5, 0.5, 0.5),
+            orient: [NegZ, Y, X],
+            mirror: [X,Y]
+        ),
+        (
+            name:"corner",
+            shape: Corner,
+            bounds: (1, 1, 1, 3, 3, 3),
+            color: (0.5, 0.5, 0.5),
+            mirror: [X, Y, Z]
         ),
     ],
 )

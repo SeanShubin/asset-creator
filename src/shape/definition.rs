@@ -112,14 +112,22 @@ impl Default for SignedAxis {
 //   [r, u, f]  → full frame: right, up, forward
 // =====================================================================
 
-pub fn orient_to_quat(orient: &[SignedAxis]) -> Quat {
+/// Compute the 3x3 orient matrix from the orient specification.
+/// This maps local (X,Y,Z) to world directions.
+/// For 0 axes: identity. For 1 axis: single-axis rotation.
+/// For 3 axes: columns are (right, up, forward).
+pub fn orient_matrix(orient: &[SignedAxis]) -> Mat3 {
     match orient.len() {
-        0 => Quat::IDENTITY,
-        1 => single_axis_rotation(orient[0]),
-        3 => full_frame_rotation(orient[0], orient[1], orient[2]),
+        0 => Mat3::IDENTITY,
+        1 => Mat3::from_quat(single_axis_rotation(orient[0])),
+        3 => Mat3::from_cols(
+            signed_axis_to_vec3(orient[0]),
+            signed_axis_to_vec3(orient[1]),
+            signed_axis_to_vec3(orient[2]),
+        ),
         _ => {
             bevy::log::warn!("orient must have 0, 1, or 3 axes, got {}", orient.len());
-            Quat::IDENTITY
+            Mat3::IDENTITY
         }
     }
 }
@@ -133,14 +141,6 @@ fn single_axis_rotation(axis: SignedAxis) -> Quat {
         SignedAxis::Z => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
         SignedAxis::NegZ => Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
     }
-}
-
-fn full_frame_rotation(right: SignedAxis, up: SignedAxis, forward: SignedAxis) -> Quat {
-    let r = signed_axis_to_vec3(right);
-    let u = signed_axis_to_vec3(up);
-    let f = signed_axis_to_vec3(forward);
-    let mat = Mat3::from_cols(r, u, f);
-    Quat::from_mat3(&mat)
 }
 
 fn signed_axis_to_vec3(axis: SignedAxis) -> Vec3 {

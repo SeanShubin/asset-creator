@@ -249,32 +249,32 @@ pub fn create_unit_corner() -> Mesh {
     // C = (-0.5,  0.5, -0.5)  — along +Y
     // D = (-0.5, -0.5,  0.5)  — along +Z
 
-    // Bottom face (Y = -0.5): triangle A, B, D
+    // Bottom face (Y = -0.5): normal -Y
     add_triangle(
         &mut positions, &mut normals, &mut uvs, &mut indices,
-        [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [-0.5, -0.5, 0.5],
+        [-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [0.5, -0.5, -0.5],
         [0.0, -1.0, 0.0],
     );
 
-    // Back face (Z = -0.5): triangle A, C, B
+    // Back face (Z = -0.5): normal -Z
     add_triangle(
         &mut positions, &mut normals, &mut uvs, &mut indices,
-        [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, -0.5, -0.5],
+        [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [-0.5, 0.5, -0.5],
         [0.0, 0.0, -1.0],
     );
 
-    // Left face (X = -0.5): triangle A, D, C
+    // Left face (X = -0.5): normal -X
     add_triangle(
         &mut positions, &mut normals, &mut uvs, &mut indices,
-        [-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, -0.5],
+        [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [-0.5, -0.5, 0.5],
         [-1.0, 0.0, 0.0],
     );
 
-    // Diagonal face: triangle B, C, D
+    // Diagonal face: normal (+1,+1,+1) normalized
     let diag_normal = Vec3::new(1.0, 1.0, 1.0).normalize();
     add_triangle(
         &mut positions, &mut normals, &mut uvs, &mut indices,
-        [0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [-0.5, -0.5, 0.5],
+        [0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, -0.5],
         [diag_normal.x, diag_normal.y, diag_normal.z],
     );
 

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::registry::AssetRegistry;
 use super::animation::ShapeAnimator;
-use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, SignedAxis, orient_to_quat};
+use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, SignedAxis, orient_matrix};
 
 // =====================================================================
 // Components
@@ -171,6 +171,7 @@ fn process_repeat(
     for i in 0..repeat.count {
         let mut instance = node.clone();
         instance.repeat = None;
+        reify_bounds(&mut instance);
         offset_bounds(&mut instance.bounds, repeat.along, start + i as f32 * repeat.spacing);
         if let Some(ref name) = instance.name {
             instance.name = Some(format!("{name}_{i}"));
@@ -299,7 +300,9 @@ fn attach_geometry(
 ) {
     let Some(shape) = &node.shape else { return };
     let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
-    let (mesh, material) = make_mesh(meshes, materials, *shape, color, node.emissive);
+    let om = orient_matrix(&node.orient);
+    let is_mirrored = om.determinant() < 0.0;
+    let (mesh, material) = make_mesh(meshes, materials, *shape, color, node.emissive, is_mirrored);
     let mesh_tf = mesh_transform(*shape, &bounds, &node.orient);
 
     if node.children.is_empty() {
@@ -369,24 +372,56 @@ fn mesh_scale_for_bounds(shape: PrimitiveShape, bounds: &Bounds) -> Vec3 {
 
 /// Compute the full mesh transform: rotation from orient, scale from bounds.
 /// Handles the axis remapping so scale is applied correctly before rotation.
+/// Build the mesh transform from bounds and orient.
+///
+/// The orient matrix M maps local axes to world axes. Each column is a signed unit vector.
+/// We scale each column by the corresponding bounds dimension to get the full transform.
+///
+/// For a unit mesh in a 1x1x1 box:
+///   world_pos = M * diag(size) * local_pos
+///
+/// This naturally handles both rotation and mirroring in one matrix,
+/// without needing to decompose into separate rotation + scale.
 fn mesh_transform(shape: PrimitiveShape, bounds: &Bounds, orient: &[SignedAxis]) -> Transform {
     let size = bounds.size();
-    let rotation = orient_to_quat(orient);
+    let om = orient_matrix(orient);
 
-    // To correctly scale a unit mesh then rotate it:
-    // We need scale in the mesh's LOCAL (pre-rotation) space.
-    // The inverse rotation maps world-space dimensions to local-space.
-    let inv_rot = rotation.inverse();
-    let world_size = Vec3::new(size.0, size.1, size.2);
-    let local_size = (inv_rot * world_size).abs();
+    // Each column of the orient matrix is a unit direction.
+    // The local X axis of the mesh should span size along the orient's X direction.
+    // But size is in world space, and we need to figure out which size dimension
+    // maps to each local axis.
+    //
+    // The orient matrix column i tells us: "local axis i maps to world direction col_i."
+    // The size along local axis i = the world size projected onto col_i's direction.
+    // Since col_i is an axis-aligned unit vector, this is just picking the right component.
 
-    // Torus has non-uniform unit dimensions (wider than tall)
+    let local_x_size = pick_size_for_direction(om.x_axis, size);
+    let local_y_size = pick_size_for_direction(om.y_axis, size);
+    let local_z_size = pick_size_for_direction(om.z_axis, size);
+
+    // Torus has non-uniform unit dimensions
     let local_scale = match shape {
-        PrimitiveShape::Torus => Vec3::new(local_size.x, local_size.y / 0.3, local_size.z),
-        _ => local_size,
+        PrimitiveShape::Torus => Vec3::new(local_x_size, local_y_size / 0.3, local_z_size),
+        _ => Vec3::new(local_x_size, local_y_size, local_z_size),
     };
 
-    Transform::from_scale(local_scale).with_rotation(rotation)
+    // Build the final 3x3 matrix: orient columns scaled by local dimensions.
+    // This IS the complete transform — rotation, scale, and mirror all in one.
+    let col_x = om.x_axis * local_scale.x;
+    let col_y = om.y_axis * local_scale.y;
+    let col_z = om.z_axis * local_scale.z;
+
+    let mat = bevy::math::Mat3::from_cols(col_x, col_y, col_z);
+    let affine = bevy::math::Affine3A::from_mat3(mat);
+    Transform::from_matrix(bevy::math::Mat4::from(affine))
+}
+
+/// Given a direction vector (signed unit axis) and world size (sx, sy, sz),
+/// return the size component corresponding to that direction.
+fn pick_size_for_direction(dir: Vec3, size: (f32, f32, f32)) -> f32 {
+    if dir.x.abs() > 0.5 { size.0 }
+    else if dir.y.abs() > 0.5 { size.1 }
+    else { size.2 }
 }
 
 fn make_mesh(
@@ -395,6 +430,7 @@ fn make_mesh(
     shape: PrimitiveShape,
     color: (f32, f32, f32),
     emissive: bool,
+    is_mirrored: bool,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
     let mesh = match shape {
         // Unit meshes — one per primitive type, scaled by transform
@@ -409,14 +445,20 @@ fn make_mesh(
     };
 
     let base_color = Color::srgb(color.0, color.1, color.2);
+    let cull_mode = if is_mirrored { None } else { Some(bevy::render::render_resource::Face::Back) };
     let material = if emissive {
         materials.add(StandardMaterial {
             base_color,
             emissive: base_color.into(),
+            cull_mode,
             ..default()
         })
     } else {
-        materials.add(StandardMaterial::from_color(base_color))
+        materials.add(StandardMaterial {
+            base_color,
+            cull_mode,
+            ..default()
+        })
     };
 
     (mesh, material)
@@ -436,6 +478,22 @@ fn bounds_center(bounds: &Option<Bounds>) -> Vec3 {
     }
 }
 
+const DEFAULT_BOUNDS: Bounds = Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5);
+
+/// Ensure bounds are reified before transforming.
+fn reify_bounds(node: &mut ShapeNode) {
+    if node.bounds.is_none() && node.shape.is_some() {
+        node.bounds = Some(DEFAULT_BOUNDS);
+    }
+}
+
+/// Ensure orient is reified before transforming.
+fn reify_orient(node: &mut ShapeNode) {
+    if node.orient.is_empty() && node.shape.is_some() {
+        node.orient = vec![SignedAxis::X, SignedAxis::Y, SignedAxis::Z];
+    }
+}
+
 fn offset_bounds(bounds: &mut Option<Bounds>, axis: Axis, offset: f32) {
     if let Some(ref mut b) = bounds {
         match axis {
@@ -448,6 +506,9 @@ fn offset_bounds(bounds: &mut Option<Bounds>, axis: Axis, offset: f32) {
 
 /// Flip a node's bounds and orient on the given axis. Recursively flips children.
 fn flip_node_bounds(node: &mut ShapeNode, axis: Axis) {
+    reify_bounds(node);
+    reify_orient(node);
+
     if let Some(ref mut b) = node.bounds {
         match axis {
             Axis::X => { let tmp = -b.0; b.0 = -b.3; b.3 = tmp; }
