@@ -9,7 +9,7 @@
         ),
         (
             name: "top",
-            shape: Cap,
+            shape: Dome,
             bounds: (-4.0, 0.0, -4.0, 4.0, 1.0, 4.0),
             color: (0.6, 0.5, 0.4),
         ),

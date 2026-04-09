@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy_egui::EguiContexts;
 
 const ISO_DISTANCE: f32 = 15.0;
-const DEFAULT_PITCH: f32 = 35.264;
+const DEFAULT_PITCH: f32 = 45.0;
 const DEFAULT_YAW: f32 = 45.0;
 const DEFAULT_ZOOM: f32 = 0.012;
 const ZOOM_MIN: f32 = 0.002;

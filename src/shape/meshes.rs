@@ -5,122 +5,18 @@ use bevy::render::mesh::{Indices, PrimitiveTopology};
 // Dome — convex ellipsoidal cap, normals pointing outward
 // =====================================================================
 
-pub fn create_dome_mesh(base_radius: f32, height: f32, rings: u32, segments: u32) -> Mesh {
+/// Unit dome: half-ellipsoid, radius=0.5, height=1.0 (base at y=-0.5, peak at y=0.5).
+/// Scaled by transform to fill bounds.
+pub fn create_unit_dome(rings: u32, segments: u32) -> Mesh {
     let (mut positions, mut normals, mut uvs) = generate_ellipsoid_cap(
-        base_radius, height, 1.0, rings, segments,
+        0.5, 1.0, 1.0, rings, segments,
     );
     let mut indices = generate_grid_indices(rings, segments, true);
 
     add_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
-        base_radius, -height / 2.0, segments, false);
+        0.5, -0.5, segments, false);
 
     build_mesh(positions, normals, uvs, indices)
-}
-
-// =====================================================================
-// Cap — sphere slice, clips to bounding box
-// =====================================================================
-
-/// Creates a sphere cap mesh that clips to the given half-extents.
-/// `half_w` and `half_d` are the half-widths in X and Z.
-/// `height` is the total height of the cap.
-/// The sphere radius is computed from the larger of half_w/half_d and height.
-/// Vertices outside the bounding box are clamped and the mesh is closed.
-pub fn create_cap_mesh(half_w: f32, half_d: f32, height: f32, rings: u32, segments: u32) -> Mesh {
-    let base_radius = half_w.max(half_d);
-    let sphere_radius = compute_sphere_radius(base_radius, height);
-    let y_offset = sphere_radius - height; // sphere center is at y = -(y_offset) below cap base
-
-    let half_h = height / 2.0;
-
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs = Vec::new();
-
-    // Ring 0 = outer edge (r = base_radius), Ring N = peak (r = 0)
-    for ring in 0..=rings {
-        let t = ring as f32 / rings as f32;
-        let r = base_radius * (1.0 - t);
-
-        // True sphere height: y = sqrt(R² - r²) - y_offset
-        // This gives 0 at r=base_radius and `height` at r=0
-        let sphere_y = (sphere_radius * sphere_radius - r * r).sqrt() - y_offset;
-        let y = sphere_y - half_h; // center the mesh vertically
-
-        for seg in 0..=segments {
-            let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
-            let raw_x = r * phi.cos();
-            let raw_z = r * phi.sin();
-
-            // Clip to bounding box
-            let x = raw_x.clamp(-half_w, half_w);
-            let z = raw_z.clamp(-half_d, half_d);
-
-            positions.push([x, y, z]);
-
-            // Normal: sphere normal for unclipped, face normal for clipped
-            let clipped_x = raw_x.abs() > half_w;
-            let clipped_z = raw_z.abs() > half_d;
-
-            let (nx, ny, nz) = if clipped_x && clipped_z {
-                (raw_x.signum(), 0.0, raw_z.signum())
-            } else if clipped_x {
-                (raw_x.signum(), 0.0, 0.0)
-            } else if clipped_z {
-                (0.0, 0.0, raw_z.signum())
-            } else {
-                // True sphere normal: point on sphere relative to sphere center
-                (raw_x / sphere_radius, (sphere_y + y_offset) / sphere_radius, raw_z / sphere_radius)
-            };
-
-            let len = (nx * nx + ny * ny + nz * nz).sqrt().max(0.0001);
-            normals.push([nx / len, ny / len, nz / len]);
-            uvs.push([seg as f32 / segments as f32, t]);
-        }
-    }
-
-    let mut indices = generate_grid_indices(rings, segments, true);
-
-    // Bottom disc — clipped to half_w × half_d rectangle
-    add_clipped_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
-        half_w, half_d, -half_h, segments);
-
-    build_mesh(positions, normals, uvs, indices)
-}
-
-/// Add a flat disc clipped to a rectangle (for Cap bottom).
-fn add_clipped_disc(
-    positions: &mut Vec<[f32; 3]>,
-    normals: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    indices: &mut Vec<u32>,
-    half_w: f32,
-    half_d: f32,
-    y: f32,
-    segments: u32,
-) {
-    let base_radius = half_w.max(half_d);
-    let center_idx = positions.len() as u32;
-
-    positions.push([0.0, y, 0.0]);
-    normals.push([0.0, -1.0, 0.0]);
-    uvs.push([0.5, 0.5]);
-
-    for seg in 0..=segments {
-        let angle = seg as f32 / segments as f32 * std::f32::consts::TAU;
-        let x = (base_radius * angle.cos()).clamp(-half_w, half_w);
-        let z = (base_radius * angle.sin()).clamp(-half_d, half_d);
-        positions.push([x, y, z]);
-        normals.push([0.0, -1.0, 0.0]);
-        uvs.push([0.5 + 0.5 * angle.cos(), 0.5 + 0.5 * angle.sin()]);
-    }
-
-    for seg in 0..segments {
-        let a = center_idx;
-        let b = center_idx + 1 + seg;
-        let c = center_idx + 2 + seg;
-        indices.extend_from_slice(&[a, b, c]);
-    }
 }
 
 // =====================================================================
@@ -237,7 +133,156 @@ pub fn create_torus_mesh(ring_segments: u32, cross_segments: u32) -> Mesh {
 }
 
 // =====================================================================
-// Shared: ellipsoid cap generation (used by Dome and Bowl)
+// Capsule — cylinder with hemispherical ends
+// =====================================================================
+
+/// Unit capsule: total height=1.0, radius=0.25 at equator.
+/// Cylinder section in the middle, hemisphere caps on each end.
+/// Hemisphere radius = 0.25, cylinder height = 0.5.
+/// Scale non-uniformly to stretch: XZ scales the radius, Y scales the whole height.
+pub fn create_unit_capsule(rings: u32, segments: u32) -> Mesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+
+    let radius = 0.25_f32;
+    let half_cyl = 0.25_f32; // cylinder half-height
+
+    // Top hemisphere: equator at y=half_cyl, pole at y=half_cyl+radius
+    for ring in 0..=rings {
+        let t = ring as f32 / rings as f32;
+        let angle = t * std::f32::consts::FRAC_PI_2;
+        let r = radius * angle.cos();
+        let y = half_cyl + radius * angle.sin();
+
+        for seg in 0..=segments {
+            let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
+            positions.push([r * phi.cos(), y, r * phi.sin()]);
+            normals.push([phi.cos() * angle.cos(), angle.sin(), phi.sin() * angle.cos()]);
+            uvs.push([seg as f32 / segments as f32, t * 0.25]);
+        }
+    }
+
+    // Cylinder section: two rings at y=half_cyl and y=-half_cyl
+    let cyl_top_start = positions.len() as u32;
+    for seg in 0..=segments {
+        let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
+        let x = radius * phi.cos();
+        let z = radius * phi.sin();
+        // Top ring
+        positions.push([x, half_cyl, z]);
+        normals.push([phi.cos(), 0.0, phi.sin()]);
+        uvs.push([seg as f32 / segments as f32, 0.25]);
+    }
+    let cyl_bot_start = positions.len() as u32;
+    for seg in 0..=segments {
+        let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
+        let x = radius * phi.cos();
+        let z = radius * phi.sin();
+        // Bottom ring
+        positions.push([x, -half_cyl, z]);
+        normals.push([phi.cos(), 0.0, phi.sin()]);
+        uvs.push([seg as f32 / segments as f32, 0.75]);
+    }
+
+    // Bottom hemisphere: equator at y=-half_cyl, pole at y=-half_cyl-radius
+    let bot_start = positions.len() as u32;
+    for ring in 0..=rings {
+        let t = ring as f32 / rings as f32;
+        let angle = t * std::f32::consts::FRAC_PI_2;
+        let r = radius * angle.cos();
+        let y = -half_cyl - radius * angle.sin();
+
+        for seg in 0..=segments {
+            let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
+            positions.push([r * phi.cos(), y, r * phi.sin()]);
+            normals.push([phi.cos() * angle.cos(), -angle.sin(), phi.sin() * angle.cos()]);
+            uvs.push([seg as f32 / segments as f32, 0.75 + t * 0.25]);
+        }
+    }
+
+    // Top hemisphere indices
+    let mut indices = generate_grid_indices(rings, segments, true);
+
+    // Cylinder indices (connect top ring to bottom ring)
+    let verts_per_ring = segments + 1;
+    for seg in 0..segments {
+        let a = cyl_top_start + seg;
+        let b = a + 1;
+        let c = cyl_bot_start + seg;
+        let d = c + 1;
+        indices.extend_from_slice(&[a, c, b]);
+        indices.extend_from_slice(&[b, c, d]);
+    }
+
+    // Bottom hemisphere indices
+    for ring in 0..rings {
+        for seg in 0..segments {
+            let a = bot_start + ring * verts_per_ring + seg;
+            let b = a + 1;
+            let c = a + verts_per_ring;
+            let d = c + 1;
+            indices.extend_from_slice(&[a, c, b]);
+            indices.extend_from_slice(&[b, c, d]);
+        }
+    }
+
+    build_mesh(positions, normals, uvs, indices)
+}
+
+// =====================================================================
+// Corner — tetrahedron filling one corner of the bounding box
+// =====================================================================
+
+/// Unit corner: fills the (-X, -Y, -Z) corner of a 1x1x1 cube.
+/// Three right-triangle faces on the cube walls + one diagonal face.
+/// Orient/flip determines which corner the solid fills.
+pub fn create_unit_corner() -> Mesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+
+    // Vertices of the tetrahedron:
+    // A = (-0.5, -0.5, -0.5)  — the corner
+    // B = ( 0.5, -0.5, -0.5)  — along +X
+    // C = (-0.5,  0.5, -0.5)  — along +Y
+    // D = (-0.5, -0.5,  0.5)  — along +Z
+
+    // Bottom face (Y = -0.5): triangle A, B, D
+    add_triangle(
+        &mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [-0.5, -0.5, 0.5],
+        [0.0, -1.0, 0.0],
+    );
+
+    // Back face (Z = -0.5): triangle A, C, B
+    add_triangle(
+        &mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, -0.5, -0.5],
+        [0.0, 0.0, -1.0],
+    );
+
+    // Left face (X = -0.5): triangle A, D, C
+    add_triangle(
+        &mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, -0.5],
+        [-1.0, 0.0, 0.0],
+    );
+
+    // Diagonal face: triangle B, C, D
+    let diag_normal = Vec3::new(1.0, 1.0, 1.0).normalize();
+    add_triangle(
+        &mut positions, &mut normals, &mut uvs, &mut indices,
+        [0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [-0.5, -0.5, 0.5],
+        [diag_normal.x, diag_normal.y, diag_normal.z],
+    );
+
+    build_mesh(positions, normals, uvs, indices)
+}
+
+// =====================================================================
+// Shared: ellipsoid cap generation (used by Dome)
 // =====================================================================
 
 /// Generate an ellipsoidal cap. The cap has base radius `base_radius` in XZ

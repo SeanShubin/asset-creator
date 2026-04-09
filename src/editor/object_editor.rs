@@ -531,7 +531,7 @@ fn part_tree_ui(
 }
 
 const DEFAULT_YAW: f32 = 45.0;
-const DEFAULT_PITCH: f32 = 35.264;
+const DEFAULT_PITCH: f32 = 45.0;
 
 fn camera_controls(
     ui: &mut egui::Ui,

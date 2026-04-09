@@ -3,12 +3,18 @@
 (
     name: "mirror_test",
     children: [
-        (name: "center", shape: Box,
-         bounds: (-0.5, -0.5, -0.5, 0.5, 0.5, 0.5),
-         color: (0.5, 0.5, 0.5)),
-
-        (name: "wheel", import: "wheel",
-         bounds: (1.5, 2.5, 3.5, 2.5, 3.5, 4.5),
-         mirror: [X, Y, Z]),
+        (
+            name: "center",
+            shape: Box,
+            bounds: (-0.5, -0.5, -0.5, 0.5, 0.5, 0.5),
+            color: (0.5, 0.5, 0.5)
+        ),
+        (
+            name: "wheel",
+            shape: Cylinder,
+            bounds: (1.5, 2.5, 3.5, 2.5, 3.5, 4.5),
+            mirror: [X, Y, Z],
+            orient: [X]
+        ),
     ],
 )

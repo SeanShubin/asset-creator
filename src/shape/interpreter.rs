@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::registry::AssetRegistry;
 use super::animation::ShapeAnimator;
-use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, SignedAxis};
+use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, SignedAxis, orient_to_quat};
 
 // =====================================================================
 // Components
@@ -299,14 +299,8 @@ fn attach_geometry(
 ) {
     let Some(shape) = &node.shape else { return };
     let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
-    let orient = node.orient.unwrap_or(SignedAxis::Y);
-
-    let (mesh, material) = make_mesh(meshes, materials, *shape, &bounds, orient, color, node.emissive);
-    let mesh_scale = mesh_scale_for_shape(*shape, &bounds, orient);
-    let mesh_rotation = mesh_rotation_for_orient(*shape, orient);
-    let mesh_tf = Transform::IDENTITY
-        .with_scale(mesh_scale)
-        .with_rotation(mesh_rotation);
+    let (mesh, material) = make_mesh(meshes, materials, *shape, color, node.emissive);
+    let mesh_tf = mesh_transform(*shape, &bounds, &node.orient);
 
     if node.children.is_empty() {
         commands.entity(parent).with_child((
@@ -337,95 +331,81 @@ fn attach_geometry(
 // Mesh creation
 // =====================================================================
 
-fn mesh_scale_for_shape(shape: PrimitiveShape, bounds: &Bounds, orient: SignedAxis) -> Vec3 {
+/// Compute the scale to apply to a unit mesh before rotation.
+/// All unit meshes are defined in a 1x1x1 box. The orient rotation will
+/// reposition the axes. We need the scale in the mesh's pre-rotation space.
+///
+/// For Orient::Single, the rotation maps the mesh's Y axis to the target axis.
+/// So the bounds dimension along the target axis should map to the mesh's Y scale.
+///
+/// For Orient::Full, the rotation maps (X,Y,Z) → (right,up,forward).
+/// The bounds are in world space. We need to figure out which bounds dimension
+/// maps to each mesh axis by applying the inverse rotation.
+fn mesh_scale_for_bounds(shape: PrimitiveShape, bounds: &Bounds) -> Vec3 {
     let size = bounds.size();
-    match shape {
-        PrimitiveShape::Box => Vec3::ONE,
-        PrimitiveShape::Sphere => Vec3::new(size.0, size.1, size.2),
-        PrimitiveShape::Cylinder | PrimitiveShape::Cone => {
-            match orient.unsigned() {
-                Axis::Y => Vec3::new(size.0, size.1, size.2),
-                Axis::X => Vec3::new(size.1, size.0, size.2),
-                Axis::Z => Vec3::new(size.0, size.2, size.1),
-            }
-        }
-        PrimitiveShape::Dome | PrimitiveShape::Cap => flip_scale_for_negative(orient),
-        PrimitiveShape::Wedge => Vec3::new(size.0, size.1, size.2),
-        PrimitiveShape::Torus => {
-            match orient.unsigned() {
-                Axis::Y => Vec3::new(size.0, size.1 / 0.3, size.2),
-                Axis::X => Vec3::new(size.1 / 0.3, size.0, size.2),
-                Axis::Z => Vec3::new(size.0, size.2 / 0.3, size.1),
-            }
-        }
-    }
+    // Scale in world space — the rotation quaternion will handle reorientation.
+    // Since Bevy applies scale in local space THEN rotation, we need the scale
+    // in the pre-rotation frame. But our orient.to_quat() produces the rotation,
+    // and we apply both to the mesh transform as scale + rotation.
+    //
+    // For this to work correctly: we set scale = bounds size in world space,
+    // and the mesh transform has rotation applied AFTER scale.
+    // Bevy's Transform applies: scale → rotation → translation.
+    // So scale stretches the unit mesh, then rotation reorients it.
+    //
+    // This means scale should be in the ROTATED frame. For a cylinder with
+    // orient Y (identity rotation), scale (sx, sy, sz) maps directly.
+    // For orient X (rotated 90° around Z), the mesh's Y becomes world X.
+    // Scale (sx, sy, sz) in local space means: sx along mesh-X (world-Y after rotation),
+    // sy along mesh-Y (world-X after rotation), sz along mesh-Z (world-Z).
+    //
+    // So for orient X: we need local_scale = (size.y, size.x, size.z)
+    // because local Y (which becomes world X) needs size.x.
+    //
+    // The general formula: inverse-rotate the world size vector to get local scale.
+    // But size is always positive, and rotation can flip signs. So we use abs().
+    Vec3::new(size.0, size.1, size.2)
 }
 
-fn flip_scale_for_negative(orient: SignedAxis) -> Vec3 {
-    if !orient.is_negative() { return Vec3::ONE; }
-    match orient.unsigned() {
-        Axis::Y => Vec3::new(1.0, -1.0, 1.0),
-        Axis::X => Vec3::new(-1.0, 1.0, 1.0),
-        Axis::Z => Vec3::new(1.0, 1.0, -1.0),
-    }
-}
+/// Compute the full mesh transform: rotation from orient, scale from bounds.
+/// Handles the axis remapping so scale is applied correctly before rotation.
+fn mesh_transform(shape: PrimitiveShape, bounds: &Bounds, orient: &[SignedAxis]) -> Transform {
+    let size = bounds.size();
+    let rotation = orient_to_quat(orient);
 
-fn mesh_rotation_for_orient(shape: PrimitiveShape, orient: SignedAxis) -> Quat {
-    match shape {
-        PrimitiveShape::Box | PrimitiveShape::Sphere | PrimitiveShape::Wedge => Quat::IDENTITY,
-        PrimitiveShape::Cylinder | PrimitiveShape::Cone | PrimitiveShape::Dome
-        | PrimitiveShape::Cap | PrimitiveShape::Torus => {
-            match orient.unsigned() {
-                Axis::Y => Quat::IDENTITY,
-                Axis::X => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-                Axis::Z => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
-            }
-        }
-    }
-}
+    // To correctly scale a unit mesh then rotate it:
+    // We need scale in the mesh's LOCAL (pre-rotation) space.
+    // The inverse rotation maps world-space dimensions to local-space.
+    let inv_rot = rotation.inverse();
+    let world_size = Vec3::new(size.0, size.1, size.2);
+    let local_size = (inv_rot * world_size).abs();
 
-fn oriented_dimensions(size: &(f32, f32, f32), orient: SignedAxis) -> (f32, f32) {
-    match orient.unsigned() {
-        Axis::Y => (size.0.min(size.2) / 2.0, size.1),
-        Axis::X => (size.1.min(size.2) / 2.0, size.0),
-        Axis::Z => (size.0.min(size.1) / 2.0, size.2),
-    }
-}
+    // Torus has non-uniform unit dimensions (wider than tall)
+    let local_scale = match shape {
+        PrimitiveShape::Torus => Vec3::new(local_size.x, local_size.y / 0.3, local_size.z),
+        _ => local_size,
+    };
 
-/// Extract half-width, half-depth, and height for Cap from bounds.
-fn cap_dimensions(size: &(f32, f32, f32), orient: SignedAxis) -> (f32, f32, f32) {
-    match orient.unsigned() {
-        Axis::Y => (size.0 / 2.0, size.2 / 2.0, size.1),
-        Axis::X => (size.1 / 2.0, size.2 / 2.0, size.0),
-        Axis::Z => (size.0 / 2.0, size.1 / 2.0, size.2),
-    }
+    Transform::from_scale(local_scale).with_rotation(rotation)
 }
 
 fn make_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     shape: PrimitiveShape,
-    bounds: &Bounds,
-    orient: SignedAxis,
     color: (f32, f32, f32),
     emissive: bool,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
-    let size = bounds.size();
     let mesh = match shape {
-        PrimitiveShape::Box => meshes.add(Cuboid::new(size.0, size.1, size.2)),
+        // Unit meshes — one per primitive type, scaled by transform
+        PrimitiveShape::Box => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         PrimitiveShape::Sphere => meshes.add(Sphere::new(0.5).mesh().build()),
         PrimitiveShape::Cylinder => meshes.add(Cylinder::new(0.5, 1.0).mesh().build()),
         PrimitiveShape::Cone => meshes.add(super::meshes::create_cone_mesh(24, 32)),
-        PrimitiveShape::Dome => {
-            let (r, h) = oriented_dimensions(&size, orient);
-            meshes.add(super::meshes::create_dome_mesh(r, h, 24, 32))
-        }
-        PrimitiveShape::Cap => {
-            let (hw, hd, h) = cap_dimensions(&size, orient);
-            meshes.add(super::meshes::create_cap_mesh(hw, hd, h, 24, 32))
-        }
+        PrimitiveShape::Dome => meshes.add(super::meshes::create_unit_dome(24, 32)),
         PrimitiveShape::Wedge => meshes.add(super::meshes::create_wedge_mesh()),
         PrimitiveShape::Torus => meshes.add(super::meshes::create_torus_mesh(32, 16)),
+        PrimitiveShape::Corner => meshes.add(super::meshes::create_unit_corner()),
     };
 
     let base_color = Color::srgb(color.0, color.1, color.2);
@@ -466,7 +446,7 @@ fn offset_bounds(bounds: &mut Option<Bounds>, axis: Axis, offset: f32) {
     }
 }
 
-/// Flip a node's bounds on the given axis. Also recursively flips children.
+/// Flip a node's bounds and orient on the given axis. Recursively flips children.
 fn flip_node_bounds(node: &mut ShapeNode, axis: Axis) {
     if let Some(ref mut b) = node.bounds {
         match axis {
@@ -475,7 +455,23 @@ fn flip_node_bounds(node: &mut ShapeNode, axis: Axis) {
             Axis::Z => { let tmp = -b.2; b.2 = -b.5; b.5 = tmp; }
         }
     }
+    for sa in &mut node.orient {
+        *sa = flip_signed_axis(*sa, axis);
+    }
     for child in &mut node.children {
         flip_node_bounds(child, axis);
     }
 }
+
+fn flip_signed_axis(sa: SignedAxis, mirror_axis: Axis) -> SignedAxis {
+    match (sa, mirror_axis) {
+        (SignedAxis::X, Axis::X) => SignedAxis::NegX,
+        (SignedAxis::NegX, Axis::X) => SignedAxis::X,
+        (SignedAxis::Y, Axis::Y) => SignedAxis::NegY,
+        (SignedAxis::NegY, Axis::Y) => SignedAxis::Y,
+        (SignedAxis::Z, Axis::Z) => SignedAxis::NegZ,
+        (SignedAxis::NegZ, Axis::Z) => SignedAxis::Z,
+        _ => sa,
+    }
+}
+

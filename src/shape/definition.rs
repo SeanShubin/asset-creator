@@ -1,3 +1,4 @@
+use bevy::math::{Mat3, Quat, Vec3};
 use serde::Deserialize;
 
 /// A shape node is both the file format and the node type.
@@ -11,7 +12,7 @@ pub struct ShapeNode {
     #[serde(default)]
     pub bounds: Option<Bounds>,
     #[serde(default)]
-    pub orient: Option<SignedAxis>,
+    pub orient: Vec<SignedAxis>,
     #[serde(default)]
     pub color: Option<(f32, f32, f32)>,
     #[serde(default)]
@@ -40,10 +41,10 @@ pub enum PrimitiveShape {
     Sphere,
     Cylinder,
     Dome,
-    Cap,
     Cone,
     Wedge,
     Torus,
+    Corner,
 }
 
 // =====================================================================
@@ -77,13 +78,10 @@ pub enum Axis {
 #[derive(Deserialize, Clone, Copy, Debug)]
 pub enum SignedAxis {
     X,
-    #[serde(rename = "-X")]
     NegX,
     Y,
-    #[serde(rename = "-Y")]
     NegY,
     Z,
-    #[serde(rename = "-Z")]
     NegZ,
 }
 
@@ -104,6 +102,55 @@ impl SignedAxis {
 impl Default for SignedAxis {
     fn default() -> Self {
         Self::Y
+    }
+}
+
+// =====================================================================
+// Orient — interpret a list of signed axes as orientation
+//   []         → identity (no rotation)
+//   [axis]     → single axis: primary axis points along `axis`
+//   [r, u, f]  → full frame: right, up, forward
+// =====================================================================
+
+pub fn orient_to_quat(orient: &[SignedAxis]) -> Quat {
+    match orient.len() {
+        0 => Quat::IDENTITY,
+        1 => single_axis_rotation(orient[0]),
+        3 => full_frame_rotation(orient[0], orient[1], orient[2]),
+        _ => {
+            bevy::log::warn!("orient must have 0, 1, or 3 axes, got {}", orient.len());
+            Quat::IDENTITY
+        }
+    }
+}
+
+fn single_axis_rotation(axis: SignedAxis) -> Quat {
+    match axis {
+        SignedAxis::Y => Quat::IDENTITY,
+        SignedAxis::NegY => Quat::from_rotation_x(std::f32::consts::PI),
+        SignedAxis::X => Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
+        SignedAxis::NegX => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        SignedAxis::Z => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+        SignedAxis::NegZ => Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+    }
+}
+
+fn full_frame_rotation(right: SignedAxis, up: SignedAxis, forward: SignedAxis) -> Quat {
+    let r = signed_axis_to_vec3(right);
+    let u = signed_axis_to_vec3(up);
+    let f = signed_axis_to_vec3(forward);
+    let mat = Mat3::from_cols(r, u, f);
+    Quat::from_mat3(&mat)
+}
+
+fn signed_axis_to_vec3(axis: SignedAxis) -> Vec3 {
+    match axis {
+        SignedAxis::X => Vec3::X,
+        SignedAxis::NegX => Vec3::NEG_X,
+        SignedAxis::Y => Vec3::Y,
+        SignedAxis::NegY => Vec3::NEG_Y,
+        SignedAxis::Z => Vec3::Z,
+        SignedAxis::NegZ => Vec3::NEG_Z,
     }
 }
 
