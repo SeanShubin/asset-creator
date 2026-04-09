@@ -133,104 +133,6 @@ pub fn create_torus_mesh(ring_segments: u32, cross_segments: u32) -> Mesh {
 }
 
 // =====================================================================
-// Capsule — cylinder with hemispherical ends
-// =====================================================================
-
-/// Unit capsule: total height=1.0, radius=0.25 at equator.
-/// Cylinder section in the middle, hemisphere caps on each end.
-/// Hemisphere radius = 0.25, cylinder height = 0.5.
-/// Scale non-uniformly to stretch: XZ scales the radius, Y scales the whole height.
-pub fn create_unit_capsule(rings: u32, segments: u32) -> Mesh {
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs = Vec::new();
-
-    let radius = 0.25_f32;
-    let half_cyl = 0.25_f32; // cylinder half-height
-
-    // Top hemisphere: equator at y=half_cyl, pole at y=half_cyl+radius
-    for ring in 0..=rings {
-        let t = ring as f32 / rings as f32;
-        let angle = t * std::f32::consts::FRAC_PI_2;
-        let r = radius * angle.cos();
-        let y = half_cyl + radius * angle.sin();
-
-        for seg in 0..=segments {
-            let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
-            positions.push([r * phi.cos(), y, r * phi.sin()]);
-            normals.push([phi.cos() * angle.cos(), angle.sin(), phi.sin() * angle.cos()]);
-            uvs.push([seg as f32 / segments as f32, t * 0.25]);
-        }
-    }
-
-    // Cylinder section: two rings at y=half_cyl and y=-half_cyl
-    let cyl_top_start = positions.len() as u32;
-    for seg in 0..=segments {
-        let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
-        let x = radius * phi.cos();
-        let z = radius * phi.sin();
-        // Top ring
-        positions.push([x, half_cyl, z]);
-        normals.push([phi.cos(), 0.0, phi.sin()]);
-        uvs.push([seg as f32 / segments as f32, 0.25]);
-    }
-    let cyl_bot_start = positions.len() as u32;
-    for seg in 0..=segments {
-        let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
-        let x = radius * phi.cos();
-        let z = radius * phi.sin();
-        // Bottom ring
-        positions.push([x, -half_cyl, z]);
-        normals.push([phi.cos(), 0.0, phi.sin()]);
-        uvs.push([seg as f32 / segments as f32, 0.75]);
-    }
-
-    // Bottom hemisphere: equator at y=-half_cyl, pole at y=-half_cyl-radius
-    let bot_start = positions.len() as u32;
-    for ring in 0..=rings {
-        let t = ring as f32 / rings as f32;
-        let angle = t * std::f32::consts::FRAC_PI_2;
-        let r = radius * angle.cos();
-        let y = -half_cyl - radius * angle.sin();
-
-        for seg in 0..=segments {
-            let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
-            positions.push([r * phi.cos(), y, r * phi.sin()]);
-            normals.push([phi.cos() * angle.cos(), -angle.sin(), phi.sin() * angle.cos()]);
-            uvs.push([seg as f32 / segments as f32, 0.75 + t * 0.25]);
-        }
-    }
-
-    // Top hemisphere indices
-    let mut indices = generate_grid_indices(rings, segments, true);
-
-    // Cylinder indices (connect top ring to bottom ring)
-    let verts_per_ring = segments + 1;
-    for seg in 0..segments {
-        let a = cyl_top_start + seg;
-        let b = a + 1;
-        let c = cyl_bot_start + seg;
-        let d = c + 1;
-        indices.extend_from_slice(&[a, c, b]);
-        indices.extend_from_slice(&[b, c, d]);
-    }
-
-    // Bottom hemisphere indices
-    for ring in 0..rings {
-        for seg in 0..segments {
-            let a = bot_start + ring * verts_per_ring + seg;
-            let b = a + 1;
-            let c = a + verts_per_ring;
-            let d = c + 1;
-            indices.extend_from_slice(&[a, c, b]);
-            indices.extend_from_slice(&[b, c, d]);
-        }
-    }
-
-    build_mesh(positions, normals, uvs, indices)
-}
-
-// =====================================================================
 // Corner — tetrahedron filling one corner of the bounding box
 // =====================================================================
 
@@ -310,7 +212,7 @@ fn generate_ellipsoid_cap(
         // Use sine curve for smooth distribution
         let angle = t * std::f32::consts::FRAC_PI_2;
         let r = base_radius * angle.cos();
-        let y = half_h * angle.sin() - half_h; // base at -half_h, peak at 0...
+        let _y = half_h * angle.sin() - half_h; // base at -half_h, peak at 0...
         // Actually: we want base at -half_h, peak at +half_h
         let y = -half_h + height * angle.sin();
 

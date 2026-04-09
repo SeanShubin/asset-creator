@@ -22,11 +22,20 @@ impl Plugin for SurfaceEditorPlugin {
         app.init_resource::<SurfaceEditorState>()
             .init_resource::<EditorDirty>()
             .add_systems(Update, (
-                handle_activation,
-                sync_from_registry.run_if(is_surface_active),
+                // Phase 1: detect changes from activation or registry
+                (
+                    handle_activation,
+                    sync_from_registry.run_if(is_surface_active),
+                ),
+                // Phase 2: UI reads/writes surface params
                 parameter_ui.run_if(is_surface_active),
-                regenerate_preview.run_if(is_surface_active),
-                persist_to_file.run_if(is_surface_active),
+                // Phase 3: apply dirty flags
+                (
+                    regenerate_preview.run_if(is_surface_active),
+                    persist_to_file.run_if(is_surface_active),
+                ),
+            ).chain())
+            .add_systems(Update, (
                 zoom_camera.run_if(is_surface_active),
                 pan_camera.run_if(is_surface_active),
             ));
@@ -203,14 +212,9 @@ fn persist_to_file(
 
     save_surface_to_file(&state.surface, &path);
 
-    let last_modified = std::fs::metadata(&path)
-        .and_then(|m| m.modified())
-        .unwrap_or(std::time::SystemTime::now());
-
     registry.surfaces.insert(name.clone(), crate::registry::store::RegisteredAsset {
         data: state.surface.clone(),
         path,
-        last_modified,
     });
 }
 

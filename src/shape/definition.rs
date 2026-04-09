@@ -85,20 +85,6 @@ pub enum SignedAxis {
     NegZ,
 }
 
-impl SignedAxis {
-    pub fn unsigned(self) -> Axis {
-        match self {
-            Self::X | Self::NegX => Axis::X,
-            Self::Y | Self::NegY => Axis::Y,
-            Self::Z | Self::NegZ => Axis::Z,
-        }
-    }
-
-    pub fn is_negative(self) -> bool {
-        matches!(self, Self::NegX | Self::NegY | Self::NegZ)
-    }
-}
-
 impl Default for SignedAxis {
     fn default() -> Self {
         Self::Y

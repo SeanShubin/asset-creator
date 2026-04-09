@@ -23,11 +23,6 @@ pub struct ShapeRoot;
 // Public API
 // =====================================================================
 
-pub fn load_shape(ron_str: &str) -> Result<ShapeNode, String> {
-    let options = ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
-    options.from_str(ron_str).map_err(|e| format!("Failed to parse shape: {e}"))
-}
-
 pub fn spawn_shape(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -120,7 +115,6 @@ fn process_import(
     let placement_bounds = node.bounds.unwrap_or(native_bounds);
 
     let native_size = native_bounds.size();
-    let placement_center = placement_bounds.center();
     let placement_size = placement_bounds.size();
 
     let scale = Vec3::new(

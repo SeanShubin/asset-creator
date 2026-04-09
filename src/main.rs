@@ -4,6 +4,7 @@ mod noise;
 mod registry;
 mod shape;
 mod surface;
+mod util;
 
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;

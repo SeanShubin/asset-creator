@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::shape::ShapeNode;
 use crate::surface::SurfaceDef;
@@ -15,7 +14,6 @@ use super::watcher::FileWatcher;
 pub struct RegisteredAsset<T> {
     pub data: T,
     pub path: PathBuf,
-    pub last_modified: SystemTime,
 }
 
 #[derive(Resource, Default)]
@@ -153,8 +151,7 @@ fn load_surface_into_registry(path: &Path, registry: &mut AssetRegistry) {
         }
     };
 
-    let options = ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
-    let surface: SurfaceDef = match options.from_str(&contents) {
+    let surface: SurfaceDef = match crate::util::parse_ron(&contents) {
         Ok(s) => s,
         Err(e) => {
             registry.set_error(path_str, format!("{e}"));
@@ -164,15 +161,10 @@ fn load_surface_into_registry(path: &Path, registry: &mut AssetRegistry) {
 
     registry.clear_error_for(&path_str);
 
-    let last_modified = std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-
     let name = surface.name.clone();
     registry.surfaces.insert(name, RegisteredAsset {
         data: surface,
         path: path.to_path_buf(),
-        last_modified,
     });
 }
 
@@ -191,8 +183,7 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
         }
     };
 
-    let options = ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME);
-    let shape: ShapeNode = match options.from_str(&contents) {
+    let shape: ShapeNode = match crate::util::parse_ron(&contents) {
         Ok(s) => s,
         Err(e) => {
             registry.set_error(path_str, format!("{e}"));
@@ -202,16 +193,11 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
 
     registry.clear_error_for(&path_str);
 
-    let last_modified = std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-
     let key = shape_key_from_path(path);
 
     registry.shapes.insert(key, RegisteredAsset {
         data: shape,
         path: path.to_path_buf(),
-        last_modified,
     });
 }
 

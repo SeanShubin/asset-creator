@@ -25,14 +25,24 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<OrbitState>()
             .init_resource::<ZoomLimits>()
             .add_systems(Update, (
-                handle_activation,
-                watch_shape_changes.run_if(is_object_active),
+                // Phase 1: detect what needs to change
+                (
+                    handle_activation,
+                    watch_shape_changes.run_if(is_object_active),
+                    keyboard_input.run_if(is_object_active),
+                ),
+                // Phase 2: apply shape reload (depends on phase 1 setting needs_reload)
                 reload_shape.run_if(is_object_active),
-                on_model_loaded.run_if(is_object_active),
-                compute_stats.run_if(is_object_active),
+                // Phase 3: post-load processing (depends on phase 2 spawning entities)
+                (
+                    on_model_loaded.run_if(is_object_active),
+                    compute_stats.run_if(is_object_active),
+                ),
+            ).chain())
+            .add_systems(Update, (
+                // Independent systems — no ordering requirements
                 orbit_camera::orbit_camera.run_if(is_object_active),
                 orbit_camera::orbit_zoom.run_if(is_object_active),
-                keyboard_input.run_if(is_object_active),
                 animate_shapes.run_if(is_object_active),
                 update_light.run_if(is_object_active),
                 part_tree_ui.run_if(is_object_active),
