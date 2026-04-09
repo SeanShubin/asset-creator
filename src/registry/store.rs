@@ -11,18 +11,18 @@ use super::watcher::FileWatcher;
 // =====================================================================
 
 #[derive(Clone, Debug)]
-pub struct RegisteredAsset<T> {
-    pub data: T,
-    pub path: PathBuf,
+struct RegisteredAsset<T> {
+    data: T,
+    path: PathBuf,
 }
 
 #[derive(Resource, Default)]
 pub struct AssetRegistry {
-    pub surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
-    pub shapes: HashMap<String, RegisteredAsset<ShapeNode>>,
-    pub generation: u64,
-    pub shape_generation: u64,
-    pub errors: Vec<AssetError>,
+    surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
+    shapes: HashMap<String, RegisteredAsset<ShapeNode>>,
+    generation: u64,
+    shape_generation: u64,
+    errors: Vec<AssetError>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,23 +32,48 @@ pub struct AssetError {
 }
 
 impl AssetRegistry {
+    // --- Surface accessors ---
+
     pub fn get_surface(&self, name: &str) -> Option<&SurfaceDef> {
         self.surfaces.get(name).map(|r| &r.data)
     }
 
-    /// Look up a shape by key (relative path) or import name.
-    /// Tries exact key first, then "{name}.shape.ron", then any key ending with the name.
+    pub fn surface_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.surfaces.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    pub fn surface_path(&self, name: &str) -> Option<PathBuf> {
+        self.surfaces.get(name).map(|r| r.path.clone())
+    }
+
+    pub fn has_surfaces(&self) -> bool {
+        !self.surfaces.is_empty()
+    }
+
+    pub fn surface_generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn upsert_surface(&mut self, name: String, data: SurfaceDef, path: PathBuf) {
+        self.surfaces.insert(name, RegisteredAsset { data, path });
+    }
+
+    pub fn remove_surface(&mut self, name: &str) -> Option<PathBuf> {
+        self.surfaces.remove(name).map(|r| r.path)
+    }
+
+    // --- Shape accessors ---
+
     pub fn get_shape(&self, name: &str) -> Option<&ShapeNode> {
-        // Exact key match
         if let Some(r) = self.shapes.get(name) {
             return Some(&r.data);
         }
-        // Try with .shape.ron suffix
         let with_ext = format!("{name}.shape.ron");
         if let Some(r) = self.shapes.get(&with_ext) {
             return Some(&r.data);
         }
-        // Try matching the end of any key (for subdirectory imports)
         let suffix = format!("/{name}.shape.ron");
         let backslash_suffix = format!("\\{name}.shape.ron");
         for (key, r) in &self.shapes {
@@ -59,11 +84,32 @@ impl AssetRegistry {
         None
     }
 
-    /// Look up a shape by its file path.
     pub fn get_shape_by_path(&self, path: &std::path::Path) -> Option<&ShapeNode> {
         self.shapes.values()
             .find(|r| r.path == path)
             .map(|r| &r.data)
+    }
+
+    pub fn shape_entries(&self) -> Vec<(String, PathBuf)> {
+        let mut entries: Vec<(String, PathBuf)> = self.shapes.iter()
+            .map(|(key, r)| (key.clone(), r.path.clone()))
+            .collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+        entries
+    }
+
+    pub fn shape_generation(&self) -> u64 {
+        self.shape_generation
+    }
+
+    // --- Error accessors ---
+
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty()
+    }
+
+    pub fn errors(&self) -> &[AssetError] {
+        &self.errors
     }
 
     pub fn clear_error_for(&mut self, path: &str) {

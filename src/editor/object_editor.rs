@@ -192,8 +192,8 @@ fn watch_shape_changes(
     mut reload: ResMut<ShapeReloadState>,
     registry: Res<AssetRegistry>,
 ) {
-    if registry.shape_generation != reload.last_shape_generation {
-        reload.last_shape_generation = registry.shape_generation;
+    if registry.shape_generation() != reload.last_shape_generation {
+        reload.last_shape_generation = registry.shape_generation();
         reload.needs_reload = true;
     }
 }

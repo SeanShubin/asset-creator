@@ -97,7 +97,7 @@ fn browser_ui(
         ui.separator();
         shape_list(ui, &registry, &mut active);
 
-        if !registry.errors.is_empty() {
+        if registry.has_errors() {
             ui.separator();
             error_list(ui, &registry);
         }
@@ -115,8 +115,7 @@ fn surface_list(
 ) {
     ui.label("Surfaces");
 
-    let mut names: Vec<String> = registry.surfaces.keys().cloned().collect();
-    names.sort();
+    let names = registry.surface_names();
 
     let mut to_delete: Option<String> = None;
 
@@ -144,20 +143,19 @@ fn surface_list(
 
         let path = PathBuf::from("data/surfaces")
             .join(format!("{}.surface.ron", new_name));
-        crate::registry::store::save_surface_to_file(&surface, &path);
+        crate::registry::save_surface_to_file(&surface, &path);
 
         *active = ActiveEditor::Surface { name: new_name };
     }
 }
 
 fn delete_surface(registry: &mut AssetRegistry, active: &mut ActiveEditor, name: &str) {
-    if let Some(registered) = registry.surfaces.remove(name) {
-        if let Err(e) = std::fs::remove_file(&registered.path) {
-            warn!("Failed to delete '{}': {}", registered.path.display(), e);
+    if let Some(path) = registry.remove_surface(name) {
+        if let Err(e) = std::fs::remove_file(&path) {
+            warn!("Failed to delete '{}': {}", path.display(), e);
         }
     }
 
-    // If we just deleted the active surface, deselect
     if matches!(&*active, ActiveEditor::Surface { name: n } if n == name) {
         *active = ActiveEditor::None;
     }
@@ -174,16 +172,13 @@ fn shape_list(
 ) {
     ui.label("Shapes");
 
-    let mut entries: Vec<(&String, &PathBuf)> = registry.shapes.iter()
-        .map(|(key, r)| (key, &r.path))
-        .collect();
-    entries.sort_by_key(|(key, _)| (*key).clone());
+    let entries = registry.shape_entries();
 
     for (key, path) in &entries {
         let stem = key.strip_suffix(".shape.ron").unwrap_or(key);
-        let is_active = matches!(&*active, ActiveEditor::Object { path: p } if *p == **path);
+        let is_active = matches!(&*active, ActiveEditor::Object { path: p } if *p == *path);
         if ui.selectable_label(is_active, stem).clicked() {
-            *active = ActiveEditor::Object { path: (*path).clone() };
+            *active = ActiveEditor::Object { path: path.clone() };
         }
     }
 }
@@ -194,7 +189,7 @@ fn shape_list(
 
 fn error_list(ui: &mut egui::Ui, registry: &AssetRegistry) {
     ui.colored_label(egui::Color32::RED, "Errors");
-    for error in &registry.errors {
+    for error in registry.errors() {
         let filename = std::path::Path::new(&error.path)
             .file_name()
             .and_then(|f| f.to_str())

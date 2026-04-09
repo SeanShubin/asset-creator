@@ -5,7 +5,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_egui::{EguiContexts, egui};
 
 use crate::browser::ActiveEditor;
-use crate::registry::{AssetRegistry, store::save_surface_to_file};
+use crate::registry::{AssetRegistry, save_surface_to_file};
 use crate::surface::{self, PatternType, SurfaceDef, preset_by_name, preset_names};
 use super::camera::{PanZoomCamera, zoom_camera};
 
@@ -159,8 +159,8 @@ fn sync_from_registry(
     mut state: ResMut<SurfaceEditorState>,
     mut dirty: ResMut<EditorDirty>,
 ) {
-    if registry.generation == state.registry_generation { return; }
-    state.registry_generation = registry.generation;
+    if registry.surface_generation() == state.registry_generation { return; }
+    state.registry_generation = registry.surface_generation();
 
     if let Some(updated) = registry.get_surface(&state.surface.name) {
         if *updated != state.surface {
@@ -203,8 +203,7 @@ fn persist_to_file(
     dirty.file = false;
 
     let name = &state.surface.name;
-    let path = registry.surfaces.get(name)
-        .map(|r| r.path.clone())
+    let path = registry.surface_path(name)
         .unwrap_or_else(|| {
             let filename = format!("{}.surface.ron", name.replace(' ', "_").to_lowercase());
             std::path::PathBuf::from("data/surfaces").join(filename)
@@ -212,10 +211,7 @@ fn persist_to_file(
 
     save_surface_to_file(&state.surface, &path);
 
-    registry.surfaces.insert(name.clone(), crate::registry::store::RegisteredAsset {
-        data: state.surface.clone(),
-        path,
-    });
+    registry.upsert_surface(name.clone(), state.surface.clone(), path);
 }
 
 // =====================================================================
@@ -306,13 +302,12 @@ fn registry_surface_selector(
     state: &mut SurfaceEditorState,
     registry: &AssetRegistry,
 ) -> bool {
-    if registry.surfaces.is_empty() { return false; }
+    if !registry.has_surfaces() { return false; }
     let mut changed = false;
     ui.separator();
     ui.label("Saved Surfaces");
-    let mut names: Vec<&String> = registry.surfaces.keys().collect();
-    names.sort();
-    for name in names {
+    let names = registry.surface_names();
+    for name in &names {
         let selected = state.surface.name == *name;
         if ui.selectable_label(selected, name.as_str()).clicked() {
             if let Some(surface) = registry.get_surface(name) {
