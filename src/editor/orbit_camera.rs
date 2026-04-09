@@ -104,7 +104,7 @@ fn handle_orbit_input(
         }
     } else if mouse.pressed(MouseButton::Left) && !egui_wants {
         for ev in motion.read() {
-            orbit.yaw += ev.delta.x * 0.3;
+            orbit.yaw -= ev.delta.x * 0.3;
             orbit.pitch = (orbit.pitch + ev.delta.y * 0.3).clamp(-89.9, 89.9);
         }
     } else {

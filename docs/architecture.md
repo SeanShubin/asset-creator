@@ -151,25 +151,86 @@ struct EditorDirty {
 }
 ```
 
-## Camera Systems
+## Coordinate System
 
-### 3D Orbit Camera
+### World Space (3D)
 
-Used by the object editor, surface editor (3D mode), and any 3D preview:
+The application uses Bevy's right-handed, Y-up coordinate system:
 
-- **Orbit state**: `yaw`, `pitch`, `target` point
-- **Left mouse drag**: Orbit (yaw/pitch)
-- **Middle mouse drag**: Pan (moves target point along camera right/up)
-- **Scroll wheel**: Zoom (orthographic scale)
-- **Arrow keys**: Orbit
+| Axis | Direction                                 | Color code |
+| ---- | ----------------------------------------- | ---------- |
+| +X   | Right                                     | Red        |
+| +Y   | Up                                        | Green      |
+| +Z   | Toward the camera (forward/out of screen) | Blue       |
 
-The camera uses orthographic projection at a fixed distance for consistent isometric-style viewing. The default view angle is 45 degrees yaw, 35 degrees pitch.
+These axis colors match the background grid walls in the object editor:
+- **Red wall** (YZ plane) — behind-left at default view
+- **Green floor** (XZ plane) — below
+- **Blue wall** (XY plane) — behind-right at default view
 
+### Screen Space (2D Projection)
+
+At the default camera angle (yaw=45°, pitch=45°), the 3D axes project to screen as:
+
+| 3D Direction | Screen Direction       |
+| ------------ | ---------------------- |
+| +Y           | Straight up (north)    |
+| +X           | Down-right (southeast) |
+| +Z           | Down-left (southwest)  |
+
+This means the three visible faces of a cube at default view are:
+- **Top face** (+Y) — the horizontal surface
+- **Right face** (+X) — bottom-right of screen
+- **Left face** (+Z) — bottom-left of screen
+
+### Camera Orbit
+
+The camera orbits around the target point using **yaw** and **pitch**:
+
+**Yaw** (horizontal orbit, -180° to +180°):
+- 0° = Front — camera on the +Z side, looking at the -Z face
+- Positive yaw = step right (counter-clockwise orbit viewed from above)
+- +90° = Right — camera on the +X side, looking at the -X face
+- -90° = Left — camera on the -X side, looking at the +X face
+- ±180° = Back — camera on the -Z side, looking at the +Z face
+
+**Pitch** (vertical orbit, -89.9° to +89.9°):
+- 0° = Level — camera at the same height as the object
+- Positive pitch = step up (camera rises, looking down)
+- +89.9° = Top — looking straight down at the +Y face
+- -89.9° = Bottom — looking straight up at the -Y face
+
+**Camera position formula:**
 ```rust
-let rotation = Quat::from_euler(EulerRot::YXZ, -yaw_rad, -pitch_rad, 0.0);
+let rotation = Quat::from_euler(EulerRot::YXZ, yaw_rad, -pitch_rad, 0.0);
 let position = target + rotation * Vec3::new(0.0, 0.0, ISO_DISTANCE);
 transform.look_at(target, Vec3::Y);
 ```
+
+At the default yaw=45°, pitch=45°, the camera is at approximately `(+X, +Y, +Z)` relative to the object — front-right and elevated.
+
+**Controls:**
+- **Left mouse drag**: orbit (horizontal = yaw, vertical = pitch)
+- **Middle mouse drag**: pan (moves target point along camera right/up)
+- **Scroll wheel**: zoom (orthographic scale)
+- **Arrow keys**: orbit (left/right = yaw, up/down = pitch)
+
+### Lighting
+
+The directional light follows the camera orbit with a fixed offset (+15° yaw, -30° pitch relative to the camera). This ensures consistent face shading regardless of orbit angle — the light always comes from the upper-left of the screen.
+
+### Background Grid
+
+Three colored grid planes appear behind the object, positioned on the far side from the camera:
+
+| Grid          | Plane | Visible when                       |
+| ------------- | ----- | ---------------------------------- |
+| Green floor   | XZ    | Pitch > 0 (looking from above)     |
+| Green ceiling | XZ    | Pitch < 0 (looking from below)     |
+| Red wall      | YZ    | Always (flips X position with yaw) |
+| Blue wall     | XY    | Always (flips Z position with yaw) |
+
+Grid cells are 1 world unit. Colored axis lines mark the origin on each grid plane.
 
 ### Zoom Specification
 
