@@ -112,10 +112,11 @@ fn handle_activation(
         state.spawned = true;
     }
 
-    // Load the new shape
+    // Load the new shape and fit camera
     if let ActiveEditor::Object { ref path } = current {
         state.current_path = Some(path.clone());
         state.needs_reload = true;
+        state.needs_fit = true;
         state.last_mtime = None;
         info!("Object editor activated for '{}'", path.display());
     }
@@ -205,7 +206,6 @@ fn reload_shape(
     };
 
     spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
-    state.needs_fit = true;
     state.needs_stats = true;
 }
 
@@ -213,28 +213,37 @@ fn reload_shape(
 // Camera fitting
 // =====================================================================
 
+// Zoom computation uses fixed projection angles (yaw=45, pitch=45) so that
+// fit_scale is deterministic regardless of the user's current orbit angle.
+// At these angles a unit cube projects to:
+//   width  = max_extent * 1.414214  (sqrt(2))
+//   height = max_extent * 1.707107  (1 + sqrt(2)/2)
+const ZOOM_PROJ_WIDTH_RATIO: f32 = 1.414214;
+const ZOOM_PROJ_HEIGHT_RATIO: f32 = 1.707107;
 const LEFT_PANEL_PX: f32 = 280.0;
 const RIGHT_PANEL_PX: f32 = 250.0;
-const FIT_BORDER: f32 = 1.1; // 5% border on each side ≈ 10% total
+const VIEWPORT_WIDTH: f32 = 1100.0;
+const VIEWPORT_HEIGHT: f32 = 720.0;
+const FIT_BORDER: f32 = 1.1;
+const ZOOM_MIN_PCT: f32 = 10.0;
+const ZOOM_MAX_PCT: f32 = 200.0;
 
-/// Runs after a model reload: computes AABB, sets fit scale, zoom limits, and initial zoom.
+/// Runs on shape switch: computes fit scale and sets initial zoom to 100%.
 fn on_model_loaded(
     mut state: ResMut<ObjectEditorState>,
     mut camera: Query<(&mut Projection, &Camera), With<OrbitCamera>>,
     mut limits: ResMut<ZoomLimits>,
-    orbit: Res<OrbitState>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
 ) {
     if !state.needs_fit { return; }
     if mesh_aabbs.is_empty() { return; }
     state.needs_fit = false;
 
-    let fit_scale = compute_fit_scale(&mesh_aabbs, &orbit);
+    let fit_scale = compute_fit_scale(&mesh_aabbs);
     if fit_scale < 0.001 { return; }
 
     state.fit_scale = fit_scale;
-    limits.min = fit_scale / 2.0;
-    limits.max = fit_scale * 10.0;
+    update_zoom_limits(&mut limits, fit_scale);
 
     if let Ok((mut projection, _)) = camera.get_single_mut() {
         if let Projection::Orthographic(ref mut ortho) = projection.as_mut() {
@@ -243,15 +252,24 @@ fn on_model_loaded(
     }
 }
 
+/// Runs on every reload: updates stats, fit_scale, and zoom limits without changing zoom.
 fn compute_stats(
     mut state: ResMut<ObjectEditorState>,
+    mut limits: ResMut<ZoomLimits>,
     parts: Query<&ShapePart>,
     mesh_handles: Query<&Mesh3d>,
     mesh_assets: Res<Assets<Mesh>>,
+    mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
 ) {
     if !state.needs_stats { return; }
     if mesh_handles.is_empty() { return; }
     state.needs_stats = false;
+
+    let fit_scale = compute_fit_scale(&mesh_aabbs);
+    if fit_scale > 0.001 {
+        state.fit_scale = fit_scale;
+        update_zoom_limits(&mut limits, fit_scale);
+    }
 
     let part_count = parts.iter().count();
     let draw_calls = mesh_handles.iter().count();
@@ -272,59 +290,32 @@ fn compute_stats(
     };
 }
 
+/// Compute the orthographic scale at which the AABB fills the viewport with ~5% border.
+/// Uses fixed projection angles (yaw=45, pitch=45) for deterministic results.
 fn compute_fit_scale(
     mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
-    orbit: &OrbitState,
 ) -> f32 {
     let (scene_min, scene_max) = compute_scene_aabb(mesh_aabbs);
     let scene_size = scene_max - scene_min;
 
     if scene_size.length() < 0.001 { return 0.0; }
 
-    // Project the 3D AABB onto the 2D screen plane using the camera rotation.
-    let projected = project_aabb_to_screen(scene_min, scene_max, orbit.yaw, orbit.pitch);
+    // Project using fixed ratios derived from yaw=45, pitch=45
+    let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
+    let proj_width = max_extent * ZOOM_PROJ_WIDTH_RATIO;
+    let proj_height = max_extent * ZOOM_PROJ_HEIGHT_RATIO;
 
-    // visible_width = viewport_width_pixels * scale
-    // visible_height = viewport_height_pixels * scale
-    let viewport_height = 720.0;
-    let usable_width = 1100.0 - LEFT_PANEL_PX - RIGHT_PANEL_PX;
+    let usable_width = VIEWPORT_WIDTH - LEFT_PANEL_PX - RIGHT_PANEL_PX;
 
-    let scale_for_height = projected.1 * FIT_BORDER / viewport_height;
-    let scale_for_width = projected.0 * FIT_BORDER / usable_width;
+    let scale_for_width = proj_width * FIT_BORDER / usable_width;
+    let scale_for_height = proj_height * FIT_BORDER / VIEWPORT_HEIGHT;
 
-    scale_for_height.max(scale_for_width)
+    scale_for_width.max(scale_for_height)
 }
 
-/// Project a 3D AABB through an orthographic camera and return the 2D bounding size.
-fn project_aabb_to_screen(min: Vec3, max: Vec3, yaw: f32, pitch: f32) -> (f32, f32) {
-    let rotation = Quat::from_euler(EulerRot::YXZ, -yaw.to_radians(), -pitch.to_radians(), 0.0);
-    let cam_right = rotation * Vec3::X;
-    let cam_up = rotation * Vec3::Y;
-
-    let mut min_x = f32::MAX;
-    let mut max_x = f32::MIN;
-    let mut min_y = f32::MAX;
-    let mut max_y = f32::MIN;
-
-    for corner in aabb_corners(min, max) {
-        let sx = corner.dot(cam_right);
-        let sy = corner.dot(cam_up);
-        min_x = min_x.min(sx);
-        max_x = max_x.max(sx);
-        min_y = min_y.min(sy);
-        max_y = max_y.max(sy);
-    }
-
-    (max_x - min_x, max_y - min_y)
-}
-
-fn aabb_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
-    [
-        Vec3::new(min.x, min.y, min.z), Vec3::new(max.x, min.y, min.z),
-        Vec3::new(min.x, max.y, min.z), Vec3::new(max.x, max.y, min.z),
-        Vec3::new(min.x, min.y, max.z), Vec3::new(max.x, min.y, max.z),
-        Vec3::new(min.x, max.y, max.z), Vec3::new(max.x, max.y, max.z),
-    ]
+fn update_zoom_limits(limits: &mut ZoomLimits, fit_scale: f32) {
+    limits.min = fit_scale * 100.0 / ZOOM_MAX_PCT;  // 200% → scale = fit/2
+    limits.max = fit_scale * 100.0 / ZOOM_MIN_PCT;   // 10% → scale = fit*10
 }
 
 fn compute_scene_aabb(

@@ -29,6 +29,7 @@ pub fn create_dome_mesh(base_radius: f32, height: f32, rings: u32, segments: u32
 pub fn create_cap_mesh(half_w: f32, half_d: f32, height: f32, rings: u32, segments: u32) -> Mesh {
     let base_radius = half_w.max(half_d);
     let sphere_radius = compute_sphere_radius(base_radius, height);
+    let y_offset = sphere_radius - height; // sphere center is at y = -(y_offset) below cap base
 
     let half_h = height / 2.0;
 
@@ -36,12 +37,15 @@ pub fn create_cap_mesh(half_w: f32, half_d: f32, height: f32, rings: u32, segmen
     let mut normals = Vec::new();
     let mut uvs = Vec::new();
 
-    // Ring 0 = outer edge, Ring N = peak
+    // Ring 0 = outer edge (r = base_radius), Ring N = peak (r = 0)
     for ring in 0..=rings {
         let t = ring as f32 / rings as f32;
-        let angle = t * std::f32::consts::FRAC_PI_2;
-        let r = base_radius * angle.cos();
-        let y = -half_h + height * angle.sin();
+        let r = base_radius * (1.0 - t);
+
+        // True sphere height: y = sqrt(R² - r²) - y_offset
+        // This gives 0 at r=base_radius and `height` at r=0
+        let sphere_y = (sphere_radius * sphere_radius - r * r).sqrt() - y_offset;
+        let y = sphere_y - half_h; // center the mesh vertically
 
         for seg in 0..=segments {
             let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
@@ -54,24 +58,19 @@ pub fn create_cap_mesh(half_w: f32, half_d: f32, height: f32, rings: u32, segmen
 
             positions.push([x, y, z]);
 
-            // Normal: for unclipped vertices, use sphere normal.
-            // For clipped vertices, the normal should point outward from the clip face.
+            // Normal: sphere normal for unclipped, face normal for clipped
             let clipped_x = raw_x.abs() > half_w;
             let clipped_z = raw_z.abs() > half_d;
 
             let (nx, ny, nz) = if clipped_x && clipped_z {
-                // Corner: blend between the two clip normals
                 (raw_x.signum(), 0.0, raw_z.signum())
             } else if clipped_x {
                 (raw_x.signum(), 0.0, 0.0)
             } else if clipped_z {
                 (0.0, 0.0, raw_z.signum())
             } else {
-                // Unclipped: sphere normal
-                let sx = raw_x / sphere_radius;
-                let sy = (y + half_h) / sphere_radius;
-                let sz = raw_z / sphere_radius;
-                (sx, sy, sz)
+                // True sphere normal: point on sphere relative to sphere center
+                (raw_x / sphere_radius, (sphere_y + y_offset) / sphere_radius, raw_z / sphere_radius)
             };
 
             let len = (nx * nx + ny * ny + nz * nz).sqrt().max(0.0001);

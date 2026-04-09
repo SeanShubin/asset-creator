@@ -171,6 +171,36 @@ let position = target + rotation * Vec3::new(0.0, 0.0, ISO_DISTANCE);
 transform.look_at(target, Vec3::Y);
 ```
 
+### Zoom Specification
+
+The zoom system provides deterministic, angle-independent fit scaling for the 3D object editor.
+
+**Fit scale** is the orthographic scale at which the object fills the viewport with approximately 5% buffer on each side of the constraining dimension. It is computed using fixed projection angles (yaw=45°, pitch=45°) so the result does not depend on the user's current orbit.
+
+**Projection math** (computed once, stored as constants):
+- At yaw=45°, pitch=45°, a unit AABB projects to:
+  - Screen width = `max_extent * sqrt(2)` ≈ `max_extent * 1.414`
+  - Screen height = `max_extent * (1 + sqrt(2)/2)` ≈ `max_extent * 1.707`
+- The constraining dimension (width or height) is whichever requires the larger scale
+- Usable viewport width = window width - left panel - right panel
+
+**Zoom percentage:**
+- 100% = fit scale (object fills viewport with ~5% buffer)
+- 200% = maximum zoom in (`ortho.scale = fit_scale / 2`)
+- 10% = maximum zoom out (`ortho.scale = fit_scale * 10`)
+- Formula: `zoom_pct = fit_scale / ortho.scale * 100`
+
+**Behavior on shape switch** (clicking a different shape in browser):
+- Recompute fit_scale from new AABB
+- Set zoom to 100%
+- Reset orbit to default angles
+
+**Behavior on file edit reload** (RON file changes externally):
+- Recompute fit_scale and zoom limits from new AABB
+- Do NOT change ortho.scale or orbit angles
+- Zoom percentage may shift (because fit_scale changed)
+- If current zoom exceeds new limits, it remains until the user scrolls, then clamps
+
 ### 2D Pan/Zoom Camera
 
 Used by surface editor (2D mode), tileset, decal, and world editors:

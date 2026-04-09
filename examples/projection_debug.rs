@@ -1,22 +1,21 @@
 use bevy::math::{EulerRot, Quat, Vec3};
 
 fn main() {
+    // Compute projection at yaw=45, pitch=45 (the fixed angles for zoom computation)
     let yaw = 45.0_f32;
-    let pitch = 35.264_f32;
+    let pitch = 45.0_f32;
     let yaw_rad = yaw.to_radians();
     let pitch_rad = pitch.to_radians();
     let rotation = Quat::from_euler(EulerRot::YXZ, -yaw_rad, -pitch_rad, 0.0);
 
-    // Camera basis vectors (what directions map to screen X and screen Y)
     let camera_right = rotation * Vec3::X;
     let camera_up = rotation * Vec3::Y;
-    let camera_forward = rotation * Vec3::NEG_Z;
 
-    println!("Camera right:   ({:.4}, {:.4}, {:.4})", camera_right.x, camera_right.y, camera_right.z);
-    println!("Camera up:      ({:.4}, {:.4}, {:.4})", camera_up.x, camera_up.y, camera_up.z);
-    println!("Camera forward: ({:.4}, {:.4}, {:.4})", camera_forward.x, camera_forward.y, camera_forward.z);
+    println!("Fixed zoom angles: yaw={yaw}, pitch={pitch}");
+    println!("Camera right: ({:.6}, {:.6}, {:.6})", camera_right.x, camera_right.y, camera_right.z);
+    println!("Camera up:    ({:.6}, {:.6}, {:.6})", camera_up.x, camera_up.y, camera_up.z);
 
-    // Project the 8 corners of a 2x2x2 box centered at origin onto screen space
+    // Project a 2x2x2 unit box centered at origin
     let corners = [
         Vec3::new(-1.0, -1.0, -1.0), Vec3::new( 1.0, -1.0, -1.0),
         Vec3::new(-1.0,  1.0, -1.0), Vec3::new( 1.0,  1.0, -1.0),
@@ -30,8 +29,6 @@ fn main() {
     let mut max_y = f32::MIN;
 
     for corner in &corners {
-        // Orthographic projection: screen_x = dot(corner, camera_right)
-        //                          screen_y = dot(corner, camera_up)
         let sx = corner.dot(camera_right);
         let sy = corner.dot(camera_up);
         min_x = min_x.min(sx);
@@ -43,15 +40,18 @@ fn main() {
     let proj_width = max_x - min_x;
     let proj_height = max_y - min_y;
 
-    println!("\n2x2x2 box projected:");
-    println!("  Screen X range: {:.4} to {:.4} (width: {:.4})", min_x, max_x, proj_width);
-    println!("  Screen Y range: {:.4} to {:.4} (height: {:.4})", min_y, max_y, proj_height);
+    println!("\n2x2x2 box projected at yaw={yaw}, pitch={pitch}:");
+    println!("  Width:  {:.6}", proj_width);
+    println!("  Height: {:.6}", proj_height);
 
-    // Now compute the required ortho scale
-    // visible_width = viewport_width_pixels * scale
-    // visible_height = viewport_height_pixels * scale
-    // We need: proj_width * 1.1 <= usable_width * scale
-    //          proj_height * 1.1 <= viewport_height * scale
+    // Ratio: projected size / AABB max extent
+    // For any AABB with max_extent M, projected_width = M * ratio_w, projected_height = M * ratio_h
+    // (This works because projection is linear)
+    println!("\nProjection ratios (divide by max_extent 2.0):");
+    println!("  Width ratio:  {:.6}", proj_width / 2.0);
+    println!("  Height ratio: {:.6}", proj_height / 2.0);
+
+    // Compute fit scale for 1100x720 window with 280+250 panels
     let viewport_width = 1100.0_f32;
     let viewport_height = 720.0_f32;
     let left_panel = 280.0_f32;
@@ -59,18 +59,22 @@ fn main() {
     let usable_width = viewport_width - left_panel - right_panel;
     let border = 1.1;
 
-    let scale_for_width = proj_width * border / usable_width;
-    let scale_for_height = proj_height * border / viewport_height;
-    let fit_scale = scale_for_width.max(scale_for_height);
+    let scale_w = proj_width * border / usable_width;
+    let scale_h = proj_height * border / viewport_height;
+    let fit_scale = scale_w.max(scale_h);
 
-    println!("\nViewport: {viewport_width} x {viewport_height}");
-    println!("Usable width: {usable_width}");
-    println!("Scale for width:  {:.6}", scale_for_width);
-    println!("Scale for height: {:.6}", scale_for_height);
-    println!("Fit scale: {:.6}", fit_scale);
+    println!("\nFor 1100x720 window, 280+250 panels:");
+    println!("  Usable width: {usable_width}");
+    println!("  Scale for width:  {:.6}", scale_w);
+    println!("  Scale for height: {:.6}", scale_h);
+    println!("  Fit scale: {:.6}", fit_scale);
 
-    // Verify: at this scale, how many world units are visible?
-    println!("\nAt fit_scale {:.6}:", fit_scale);
-    println!("  Visible width:  {:.4} (need {:.4})", usable_width * fit_scale, proj_width * border);
-    println!("  Visible height: {:.4} (need {:.4})", viewport_height * fit_scale, proj_height * border);
+    // Verify buffers
+    let visible_w = usable_width * fit_scale;
+    let visible_h = viewport_height * fit_scale;
+    let buffer_w = (visible_w - proj_width) / visible_w * 100.0 / 2.0;
+    let buffer_h = (visible_h - proj_height) / visible_h * 100.0 / 2.0;
+    println!("\nBuffers at 100% zoom:");
+    println!("  Horizontal: {:.1}% each side", buffer_w);
+    println!("  Vertical:   {:.1}% each side", buffer_h);
 }
