@@ -14,7 +14,8 @@
       "Bash(tee /tmp/zoom_out.txt)",
       "Read(//tmp/**)",
       "Bash(grep -v \"^.*//.*state\\\\.\")",
-      "Bash(grep -E \"-->|warning:\")"
+      "Bash(grep -E \"-->|warning:\")",
+      "Bash(sed:*)"
     ]
   }
 }

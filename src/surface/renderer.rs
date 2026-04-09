@@ -1,5 +1,6 @@
 use super::definition::{PatternType, SurfaceDef};
 use crate::noise::{self, NoiseContext};
+use crate::util::Color3;
 
 /// Renders a surface definition to RGBA pixel data.
 pub fn render_surface(surface: &SurfaceDef, width: u32, height: u32) -> Vec<u8> {
@@ -48,11 +49,11 @@ fn evaluate_pattern(ctx: &NoiseContext, pattern: &PatternType, x: f64, y: f64, s
 }
 
 fn apply_color_variation(surface: &SurfaceDef, noise_val: f64) -> [f32; 3] {
-    let (br, bg, bb) = surface.base_color;
-    let (vr, vg, vb) = surface.color_variation;
+    let Color3(br, bg, bb) = surface.base_color;
+    let Color3(vr, vg, vb) = surface.color_variation;
     let n = noise_val as f32;
 
-    if let Some((sr, sg, sb)) = surface.secondary_color {
+    if let Some(Color3(sr, sg, sb)) = surface.secondary_color {
         let blend = (n * 0.5 + 0.5).clamp(0.0, 1.0);
         [
             lerp(br, sr, blend) + vr * n,
@@ -66,7 +67,7 @@ fn apply_color_variation(surface: &SurfaceDef, noise_val: f64) -> [f32; 3] {
 
 fn apply_speckle(ctx: &NoiseContext, surface: &SurfaceDef, color: [f32; 3], px: f64, py: f64) -> [f32; 3] {
     if noise::speckle(ctx, px, py, surface.speckle_density as f64) {
-        let (sr, sg, sb) = surface.speckle_color;
+        let Color3(sr, sg, sb) = surface.speckle_color;
         [sr, sg, sb]
     } else {
         color

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::registry::AssetRegistry;
+use crate::util::Color3;
 use super::animation::ShapeAnimator;
 use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, SignedAxis, orient_matrix};
 
@@ -41,7 +42,7 @@ pub fn spawn_shape(
         Visibility::default(),
     )).id();
 
-    let default_color = (0.5, 0.5, 0.5);
+    let default_color = Color3(0.5, 0.5, 0.5);
     process_node(commands, meshes, materials, root, shape, default_color, registry);
     root
 }
@@ -62,7 +63,7 @@ fn process_node(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    inherited_color: (f32, f32, f32),
+    inherited_color: Color3,
     registry: &AssetRegistry,
 ) {
     let color = node.color.unwrap_or(inherited_color);
@@ -100,7 +101,7 @@ fn process_import(
     parent: Entity,
     node: &ShapeNode,
     import_name: &str,
-    color: (f32, f32, f32),
+    color: Color3,
     registry: &AssetRegistry,
 ) {
     let imported = match registry.get_shape(import_name) {
@@ -153,7 +154,7 @@ fn process_repeat(
     parent: Entity,
     node: &ShapeNode,
     repeat: &RepeatSpec,
-    color: (f32, f32, f32),
+    color: Color3,
     registry: &AssetRegistry,
 ) {
     let start = if repeat.center {
@@ -181,7 +182,7 @@ fn process_mirror(
     parent: Entity,
     node: &ShapeNode,
     axes: &[Axis],
-    color: (f32, f32, f32),
+    color: Color3,
     registry: &AssetRegistry,
 ) {
     let mut base = node.clone();
@@ -241,7 +242,7 @@ fn spawn_child(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    inherited_color: (f32, f32, f32),
+    inherited_color: Color3,
     registry: &AssetRegistry,
 ) {
     let child_tf = build_child_transform(node);
@@ -290,7 +291,7 @@ fn attach_geometry(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    color: (f32, f32, f32),
+    color: Color3,
 ) {
     let Some(shape) = &node.shape else { return };
     let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
@@ -386,7 +387,7 @@ fn make_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     shape: PrimitiveShape,
-    color: (f32, f32, f32),
+    color: Color3,
     emissive: bool,
     is_mirrored: bool,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {

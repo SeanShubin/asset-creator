@@ -7,6 +7,7 @@ use bevy_egui::{EguiContexts, egui};
 use crate::browser::ActiveEditor;
 use crate::registry::{AssetRegistry, SaveSurface};
 use crate::surface::{self, PatternType, SurfaceDef, preset_by_name, preset_names};
+use crate::util::Color3;
 use super::camera::{PanZoomCamera, zoom_camera};
 
 const PREVIEW_SIZE: u32 = 512;
@@ -342,14 +343,14 @@ fn slider_with_commit(
 fn color_editor_with_commit(
     ui: &mut egui::Ui,
     label: &str,
-    color: &mut (f32, f32, f32),
+    color: &mut Color3,
     dirty: &mut EditorDirty,
 ) -> bool {
     ui.label(label);
-    let mut rgb = [color.0, color.1, color.2];
+    let mut rgb = color.to_array();
     let resp = ui.color_edit_button_rgb(&mut rgb);
     if resp.changed() {
-        *color = (rgb[0], rgb[1], rgb[2]);
+        *color = Color3::from_array(rgb);
         dirty.preview = true;
     }
     if resp.drag_stopped() || resp.lost_focus() { dirty.file = true; }
@@ -379,7 +380,7 @@ fn pattern_selector_widget(ui: &mut egui::Ui, pattern: &mut PatternType) -> bool
 fn secondary_color_editor(ui: &mut egui::Ui, surface: &mut SurfaceDef, dirty: &mut EditorDirty) {
     let mut has_secondary = surface.secondary_color.is_some();
     if ui.checkbox(&mut has_secondary, "Secondary Color").changed() {
-        surface.secondary_color = if has_secondary { Some((0.3, 0.3, 0.3)) } else { None };
+        surface.secondary_color = if has_secondary { Some(Color3(0.3, 0.3, 0.3)) } else { None };
         dirty.preview = true;
         dirty.file = true;
     }

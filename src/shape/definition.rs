@@ -1,5 +1,6 @@
 use bevy::math::{Mat3, Quat, Vec3};
 use serde::Deserialize;
+use crate::util::Color3;
 
 /// A shape node is both the file format and the node type.
 /// A `.shape.ron` file IS a ShapeNode.
@@ -14,7 +15,7 @@ pub struct ShapeNode {
     #[serde(default)]
     pub orient: Vec<SignedAxis>,
     #[serde(default)]
-    pub color: Option<(f32, f32, f32)>,
+    pub color: Option<Color3>,
     #[serde(default)]
     pub emissive: bool,
     #[serde(default)]
