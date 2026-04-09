@@ -32,6 +32,8 @@ pub fn spawn_shape(
     shape: &ShapeNode,
     registry: &AssetRegistry,
 ) -> Entity {
+    validate_names(shape, "");
+
     let position = bounds_center(&shape.bounds);
     let root_tf = Transform::from_translation(position);
     let root = commands.spawn((
@@ -46,6 +48,34 @@ pub fn spawn_shape(
     let colors = shape.colors.clone();
     process_node(commands, meshes, materials, root, shape, &colors, registry);
     root
+}
+
+fn validate_names(node: &ShapeNode, path: &str) {
+    let node_path = match &node.name {
+        Some(name) => {
+            if path.is_empty() { name.clone() } else { format!("{path}/{name}") }
+        }
+        None => {
+            if node.shape.is_some() {
+                warn!("Unnamed shape at path '{path}' — every shape should have a name");
+            }
+            path.to_string()
+        }
+    };
+
+    // Check for duplicate names among children
+    let mut seen = std::collections::HashSet::new();
+    for child in &node.children {
+        if let Some(ref name) = child.name {
+            if !seen.insert(name.clone()) {
+                warn!("Duplicate child name '{}' at path '{}'", name, node_path);
+            }
+        }
+    }
+
+    for child in &node.children {
+        validate_names(child, &node_path);
+    }
 }
 
 pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
