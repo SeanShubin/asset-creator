@@ -8,11 +8,9 @@ mod util;
 
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
-use std::path::PathBuf;
 
 fn main() {
     install_panic_hook();
-    let initial_editor = resolve_initial_editor();
 
     let mut app = App::new();
     app.add_plugins((
@@ -31,7 +29,7 @@ fn main() {
         editor::ObjectEditorPlugin,
     ));
 
-    if let Some(editor) = initial_editor {
+    if let Some(editor) = browser::resolve_from_cli() {
         app.insert_resource(editor);
     }
 
@@ -40,48 +38,8 @@ fn main() {
 }
 
 // =====================================================================
-// CLI — optional shortcut to jump directly into an editor
+// Crash logging
 // =====================================================================
-
-fn resolve_initial_editor() -> Option<browser::ActiveEditor> {
-    let args: Vec<String> = std::env::args().collect();
-    let subcommand = args.get(1).map(|s| s.as_str());
-
-    match subcommand {
-        Some("surface") => Some(resolve_surface_editor(&args[2..])),
-        Some("object") => Some(resolve_object_editor(&args[2..])),
-        Some(path) if !path.starts_with('-') && path.ends_with(".ron") => {
-            if path.contains("shape") {
-                Some(browser::ActiveEditor::Object { path: PathBuf::from(path) })
-            } else {
-                Some(resolve_surface_editor(&args[1..]))
-            }
-        }
-        _ => None,
-    }
-}
-
-fn resolve_surface_editor(args: &[String]) -> browser::ActiveEditor {
-    if let Some(pos) = args.iter().position(|a| a == "--preset") {
-        if let Some(name) = args.get(pos + 1) {
-            return browser::ActiveEditor::Surface { name: name.clone() };
-        }
-    }
-    if let Some(path_str) = args.iter().find(|a| !a.starts_with('-')) {
-        // Load the file to get the surface name
-        if let Ok(surface) = surface::load_surface_from_file(std::path::Path::new(path_str.as_str())) {
-            return browser::ActiveEditor::Surface { name: surface.name };
-        }
-    }
-    browser::ActiveEditor::Surface { name: "unnamed".into() }
-}
-
-fn resolve_object_editor(args: &[String]) -> browser::ActiveEditor {
-    let path_str = args.iter().find(|a| !a.starts_with('-'))
-        .map(|s| s.as_str())
-        .unwrap_or("data/shapes/scout_bot.shape.ron");
-    browser::ActiveEditor::Object { path: PathBuf::from(path_str) }
-}
 
 const EXIT_LOG: &str = "crash.log";
 

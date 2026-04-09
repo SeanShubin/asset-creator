@@ -22,6 +22,50 @@ impl Default for ActiveEditor {
 }
 
 // =====================================================================
+// CLI resolution
+// =====================================================================
+
+/// Resolve the initial editor from CLI arguments.
+pub fn resolve_from_cli() -> Option<ActiveEditor> {
+    let args: Vec<String> = std::env::args().collect();
+    let subcommand = args.get(1).map(|s| s.as_str());
+
+    match subcommand {
+        Some("surface") => Some(resolve_surface_args(&args[2..])),
+        Some("object") => Some(resolve_object_args(&args[2..])),
+        Some(path) if !path.starts_with('-') && path.ends_with(".ron") => {
+            if path.contains("shape") {
+                Some(ActiveEditor::Object { path: PathBuf::from(path) })
+            } else {
+                Some(resolve_surface_args(&args[1..]))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn resolve_surface_args(args: &[String]) -> ActiveEditor {
+    if let Some(pos) = args.iter().position(|a| a == "--preset") {
+        if let Some(name) = args.get(pos + 1) {
+            return ActiveEditor::Surface { name: name.clone() };
+        }
+    }
+    if let Some(path_str) = args.iter().find(|a| !a.starts_with('-')) {
+        if let Ok(surface) = crate::surface::load_surface_from_file(std::path::Path::new(path_str.as_str())) {
+            return ActiveEditor::Surface { name: surface.name };
+        }
+    }
+    ActiveEditor::Surface { name: "unnamed".into() }
+}
+
+fn resolve_object_args(args: &[String]) -> ActiveEditor {
+    let path_str = args.iter().find(|a| !a.starts_with('-'))
+        .map(|s| s.as_str())
+        .unwrap_or("data/shapes/scout_bot.shape.ron");
+    ActiveEditor::Object { path: PathBuf::from(path_str) }
+}
+
+// =====================================================================
 // Plugin
 // =====================================================================
 
@@ -51,7 +95,7 @@ fn browser_ui(
 
         surface_list(ui, &mut registry, &mut active);
         ui.separator();
-        shape_list(ui, &mut active);
+        shape_list(ui, &registry, &mut active);
 
         if !registry.errors.is_empty() {
             ui.separator();
@@ -125,27 +169,21 @@ fn delete_surface(registry: &mut AssetRegistry, active: &mut ActiveEditor, name:
 
 fn shape_list(
     ui: &mut egui::Ui,
+    registry: &AssetRegistry,
     active: &mut ActiveEditor,
 ) {
     ui.label("Shapes");
 
-    let shapes_dir = PathBuf::from("data/shapes");
-    if let Ok(entries) = std::fs::read_dir(&shapes_dir) {
-        let mut paths: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "ron"))
-            .collect();
-        paths.sort();
+    let mut entries: Vec<(&String, &PathBuf)> = registry.shapes.iter()
+        .map(|(key, r)| (key, &r.path))
+        .collect();
+    entries.sort_by_key(|(key, _)| (*key).clone());
 
-        for path in &paths {
-            let stem = path.file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown");
-            let is_active = matches!(&*active, ActiveEditor::Object { path: p } if *p == *path);
-            if ui.selectable_label(is_active, stem).clicked() {
-                *active = ActiveEditor::Object { path: path.clone() };
-            }
+    for (key, path) in &entries {
+        let stem = key.strip_suffix(".shape.ron").unwrap_or(key);
+        let is_active = matches!(&*active, ActiveEditor::Object { path: p } if *p == **path);
+        if ui.selectable_label(is_active, stem).clicked() {
+            *active = ActiveEditor::Object { path: (*path).clone() };
         }
     }
 }
