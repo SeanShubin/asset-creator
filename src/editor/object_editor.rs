@@ -95,6 +95,8 @@ struct SceneStats {
     triangles: usize,
     draw_calls: usize,
     fit_scale: f32,
+    scene_min: Vec3,
+    scene_max: Vec3,
 }
 
 #[derive(Component)]
@@ -230,6 +232,14 @@ fn reload_shape(
         error!("Shape at '{}' not found in registry", path.display());
         return;
     };
+
+    // Store the definition AABB for grid sizing (not dependent on mesh transforms)
+    if let Some(aabb) = shape_file.compute_aabb() {
+        let min = aabb.min();
+        let max = aabb.max();
+        stats.scene_min = Vec3::new(min.0, min.1, min.2);
+        stats.scene_max = Vec3::new(max.0, max.1, max.2);
+    }
 
     spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
     stats.needs_update = true;
@@ -413,23 +423,26 @@ const AXIS_COLOR_Z: Color = Color::srgba(0.2, 0.2, 0.8, 0.6);
 fn draw_grid(
     mut gizmos: Gizmos,
     orbit: Res<OrbitState>,
-    mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+    stats: Res<SceneStats>,
 ) {
-    if mesh_aabbs.is_empty() { return; }
+    if stats.scene_min == stats.scene_max { return; }
 
     let yaw_rad = orbit.yaw.to_radians();
     let pitch = orbit.pitch;
 
-    let (scene_min, scene_max) = compute_scene_aabb(&mesh_aabbs);
+    let scene_min = stats.scene_min;
+    let scene_max = stats.scene_max;
+    // Snap AABB to nearest integer first (handles float imprecision),
+    // then add 1 unit margin
     let gmin = Vec3::new(
-        (scene_min.x - 1.0).floor(),
-        (scene_min.y - 1.0).floor(),
-        (scene_min.z - 1.0).floor(),
+        scene_min.x.round() - 1.0,
+        scene_min.y.round() - 1.0,
+        scene_min.z.round() - 1.0,
     );
     let gmax = Vec3::new(
-        (scene_max.x + 1.0).ceil(),
-        (scene_max.y + 1.0).ceil(),
-        (scene_max.z + 1.0).ceil(),
+        scene_max.x.round() + 1.0,
+        scene_max.y.round() + 1.0,
+        scene_max.z.round() + 1.0,
     );
 
     // Floor (XZ plane): visible when looking from above (pitch > 0)

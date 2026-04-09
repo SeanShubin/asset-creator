@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::animation::ShapeAnimator;
-use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
+use super::definition::{Axis, Bounds, Combinator, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
 
 // =====================================================================
 // Components
@@ -95,25 +95,22 @@ fn process_node(
         merge_colors(colors, &node.colors)
     };
 
-    if !node.mirror.is_empty() {
-        process_mirror(commands, meshes, materials, parent, node, &node.mirror, &colors, registry);
-        return;
-    }
-
-    if let Some(repeat) = &node.repeat {
-        process_repeat(commands, meshes, materials, parent, node, repeat, &colors, registry);
-        return;
-    }
-
-    if let Some(import_name) = &node.import {
-        process_import(commands, meshes, materials, parent, node, import_name, &colors, registry);
-        return;
-    }
-
-    attach_geometry(commands, meshes, materials, parent, node, &colors);
-
-    for child in &node.children {
-        spawn_child(commands, meshes, materials, parent, child, &colors, registry);
+    match node.combinator() {
+        Combinator::Mirror(axes) => {
+            process_mirror(commands, meshes, materials, parent, node, axes, &colors, registry);
+        }
+        Combinator::Repeat(repeat) => {
+            process_repeat(commands, meshes, materials, parent, node, repeat, &colors, registry);
+        }
+        Combinator::Import(import_name) => {
+            process_import(commands, meshes, materials, parent, node, import_name, &colors, registry);
+        }
+        Combinator::None => {
+            attach_geometry(commands, meshes, materials, parent, node, &colors);
+            for child in &node.children {
+                spawn_child(commands, meshes, materials, parent, child, &colors, registry);
+            }
+        }
     }
 }
 
@@ -271,7 +268,7 @@ fn spawn_child(
 }
 
 fn build_child_transform(node: &ShapeNode) -> Transform {
-    let is_combinator = !node.mirror.is_empty() || node.repeat.is_some() || node.import.is_some();
+    let is_combinator = node.is_combinator();
     let position = if is_combinator {
         Vec3::ZERO
     } else {

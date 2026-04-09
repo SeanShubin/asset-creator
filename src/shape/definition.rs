@@ -35,7 +35,36 @@ pub struct ShapeNode {
     pub animations: Vec<AnimState>,
 }
 
+/// What kind of combinator this node is, if any.
+pub enum Combinator<'a> {
+    Mirror(&'a [Axis]),
+    Repeat(&'a RepeatSpec),
+    Import(&'a str),
+    None,
+}
+
 impl ShapeNode {
+    /// Determine what kind of combinator this node is.
+    /// Combinators generate multiple children or redirect to other shapes.
+    /// A node is at most one combinator type; priority: mirror > repeat > import.
+    pub fn combinator(&self) -> Combinator<'_> {
+        if !self.mirror.is_empty() {
+            Combinator::Mirror(&self.mirror)
+        } else if let Some(ref repeat) = self.repeat {
+            Combinator::Repeat(repeat)
+        } else if let Some(ref import) = self.import {
+            Combinator::Import(import)
+        } else {
+            Combinator::None
+        }
+    }
+
+    /// Whether this node is a combinator (mirror, repeat, or import).
+    /// Combinators are pass-through containers — they don't have their own position.
+    pub fn is_combinator(&self) -> bool {
+        !matches!(self.combinator(), Combinator::None)
+    }
+
     /// Compute the AABB enclosing this node and all descendants.
     pub fn compute_aabb(&self) -> Option<Bounds> {
         let mut min = (f32::MAX, f32::MAX, f32::MAX);
@@ -55,27 +84,33 @@ impl ShapeNode {
         if let Some(b) = &self.bounds {
             let b_min = b.min();
             let b_max = b.max();
-            min.0 = min.0.min(b_min.0);
-            min.1 = min.1.min(b_min.1);
-            min.2 = min.2.min(b_min.2);
-            max.0 = max.0.max(b_max.0);
-            max.1 = max.1.max(b_max.1);
-            max.2 = max.2.max(b_max.2);
-            *found = true;
 
-            // If this node is mirrored, include the reflected bounds too
+            // Include this node's bounds
+            include_point(min, max, b_min, found);
+            include_point(min, max, b_max, found);
+
+            // Include mirrored copies
             for &axis in &self.mirror {
-                let (mir_min, mir_max) = match axis {
-                    Axis::X => ((-b_max.0, b_min.1, b_min.2), (-b_min.0, b_max.1, b_max.2)),
-                    Axis::Y => ((b_min.0, -b_max.1, b_min.2), (b_max.0, -b_min.1, b_max.2)),
-                    Axis::Z => ((b_min.0, b_min.1, -b_max.2), (b_max.0, b_max.1, -b_min.2)),
+                let (mir_min, mir_max) = reflect_extents(b_min, b_max, axis);
+                include_point(min, max, mir_min, found);
+                include_point(min, max, mir_max, found);
+            }
+
+            // Include repeated copies
+            if let Some(ref repeat) = self.repeat {
+                let start = if repeat.center {
+                    -(repeat.count as f32 - 1.0) * repeat.spacing * 0.5
+                } else {
+                    0.0
                 };
-                min.0 = min.0.min(mir_min.0);
-                min.1 = min.1.min(mir_min.1);
-                min.2 = min.2.min(mir_min.2);
-                max.0 = max.0.max(mir_max.0);
-                max.1 = max.1.max(mir_max.1);
-                max.2 = max.2.max(mir_max.2);
+                let last_offset = start + (repeat.count as f32 - 1.0) * repeat.spacing;
+                let (first, last) = match repeat.along {
+                    Axis::X => ((b_min.0 + start, b_min.1, b_min.2), (b_max.0 + last_offset, b_max.1, b_max.2)),
+                    Axis::Y => ((b_min.0, b_min.1 + start, b_min.2), (b_max.0, b_max.1 + last_offset, b_max.2)),
+                    Axis::Z => ((b_min.0, b_min.1, b_min.2 + start), (b_max.0, b_max.1, b_max.2 + last_offset)),
+                };
+                include_point(min, max, first, found);
+                include_point(min, max, last, found);
             }
         }
         for child in &self.children {
@@ -84,13 +119,42 @@ impl ShapeNode {
     }
 
     /// Remap all bounds in this node and its descendants from one coordinate space to another.
+    /// Also remaps repeat spacing to match the new coordinate scale.
     pub fn remap_bounds(&mut self, from: &Bounds, to: &Bounds) {
         if let Some(ref mut b) = self.bounds {
             *b = b.remap(from, to);
         }
+        if let Some(ref mut repeat) = self.repeat {
+            let from_size = from.size();
+            let to_size = to.size();
+            let scale = match repeat.along {
+                Axis::X => if from_size.0.abs() > 0.001 { to_size.0 / from_size.0 } else { 1.0 },
+                Axis::Y => if from_size.1.abs() > 0.001 { to_size.1 / from_size.1 } else { 1.0 },
+                Axis::Z => if from_size.2.abs() > 0.001 { to_size.2 / from_size.2 } else { 1.0 },
+            };
+            repeat.spacing *= scale;
+        }
         for child in &mut self.children {
             child.remap_bounds(from, to);
         }
+    }
+}
+
+fn include_point(min: &mut (f32, f32, f32), max: &mut (f32, f32, f32), p: (f32, f32, f32), found: &mut bool) {
+    min.0 = min.0.min(p.0);
+    min.1 = min.1.min(p.1);
+    min.2 = min.2.min(p.2);
+    max.0 = max.0.max(p.0);
+    max.1 = max.1.max(p.1);
+    max.2 = max.2.max(p.2);
+    *found = true;
+}
+
+fn reflect_extents(b_min: (f32, f32, f32), b_max: (f32, f32, f32), axis: Axis) -> ((f32, f32, f32), (f32, f32, f32)) {
+    match axis {
+        Axis::X => ((-b_max.0, b_min.1, b_min.2), (-b_min.0, b_max.1, b_max.2)),
+        Axis::Y => ((b_min.0, -b_max.1, b_min.2), (b_max.0, -b_min.1, b_max.2)),
+        Axis::Z => ((b_min.0, b_min.1, -b_max.2), (b_max.0, b_max.1, -b_min.2)),
     }
 }
 
