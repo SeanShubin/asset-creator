@@ -62,6 +62,21 @@ impl ShapeNode {
             max.1 = max.1.max(b_max.1);
             max.2 = max.2.max(b_max.2);
             *found = true;
+
+            // If this node is mirrored, include the reflected bounds too
+            for &axis in &self.mirror {
+                let (mir_min, mir_max) = match axis {
+                    Axis::X => ((-b_max.0, b_min.1, b_min.2), (-b_min.0, b_max.1, b_max.2)),
+                    Axis::Y => ((b_min.0, -b_max.1, b_min.2), (b_max.0, -b_min.1, b_max.2)),
+                    Axis::Z => ((b_min.0, b_min.1, -b_max.2), (b_max.0, b_max.1, -b_min.2)),
+                };
+                min.0 = min.0.min(mir_min.0);
+                min.1 = min.1.min(mir_min.1);
+                min.2 = min.2.min(mir_min.2);
+                max.0 = max.0.max(mir_max.0);
+                max.1 = max.1.max(mir_max.1);
+                max.2 = max.2.max(mir_max.2);
+            }
         }
         for child in &self.children {
             child.collect_bounds(min, max, found);
