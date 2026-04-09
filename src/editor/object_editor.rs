@@ -8,7 +8,7 @@ use crate::shape::{
     animate_shapes, ShapeAnimator, ShapePart, ShapeRoot,
     despawn_shape, spawn_shape,
 };
-use super::orbit_camera::{self, OrbitCamera, OrbitState, ZoomLimits};
+use super::orbit_camera::{self, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
 
 // =====================================================================
 // Plugin
@@ -24,6 +24,7 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<SceneStats>()
             .init_resource::<OrbitState>()
             .init_resource::<ZoomLimits>()
+            .init_resource::<CameraIntent>()
             .add_systems(Update, (
                 // Phase 1: detect what needs to change
                 (
@@ -40,9 +41,14 @@ impl Plugin for ObjectEditorPlugin {
                 ),
             ).chain())
             .add_systems(Update, (
-                // Independent systems — no ordering requirements
-                orbit_camera::orbit_camera.run_if(is_object_active),
-                orbit_camera::orbit_zoom.run_if(is_object_active),
+                // Camera: input → intent → apply (chained)
+                (
+                    orbit_camera::read_camera_input.run_if(is_object_active),
+                    orbit_camera::apply_orbit.run_if(is_object_active),
+                    orbit_camera::apply_zoom.run_if(is_object_active),
+                ).chain(),
+                // Independent systems
+
                 animate_shapes.run_if(is_object_active),
                 update_light.run_if(is_object_active),
                 part_tree_ui.run_if(is_object_active),
