@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::animation::ShapeAnimator;
-use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, SignedAxis, orient_matrix};
+use super::definition::{Axis, Bounds, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
 
 // =====================================================================
 // Components
@@ -178,8 +178,13 @@ fn process_mirror(
     let combinations = mirror_combinations(axes);
     for (flipped_axes, suffix) in &combinations {
         let mut copy = base.clone();
+        // Reflect bounds (position) on each flipped axis
         for &axis in flipped_axes {
             flip_node_bounds(&mut copy, axis);
+        }
+        // Reflect shape orientation for each flipped axis
+        for &axis in flipped_axes {
+            reflect_orientation(&mut copy, axis);
         }
         if !suffix.is_empty() {
             if let Some(ref name) = copy.name {
@@ -281,10 +286,10 @@ fn attach_geometry(
 ) {
     let Some(shape) = &node.shape else { return };
     let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
-    let om = orient_matrix(&node.orient);
+    let om = node.orient;
     let is_mirrored = om.determinant() < 0.0;
     let (mesh, material) = make_mesh(meshes, materials, *shape, color, node.emissive, is_mirrored);
-    let mesh_tf = mesh_transform(*shape, &bounds, &node.orient);
+    let mesh_tf = mesh_transform(*shape, &bounds, &om);
 
     if node.children.is_empty() {
         commands.entity(parent).with_child((
@@ -327,9 +332,8 @@ fn attach_geometry(
 ///
 /// This naturally handles both rotation and mirroring in one matrix,
 /// without needing to decompose into separate rotation + scale.
-fn mesh_transform(shape: PrimitiveShape, bounds: &Bounds, orient: &[SignedAxis]) -> Transform {
+fn mesh_transform(shape: PrimitiveShape, bounds: &Bounds, om: &Mat3) -> Transform {
     let size = bounds.size();
-    let om = orient_matrix(orient);
 
     // Each column of the orient matrix is a unit direction.
     // The local X axis of the mesh should span size along the orient's X direction.
@@ -432,10 +436,14 @@ fn reify_bounds(node: &mut ShapeNode) {
     }
 }
 
-/// Ensure orient is reified before transforming.
-fn reify_orient(node: &mut ShapeNode) {
-    if node.orient.is_empty() && node.shape.is_some() {
-        node.orient = vec![SignedAxis::X, SignedAxis::Y, SignedAxis::Z];
+/// Reflect the orientation of a node and all its descendants on a world axis.
+/// Used by the mirror combinator so reflected copies have physically correct shapes.
+fn reflect_orientation(node: &mut ShapeNode, axis: Axis) {
+    if node.shape.is_some() {
+        reflect_orient(&mut node.orient, axis);
+    }
+    for child in &mut node.children {
+        reflect_orientation(child, axis);
     }
 }
 
@@ -449,10 +457,10 @@ fn offset_bounds(bounds: &mut Option<Bounds>, axis: Axis, offset: f32) {
     }
 }
 
-/// Flip a node's bounds and orient on the given axis. Recursively flips children.
+/// Flip a node's bounds on the given axis. Recursively flips children.
+/// Does NOT modify orient — the mirror combinator only affects position, not shape orientation.
 fn flip_node_bounds(node: &mut ShapeNode, axis: Axis) {
     reify_bounds(node);
-    reify_orient(node);
 
     if let Some(ref mut b) = node.bounds {
         match axis {
@@ -461,23 +469,9 @@ fn flip_node_bounds(node: &mut ShapeNode, axis: Axis) {
             Axis::Z => { let tmp = -b.2; b.2 = -b.5; b.5 = tmp; }
         }
     }
-    for sa in &mut node.orient {
-        *sa = flip_signed_axis(*sa, axis);
-    }
+
     for child in &mut node.children {
         flip_node_bounds(child, axis);
-    }
-}
-
-fn flip_signed_axis(sa: SignedAxis, mirror_axis: Axis) -> SignedAxis {
-    match (sa, mirror_axis) {
-        (SignedAxis::X, Axis::X) => SignedAxis::NegX,
-        (SignedAxis::NegX, Axis::X) => SignedAxis::X,
-        (SignedAxis::Y, Axis::Y) => SignedAxis::NegY,
-        (SignedAxis::NegY, Axis::Y) => SignedAxis::Y,
-        (SignedAxis::Z, Axis::Z) => SignedAxis::NegZ,
-        (SignedAxis::NegZ, Axis::Z) => SignedAxis::Z,
-        _ => sa,
     }
 }
 

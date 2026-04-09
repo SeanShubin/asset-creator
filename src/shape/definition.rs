@@ -12,8 +12,8 @@ pub struct ShapeNode {
     pub shape: Option<PrimitiveShape>,
     #[serde(default)]
     pub bounds: Option<Bounds>,
-    #[serde(default)]
-    pub orient: Vec<SignedAxis>,
+    #[serde(default, deserialize_with = "deserialize_orient")]
+    pub orient: Mat3,
     #[serde(default)]
     pub color: Option<Color3>,
     #[serde(default)]
@@ -152,68 +152,106 @@ pub enum Axis {
     Z,
 }
 
-#[derive(Deserialize, Clone, Copy, Debug)]
-pub enum SignedAxis {
-    X,
-    NegX,
-    Y,
-    NegY,
-    Z,
-    NegZ,
+// =====================================================================
+// Orient — stored as Mat3, deserialized from (Facing, Mirroring, Rotation)
+// =====================================================================
+
+/// Deserialization helper: parse the human-readable tuple and convert to Mat3.
+fn deserialize_orient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Mat3, D::Error> {
+    let tuple = Option::<OrientTuple>::deserialize(deserializer)?;
+    Ok(tuple.map(|t| t.to_matrix()).unwrap_or(Mat3::IDENTITY))
 }
 
-impl Default for SignedAxis {
-    fn default() -> Self {
-        Self::Y
+/// Human-readable orient tuple — only used for RON deserialization.
+#[derive(Deserialize)]
+struct OrientTuple(
+    #[serde(default)] Facing,
+    #[serde(default)] Mirroring,
+    #[serde(default)] Rotation,
+);
+
+impl OrientTuple {
+    fn to_matrix(&self) -> Mat3 {
+        let facing = facing_matrix(self.0);
+        let mirror = match self.1 {
+            Mirroring::NoMirror => Mat3::IDENTITY,
+            Mirroring::Mirror => Mat3::from_cols(Vec3::NEG_X, Vec3::Y, Vec3::Z),
+        };
+        let rotation = rotation_matrix(self.2);
+        rotation * mirror * facing
     }
 }
 
-// =====================================================================
-// Orient — interpret a list of signed axes as orientation
-//   []         → identity (no rotation)
-//   [axis]     → single axis: primary axis points along `axis`
-//   [r, u, f]  → full frame: right, up, forward
-// =====================================================================
+#[derive(Deserialize, Clone, Copy, Debug, Default)]
+pub enum Facing {
+    #[default]
+    Front,
+    Back,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
 
-/// Compute the 3x3 orient matrix from the orient specification.
-/// This maps local (X,Y,Z) to world directions.
-/// For 0 axes: identity. For 1 axis: single-axis rotation.
-/// For 3 axes: columns are (right, up, forward).
-pub fn orient_matrix(orient: &[SignedAxis]) -> Mat3 {
-    match orient.len() {
-        0 => Mat3::IDENTITY,
-        1 => Mat3::from_quat(single_axis_rotation(orient[0])),
-        3 => Mat3::from_cols(
-            signed_axis_to_vec3(orient[0]),
-            signed_axis_to_vec3(orient[1]),
-            signed_axis_to_vec3(orient[2]),
-        ),
-        _ => {
-            bevy::log::warn!("orient must have 0, 1, or 3 axes, got {}", orient.len());
-            Mat3::IDENTITY
+#[derive(Deserialize, Clone, Copy, Debug, Default)]
+pub enum Mirroring {
+    #[default]
+    NoMirror,
+    Mirror,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Default)]
+pub enum Rotation {
+    #[default]
+    NoRotation,
+    RotateClockwise,
+    RotateHalf,
+    RotateCounter,
+}
+
+/// Reflect a world axis in an orient matrix.
+/// This is the operation performed by the mirror combinator on reflected copies.
+pub fn reflect_orient(orient: &mut Mat3, axis: Axis) {
+    // Negating a row of the local→world matrix reflects that world axis.
+    // Row i corresponds to the world axis i component across all columns.
+    match axis {
+        Axis::X => {
+            orient.x_axis.x = -orient.x_axis.x;
+            orient.y_axis.x = -orient.y_axis.x;
+            orient.z_axis.x = -orient.z_axis.x;
+        }
+        Axis::Y => {
+            orient.x_axis.y = -orient.x_axis.y;
+            orient.y_axis.y = -orient.y_axis.y;
+            orient.z_axis.y = -orient.z_axis.y;
+        }
+        Axis::Z => {
+            orient.x_axis.z = -orient.x_axis.z;
+            orient.y_axis.z = -orient.y_axis.z;
+            orient.z_axis.z = -orient.z_axis.z;
         }
     }
 }
 
-fn single_axis_rotation(axis: SignedAxis) -> Quat {
-    match axis {
-        SignedAxis::Y => Quat::IDENTITY,
-        SignedAxis::NegY => Quat::from_rotation_x(std::f32::consts::PI),
-        SignedAxis::X => Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
-        SignedAxis::NegX => Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        SignedAxis::Z => Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
-        SignedAxis::NegZ => Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+fn facing_matrix(facing: Facing) -> Mat3 {
+    use std::f32::consts::FRAC_PI_2;
+    match facing {
+        Facing::Front => Mat3::IDENTITY,
+        Facing::Back => Mat3::from_quat(Quat::from_rotation_y(std::f32::consts::PI)),
+        Facing::Left => Mat3::from_quat(Quat::from_rotation_y(-FRAC_PI_2)),
+        Facing::Right => Mat3::from_quat(Quat::from_rotation_y(FRAC_PI_2)),
+        Facing::Top => Mat3::from_quat(Quat::from_rotation_x(-FRAC_PI_2)),
+        Facing::Bottom => Mat3::from_quat(Quat::from_rotation_x(FRAC_PI_2)),
     }
 }
 
-fn signed_axis_to_vec3(axis: SignedAxis) -> Vec3 {
-    match axis {
-        SignedAxis::X => Vec3::X,
-        SignedAxis::NegX => Vec3::NEG_X,
-        SignedAxis::Y => Vec3::Y,
-        SignedAxis::NegY => Vec3::NEG_Y,
-        SignedAxis::Z => Vec3::Z,
-        SignedAxis::NegZ => Vec3::NEG_Z,
+fn rotation_matrix(rotation: Rotation) -> Mat3 {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    match rotation {
+        Rotation::NoRotation => Mat3::IDENTITY,
+        Rotation::RotateClockwise => Mat3::from_quat(Quat::from_rotation_z(-FRAC_PI_2)),
+        Rotation::RotateHalf => Mat3::from_quat(Quat::from_rotation_z(PI)),
+        Rotation::RotateCounter => Mat3::from_quat(Quat::from_rotation_z(FRAC_PI_2)),
     }
 }
 

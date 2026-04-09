@@ -33,8 +33,8 @@
             name:"wedge-y",
             shape: Wedge,
             bounds: (1, -1, 1, 3, 1, 3),
-            color: (0.5, 0.5, 0.5),
-            orient: [NegY, X, Z],
+            color: (1.0, 0.5, 0.5),
+            orient: (Front, NoMirror, RotateClockwise),
             mirror: [X, Z]
         ),
         (
@@ -42,7 +42,7 @@
             shape: Wedge,
             bounds: (1, 1, -1, 3, 3, 1),
             color: (0.5, 0.5, 0.5),
-            orient: [NegZ, Y, X],
+            orient: (Right, NoMirror, NoRotation),
             mirror: [X,Y]
         ),
         (
