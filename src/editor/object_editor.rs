@@ -246,10 +246,8 @@ fn reload_shape(
 //   height = max_extent * 1.707107  (1 + sqrt(2)/2)
 const ZOOM_PROJ_WIDTH_RATIO: f32 = 1.414214;
 const ZOOM_PROJ_HEIGHT_RATIO: f32 = 1.707107;
-const LEFT_PANEL_PX: f32 = 280.0;
-const RIGHT_PANEL_PX: f32 = 250.0;
-const VIEWPORT_WIDTH: f32 = 1100.0;
-const VIEWPORT_HEIGHT: f32 = 720.0;
+const LEFT_PANEL_MIN: f32 = 200.0;
+const RIGHT_PANEL_MAX: f32 = 250.0;
 const FIT_BORDER: f32 = 1.1;
 const ZOOM_MIN_PCT: f32 = 10.0;
 const ZOOM_MAX_PCT: f32 = 200.0;
@@ -260,12 +258,14 @@ fn on_model_loaded(
     mut camera: Query<(&mut Projection, &Camera), With<OrbitCamera>>,
     mut limits: ResMut<ZoomLimits>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+    windows: Query<&Window>,
 ) {
     if !fit.needs_fit { return; }
     if mesh_aabbs.is_empty() { return; }
     fit.needs_fit = false;
 
-    let fit_scale = compute_fit_scale(&mesh_aabbs);
+    let window_size = windows.get_single().map(|w| Vec2::new(w.width(), w.height())).unwrap_or(Vec2::new(1100.0, 720.0));
+    let fit_scale = compute_fit_scale(&mesh_aabbs, window_size);
     if fit_scale < 0.001 { return; }
 
     fit.fit_scale = fit_scale;
@@ -286,12 +286,14 @@ fn compute_stats(
     mesh_handles: Query<&Mesh3d>,
     mesh_assets: Res<Assets<Mesh>>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+    windows: Query<&Window>,
 ) {
     if !stats.needs_update { return; }
     if mesh_handles.is_empty() { return; }
     stats.needs_update = false;
 
-    let fit_scale = compute_fit_scale(&mesh_aabbs);
+    let window_size = windows.get_single().map(|w| Vec2::new(w.width(), w.height())).unwrap_or(Vec2::new(1100.0, 720.0));
+    let fit_scale = compute_fit_scale(&mesh_aabbs, window_size);
     if fit_scale > 0.001 {
         stats.fit_scale = fit_scale;
         update_zoom_limits(&mut limits, fit_scale);
@@ -316,21 +318,21 @@ fn compute_stats(
 /// Uses fixed projection angles (yaw=45, pitch=45) for deterministic results.
 fn compute_fit_scale(
     mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+    window_size: Vec2,
 ) -> f32 {
     let (scene_min, scene_max) = compute_scene_aabb(mesh_aabbs);
     let scene_size = scene_max - scene_min;
 
     if scene_size.length() < 0.001 { return 0.0; }
 
-    // Project using fixed ratios derived from yaw=45, pitch=45
     let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
     let proj_width = max_extent * ZOOM_PROJ_WIDTH_RATIO;
     let proj_height = max_extent * ZOOM_PROJ_HEIGHT_RATIO;
 
-    let usable_width = VIEWPORT_WIDTH - LEFT_PANEL_PX - RIGHT_PANEL_PX;
+    let usable_width = window_size.x - LEFT_PANEL_MIN - RIGHT_PANEL_MAX;
 
     let scale_for_width = proj_width * FIT_BORDER / usable_width;
-    let scale_for_height = proj_height * FIT_BORDER / VIEWPORT_HEIGHT;
+    let scale_for_height = proj_height * FIT_BORDER / window_size.y;
 
     scale_for_width.max(scale_for_height)
 }
