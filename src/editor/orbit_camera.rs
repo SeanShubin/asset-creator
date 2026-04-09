@@ -112,8 +112,8 @@ fn handle_orbit_input(
     }
 
     let speed = 60.0 * time.delta_secs();
-    if keys.pressed(KeyCode::ArrowLeft) { orbit.yaw += speed; }
-    if keys.pressed(KeyCode::ArrowRight) { orbit.yaw -= speed; }
+    if keys.pressed(KeyCode::ArrowRight) { orbit.yaw += speed; }
+    if keys.pressed(KeyCode::ArrowLeft) { orbit.yaw -= speed; }
     if keys.pressed(KeyCode::ArrowUp) { orbit.pitch = (orbit.pitch + speed).min(89.9); }
     if keys.pressed(KeyCode::ArrowDown) { orbit.pitch = (orbit.pitch - speed).max(-89.9); }
 }
@@ -127,7 +127,7 @@ fn update_camera_transform(tf: &mut Transform, orbit: &OrbitState) {
 fn compute_camera_pose(yaw: f32, pitch: f32, target: Vec3) -> (Vec3, Quat) {
     let pitch_rad = pitch.to_radians();
     let yaw_rad = yaw.to_radians();
-    let rotation = Quat::from_euler(EulerRot::YXZ, -yaw_rad, -pitch_rad, 0.0);
+    let rotation = Quat::from_euler(EulerRot::YXZ, yaw_rad, -pitch_rad, 0.0);
     let position = target + rotation * Vec3::new(0.0, 0.0, ISO_DISTANCE);
     (position, rotation)
 }

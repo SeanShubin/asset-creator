@@ -359,7 +359,7 @@ fn update_light(
     // Camera rotation
     let cam_rot = Quat::from_euler(
         EulerRot::YXZ,
-        -orbit.yaw.to_radians(),
+        orbit.yaw.to_radians(),
         -orbit.pitch.to_radians(),
         0.0,
     );
@@ -382,8 +382,8 @@ fn update_light(
 const GRID_HALF_SIZE: f32 = 5.0;
 const GRID_LINES: u32 = 10;
 const GRID_COLOR_XZ: Color = Color::srgba(0.3, 0.5, 0.3, 0.2);  // floor — greenish
-const GRID_COLOR_XY: Color = Color::srgba(0.5, 0.3, 0.3, 0.2);  // back-left — reddish
-const GRID_COLOR_YZ: Color = Color::srgba(0.3, 0.3, 0.5, 0.2);  // back-right — bluish
+const GRID_COLOR_XY: Color = Color::srgba(0.3, 0.3, 0.5, 0.2);  // behind-right — bluish
+const GRID_COLOR_YZ: Color = Color::srgba(0.5, 0.3, 0.3, 0.2);  // behind-left — reddish
 const AXIS_COLOR_X: Color = Color::srgba(0.8, 0.2, 0.2, 0.6);
 const AXIS_COLOR_Y: Color = Color::srgba(0.2, 0.8, 0.2, 0.6);
 const AXIS_COLOR_Z: Color = Color::srgba(0.2, 0.2, 0.8, 0.6);
@@ -403,12 +403,12 @@ fn draw_grid(mut gizmos: Gizmos, orbit: Res<OrbitState>) {
         draw_floor_axes(&mut gizmos, GRID_HALF_SIZE);
     }
 
-    // XY back wall: visible when camera Z > 0 (cos(yaw) > 0)
+    // XY wall (Z offset): camera Z positive at yaw≈0 → wall at -Z (behind)
     let back_wall_z = if yaw_rad.cos() > 0.0 { -GRID_HALF_SIZE } else { GRID_HALF_SIZE };
     draw_offset_grid(&mut gizmos, GridPlane::XY, back_wall_z, GRID_COLOR_XY);
 
-    // YZ side wall: visible when camera X < 0 (sin(yaw) > 0)
-    let side_wall_x = if yaw_rad.sin() > 0.0 { GRID_HALF_SIZE } else { -GRID_HALF_SIZE };
+    // YZ wall (X offset): camera X positive at yaw≈90 → wall at -X (behind)
+    let side_wall_x = if yaw_rad.sin() > 0.0 { -GRID_HALF_SIZE } else { GRID_HALF_SIZE };
     draw_offset_grid(&mut gizmos, GridPlane::YZ, side_wall_x, GRID_COLOR_YZ);
 
     // Y axis line on the side wall
@@ -544,7 +544,7 @@ fn camera_controls(
     // Editable yaw and pitch
     ui.horizontal(|ui| {
         ui.label("Yaw:");
-        ui.add(egui::DragValue::new(&mut orbit.yaw).range(0.0..=360.0).suffix("°").speed(1.0));
+        ui.add(egui::DragValue::new(&mut orbit.yaw).range(-180.0..=180.0).suffix("°").speed(1.0));
     });
     ui.horizontal(|ui| {
         ui.label("Pitch:");
@@ -568,7 +568,7 @@ fn camera_controls(
     });
     ui.horizontal(|ui| {
         if ui.button("Back").clicked() { orbit.yaw = 180.0; orbit.pitch = 0.0; }
-        if ui.button("Left").clicked() { orbit.yaw = 270.0; orbit.pitch = 0.0; }
+        if ui.button("Left").clicked() { orbit.yaw = -90.0; orbit.pitch = 0.0; }
         if ui.button("Bottom").clicked() { orbit.yaw = 0.0; orbit.pitch = -89.9; }
         if ui.button("Reset").clicked() {
             orbit.yaw = DEFAULT_YAW;
