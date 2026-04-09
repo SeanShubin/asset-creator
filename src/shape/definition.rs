@@ -32,6 +32,50 @@ pub struct ShapeNode {
     pub animations: Vec<AnimState>,
 }
 
+impl ShapeNode {
+    /// Compute the AABB enclosing this node and all descendants.
+    pub fn compute_aabb(&self) -> Option<Bounds> {
+        let mut min = (f32::MAX, f32::MAX, f32::MAX);
+        let mut max = (f32::MIN, f32::MIN, f32::MIN);
+        let mut found = false;
+
+        self.collect_bounds(&mut min, &mut max, &mut found);
+
+        if found {
+            Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
+        } else {
+            None
+        }
+    }
+
+    fn collect_bounds(&self, min: &mut (f32, f32, f32), max: &mut (f32, f32, f32), found: &mut bool) {
+        if let Some(b) = &self.bounds {
+            let b_min = b.min();
+            let b_max = b.max();
+            min.0 = min.0.min(b_min.0);
+            min.1 = min.1.min(b_min.1);
+            min.2 = min.2.min(b_min.2);
+            max.0 = max.0.max(b_max.0);
+            max.1 = max.1.max(b_max.1);
+            max.2 = max.2.max(b_max.2);
+            *found = true;
+        }
+        for child in &self.children {
+            child.collect_bounds(min, max, found);
+        }
+    }
+
+    /// Remap all bounds in this node and its descendants from one coordinate space to another.
+    pub fn remap_bounds(&mut self, from: &Bounds, to: &Bounds) {
+        if let Some(ref mut b) = self.bounds {
+            *b = b.remap(from, to);
+        }
+        for child in &mut self.children {
+            child.remap_bounds(from, to);
+        }
+    }
+}
+
 // =====================================================================
 // Primitives
 // =====================================================================
@@ -62,6 +106,38 @@ impl Bounds {
 
     pub fn size(&self) -> (f32, f32, f32) {
         ((self.3 - self.0).abs(), (self.4 - self.1).abs(), (self.5 - self.2).abs())
+    }
+
+    pub fn min(&self) -> (f32, f32, f32) {
+        (self.0.min(self.3), self.1.min(self.4), self.2.min(self.5))
+    }
+
+    pub fn max(&self) -> (f32, f32, f32) {
+        (self.0.max(self.3), self.1.max(self.4), self.2.max(self.5))
+    }
+
+    /// Remap this bounds from `from` coordinate space into `to` coordinate space.
+    /// Each corner is mapped: to_min + (point - from_min) * (to_size / from_size)
+    pub fn remap(&self, from: &Bounds, to: &Bounds) -> Bounds {
+        let remap_component = |val: f32, from_min: f32, from_size: f32, to_min: f32, to_size: f32| -> f32 {
+            if from_size.abs() < 0.001 { to_min } else {
+                to_min + (val - from_min) * (to_size / from_size)
+            }
+        };
+
+        let from_min = from.min();
+        let from_size = from.size();
+        let to_min = to.min();
+        let to_size = to.size();
+
+        Bounds(
+            remap_component(self.0, from_min.0, from_size.0, to_min.0, to_size.0),
+            remap_component(self.1, from_min.1, from_size.1, to_min.1, to_size.1),
+            remap_component(self.2, from_min.2, from_size.2, to_min.2, to_size.2),
+            remap_component(self.3, from_min.0, from_size.0, to_min.0, to_size.0),
+            remap_component(self.4, from_min.1, from_size.1, to_min.1, to_size.1),
+            remap_component(self.5, from_min.2, from_size.2, to_min.2, to_size.2),
+        )
     }
 }
 

@@ -112,34 +112,20 @@ fn process_import(
         }
     };
 
-    let native_bounds = imported.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
-    let placement_bounds = node.bounds.unwrap_or(native_bounds);
+    // Compute the imported shape's native AABB from all its descendants
+    let native_aabb = imported.compute_aabb()
+        .unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
+    let placement = node.bounds.unwrap_or(native_aabb);
 
-    let native_size = native_bounds.size();
-    let placement_size = placement_bounds.size();
+    // Remap the entire imported tree from native space to placement space
+    let mut remapped = imported;
+    remapped.remap_bounds(&native_aabb, &placement);
 
-    let scale = Vec3::new(
-        if native_size.0 > 0.001 { placement_size.0 / native_size.0 } else { 1.0 },
-        if native_size.1 > 0.001 { placement_size.1 / native_size.1 } else { 1.0 },
-        if native_size.2 > 0.001 { placement_size.2 / native_size.2 } else { 1.0 },
-    );
-
-    // Position is already handled by spawn_child via bounds_center.
-    // Import entity only needs scale to map native size to placement size.
-    let import_tf = Transform::from_scale(scale);
-
-    let import_entity = commands.spawn((
-        ShapePart { name: node.name.clone().or(Some(import_name.to_string())) },
-        BaseTransform(import_tf),
-        import_tf,
-        Visibility::default(),
-    )).id();
-    commands.entity(parent).add_child(import_entity);
-
+    // Process the remapped tree as if it were inline — no scale transforms needed
     let import_color = node.color.unwrap_or(color);
-    attach_geometry(commands, meshes, materials, import_entity, &imported, import_color);
-    for child in &imported.children {
-        spawn_child(commands, meshes, materials, import_entity, child, import_color, registry);
+    attach_geometry(commands, meshes, materials, parent, &remapped, import_color);
+    for child in &remapped.children {
+        spawn_child(commands, meshes, materials, parent, child, import_color, registry);
     }
 }
 
