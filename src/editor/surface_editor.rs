@@ -5,7 +5,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy_egui::{EguiContexts, egui};
 
 use crate::browser::ActiveEditor;
-use crate::registry::{AssetRegistry, save_surface_to_file};
+use crate::registry::{AssetRegistry, SaveSurface};
 use crate::surface::{self, PatternType, SurfaceDef, preset_by_name, preset_names};
 use super::camera::{PanZoomCamera, zoom_camera};
 
@@ -197,21 +197,15 @@ fn regenerate_preview(
 fn persist_to_file(
     mut dirty: ResMut<EditorDirty>,
     state: Res<SurfaceEditorState>,
-    mut registry: ResMut<AssetRegistry>,
+    mut save_events: EventWriter<SaveSurface>,
 ) {
     if !dirty.file { return; }
     dirty.file = false;
 
-    let name = &state.surface.name;
-    let path = registry.surface_path(name)
-        .unwrap_or_else(|| {
-            let filename = format!("{}.surface.ron", name.replace(' ', "_").to_lowercase());
-            std::path::PathBuf::from("data/surfaces").join(filename)
-        });
-
-    save_surface_to_file(&state.surface, &path);
-
-    registry.upsert_surface(name.clone(), state.surface.clone(), path);
+    save_events.send(SaveSurface {
+        name: state.surface.name.clone(),
+        data: state.surface.clone(),
+    });
 }
 
 // =====================================================================

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 use std::path::PathBuf;
 
-use crate::registry::AssetRegistry;
+use crate::registry::{AssetRegistry, DeleteSurface, SaveSurface};
 
 // =====================================================================
 // Active editor state
@@ -84,8 +84,10 @@ impl Plugin for BrowserPlugin {
 
 fn browser_ui(
     mut contexts: EguiContexts,
-    mut registry: ResMut<AssetRegistry>,
+    registry: Res<AssetRegistry>,
     mut active: ResMut<ActiveEditor>,
+    mut save_events: EventWriter<SaveSurface>,
+    mut delete_events: EventWriter<DeleteSurface>,
 ) {
     let ctx = contexts.ctx_mut();
 
@@ -93,7 +95,7 @@ fn browser_ui(
         ui.heading("Assets");
         ui.separator();
 
-        surface_list(ui, &mut registry, &mut active);
+        surface_list(ui, &registry, &mut active, &mut save_events, &mut delete_events);
         ui.separator();
         shape_list(ui, &registry, &mut active);
 
@@ -110,8 +112,10 @@ fn browser_ui(
 
 fn surface_list(
     ui: &mut egui::Ui,
-    registry: &mut AssetRegistry,
+    registry: &AssetRegistry,
     active: &mut ActiveEditor,
+    save_events: &mut EventWriter<SaveSurface>,
+    delete_events: &mut EventWriter<DeleteSurface>,
 ) {
     ui.label("Surfaces");
 
@@ -131,8 +135,11 @@ fn surface_list(
         });
     }
 
-    if let Some(name) = to_delete {
-        delete_surface(registry, active, &name);
+    if let Some(ref name) = to_delete {
+        delete_events.send(DeleteSurface { name: name.clone() });
+        if matches!(&*active, ActiveEditor::Surface { name: n } if n == name) {
+            *active = ActiveEditor::None;
+        }
     }
 
     if ui.button("+ New Surface").clicked() {
@@ -141,23 +148,8 @@ fn surface_list(
         let mut surface = crate::surface::SurfaceDef::default();
         surface.name = new_name.clone();
 
-        let path = PathBuf::from("data/surfaces")
-            .join(format!("{}.surface.ron", new_name));
-        crate::registry::save_surface_to_file(&surface, &path);
-
+        save_events.send(SaveSurface { name: new_name.clone(), data: surface });
         *active = ActiveEditor::Surface { name: new_name };
-    }
-}
-
-fn delete_surface(registry: &mut AssetRegistry, active: &mut ActiveEditor, name: &str) {
-    if let Some(path) = registry.remove_surface(name) {
-        if let Err(e) = std::fs::remove_file(&path) {
-            warn!("Failed to delete '{}': {}", path.display(), e);
-        }
-    }
-
-    if matches!(&*active, ActiveEditor::Surface { name: n } if n == name) {
-        *active = ActiveEditor::None;
     }
 }
 

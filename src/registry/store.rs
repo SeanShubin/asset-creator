@@ -136,6 +136,21 @@ impl Default for RegistryPlugin {
     }
 }
 
+// =====================================================================
+// Events — UI code fires these, registry handles the I/O
+// =====================================================================
+
+#[derive(Event)]
+pub struct SaveSurface {
+    pub name: String,
+    pub data: SurfaceDef,
+}
+
+#[derive(Event)]
+pub struct DeleteSurface {
+    pub name: String,
+}
+
 impl Plugin for RegistryPlugin {
     fn build(&self, app: &mut App) {
         let mut registry = AssetRegistry::default();
@@ -148,7 +163,38 @@ impl Plugin for RegistryPlugin {
 
         app.insert_resource(registry)
             .insert_resource(FileWatcher::new(data_dir))
-            .add_systems(Update, poll_file_changes);
+            .add_event::<SaveSurface>()
+            .add_event::<DeleteSurface>()
+            .add_systems(Update, (poll_file_changes, handle_save_surface, handle_delete_surface));
+    }
+}
+
+fn handle_save_surface(
+    mut events: EventReader<SaveSurface>,
+    mut registry: ResMut<AssetRegistry>,
+) {
+    for event in events.read() {
+        let path = registry.surface_path(&event.name)
+            .unwrap_or_else(|| {
+                let filename = format!("{}.surface.ron", event.name.replace(' ', "_").to_lowercase());
+                PathBuf::from("data/surfaces").join(filename)
+            });
+
+        save_surface_to_file(&event.data, &path);
+        registry.upsert_surface(event.name.clone(), event.data.clone(), path);
+    }
+}
+
+fn handle_delete_surface(
+    mut events: EventReader<DeleteSurface>,
+    mut registry: ResMut<AssetRegistry>,
+) {
+    for event in events.read() {
+        if let Some(path) = registry.remove_surface(&event.name) {
+            if let Err(e) = std::fs::remove_file(&path) {
+                warn!("Failed to delete '{}': {}", path.display(), e);
+            }
+        }
     }
 }
 
