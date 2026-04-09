@@ -4,47 +4,44 @@
     children: [
         // Chassis: pos=(0, 0.55, 0), size=(0.7, 0.35, 0.5)
         (name: "chassis", shape: Box,
-         bounds: (-0.35, 0.375, -0.25, 0.35, 0.725, 0.25),
-         color: (0.45, 0.45, 0.50)),
-
+            bounds: (-0.35, 0.375, -0.25, 0.35, 0.725, 0.25),
+            color: (0.45, 0.45, 0.50)),
         // Head: pos=(0, 0.851, 0), radius=0.18
         (name: "head", shape: Sphere,
-         bounds: (-0.18, 0.671, -0.18, 0.18, 1.031, 0.18),
-         color: (0.55, 0.55, 0.60)),
-
+            bounds: (-0.18, 0.671, -0.18, 0.18, 1.031, 0.18),
+            color: (0.55, 0.55, 0.60)),
         // Eye: pos=(0, 0.851, 0.15), radius=0.06
         (name: "eye", shape: Sphere,
-         bounds: (-0.06, 0.791, 0.09, 0.06, 0.911, 0.21),
-         color: (0.9, 0.2, 0.1),
-         emissive: true),
-
+            bounds: (-0.06, 0.791, 0.09, 0.06, 0.911, 0.21),
+            color: (0.9, 0.2, 0.1),
+            emissive: true),
         // Arms: pos=(±0.41, 0.675, 0), size=(0.12, 0.4, 0.12)
         (name: "arm", shape: Box,
-         bounds: (0.35, 0.475, -0.06, 0.47, 0.875, 0.06),
-         color: (0.25, 0.25, 0.28),
-         mirror: [X]),
-
+            bounds: (0.35, 0.475, -0.06, 0.47, 0.875, 0.06),
+            color: (0.25, 0.25, 0.28),
+            mirror: [X]),
         // 4 wheels from one definition: pos=(±0.42, 0.18, ±0.15)
-        (name: "wheel", import: "wheel",
-         bounds: (0.37, 0.0, 0.0, 0.47, 0.36, 0.3),
-         mirror: [X, Z]),
-
+        (name: "wheel", shape: Cylinder,
+            bounds: (0.37, 0.0, 0.0, 0.47, 0.36, 0.3),
+            orient: [Y, X, Z],
+            mirror: [X, Z]
+        ),
         // Blades: pos=(±0.41, 0.225, 0), size=(0.06, 0.5, 0.04)
         (name: "blade", shape: Box,
-         bounds: (0.38, -0.025, -0.02, 0.44, 0.475, 0.02),
-         color: (0.6, 0.25, 0.25),
-         mirror: [X]),
+            bounds: (0.38, -0.025, -0.02, 0.44, 0.475, 0.02),
+            color: (0.6, 0.25, 0.25),
+            mirror: [X]),
     ],
     animations: [
         (name: "idle", channels: [
             (part: "head", property: Rotation, axis: Y,
-             motion: Oscillate(amplitude: 0.15, speed: 2.0, offset: 0.0)),
+                motion: Oscillate(amplitude: 0.15, speed: 2.0, offset: 0.0)),
         ]),
         (name: "drive", channels: [
             (part: "wheel", property: Rotation, axis: X,
-             motion: Spin(rate: 8.0)),
+                motion: Spin(rate: 8.0)),
             (part: "arm", property: Rotation, axis: X,
-             motion: Oscillate(amplitude: 0.25, speed: 10.0, offset: 0.0)),
+                motion: Oscillate(amplitude: 0.25, speed: 10.0, offset: 0.0)),
         ]),
     ],
 )

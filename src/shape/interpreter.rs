@@ -248,7 +248,7 @@ fn build_child_transform(node: &ShapeNode) -> Transform {
     // Nodes with combinators (mirror, repeat, import) are pass-through containers.
     // Their children carry the actual positioning, so the combinator node itself
     // should not add a position offset — otherwise the position is applied twice.
-    let is_combinator = !node.mirror.is_empty() || node.repeat.is_some();
+    let is_combinator = !node.mirror.is_empty() || node.repeat.is_some() || node.import.is_some();
     let position = if is_combinator {
         Vec3::ZERO
     } else {
