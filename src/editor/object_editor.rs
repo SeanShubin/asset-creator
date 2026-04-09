@@ -18,7 +18,10 @@ pub struct ObjectEditorPlugin;
 
 impl Plugin for ObjectEditorPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ObjectEditorState>()
+        app.init_resource::<EditorActivation>()
+            .init_resource::<ShapeReloadState>()
+            .init_resource::<CameraFitState>()
+            .init_resource::<SceneStats>()
             .init_resource::<OrbitState>()
             .init_resource::<ZoomLimits>()
             .add_systems(Update, (
@@ -46,24 +49,36 @@ fn is_object_active(active: Res<ActiveEditor>) -> bool {
 // Resources
 // =====================================================================
 
+/// Tracks which shape is active and whether the editor scene is spawned.
 #[derive(Resource, Default)]
-struct ObjectEditorState {
+struct EditorActivation {
     current_path: Option<PathBuf>,
-    needs_reload: bool,
     spawned: bool,
     last_seen_editor: Option<ActiveEditor>,
-    last_shape_generation: u64,
-    needs_fit: bool,
-    needs_stats: bool,
-    fit_scale: f32,
-    stats: SceneStats,
 }
 
-#[derive(Default, Clone)]
+/// Tracks when the shape needs to be reloaded from the registry.
+#[derive(Resource, Default)]
+struct ShapeReloadState {
+    needs_reload: bool,
+    last_shape_generation: u64,
+}
+
+/// Camera fit state: computed on model load, used by zoom controls.
+#[derive(Resource, Default)]
+struct CameraFitState {
+    needs_fit: bool,
+    fit_scale: f32,
+}
+
+/// Scene statistics: triangle count, draw calls, etc.
+#[derive(Resource, Default)]
 struct SceneStats {
+    needs_update: bool,
     parts: usize,
     triangles: usize,
     draw_calls: usize,
+    fit_scale: f32,
 }
 
 #[derive(Component)]
@@ -78,23 +93,25 @@ struct EditorLight;
 
 fn handle_activation(
     active: Res<ActiveEditor>,
-    mut state: ResMut<ObjectEditorState>,
+    mut activation: ResMut<EditorActivation>,
+    mut reload: ResMut<ShapeReloadState>,
+    mut fit: ResMut<CameraFitState>,
     mut commands: Commands,
     existing_editor: Query<Entity, With<ObjectEditorEntity>>,
     existing_shapes: Query<Entity, With<ShapeRoot>>,
 ) {
     let current = (*active).clone();
-    let changed = state.last_seen_editor.as_ref() != Some(&current);
+    let changed = activation.last_seen_editor.as_ref() != Some(&current);
     if !changed { return; }
 
-    let was_object = matches!(&state.last_seen_editor, Some(ActiveEditor::Object { .. }));
+    let was_object = matches!(&activation.last_seen_editor, Some(ActiveEditor::Object { .. }));
     let is_object = matches!(&current, ActiveEditor::Object { .. });
 
     // Despawn if leaving object editor
     if was_object && !is_object {
         despawn_all(&mut commands, &existing_editor, &existing_shapes);
-        state.spawned = false;
-        state.current_path = None;
+        activation.spawned = false;
+        activation.current_path = None;
     }
 
     // Switching between shapes — despawn old shape, keep scene
@@ -104,20 +121,20 @@ fn handle_activation(
     }
 
     // Spawn scene if entering object editor for the first time
-    if is_object && !state.spawned {
+    if is_object && !activation.spawned {
         spawn_scene(&mut commands);
-        state.spawned = true;
+        activation.spawned = true;
     }
 
     // Load the new shape and fit camera
     if let ActiveEditor::Object { ref path } = current {
-        state.current_path = Some(path.clone());
-        state.needs_reload = true;
-        state.needs_fit = true;
+        activation.current_path = Some(path.clone());
+        reload.needs_reload = true;
+        fit.needs_fit = true;
         info!("Object editor activated for '{}'", path.display());
     }
 
-    state.last_seen_editor = Some(current);
+    activation.last_seen_editor = Some(current);
 }
 
 fn despawn_all(
@@ -162,12 +179,12 @@ fn spawn_scene(commands: &mut Commands) {
 // =====================================================================
 
 fn watch_shape_changes(
-    mut state: ResMut<ObjectEditorState>,
+    mut reload: ResMut<ShapeReloadState>,
     registry: Res<AssetRegistry>,
 ) {
-    if registry.shape_generation != state.last_shape_generation {
-        state.last_shape_generation = registry.shape_generation;
-        state.needs_reload = true;
+    if registry.shape_generation != reload.last_shape_generation {
+        reload.last_shape_generation = registry.shape_generation;
+        reload.needs_reload = true;
     }
 }
 
@@ -179,14 +196,16 @@ fn reload_shape(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut state: ResMut<ObjectEditorState>,
+    mut reload: ResMut<ShapeReloadState>,
+    mut stats: ResMut<SceneStats>,
+    activation: Res<EditorActivation>,
     registry: Res<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
 ) {
-    if !state.needs_reload { return; }
-    state.needs_reload = false;
+    if !reload.needs_reload { return; }
+    reload.needs_reload = false;
 
-    let Some(path) = &state.current_path else { return };
+    let Some(path) = &activation.current_path else { return };
 
     let roots: Vec<Entity> = existing.iter().collect();
     despawn_shape(&mut commands, &roots);
@@ -197,7 +216,7 @@ fn reload_shape(
     };
 
     spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
-    state.needs_stats = true;
+    stats.needs_update = true;
 }
 
 // =====================================================================
@@ -221,19 +240,19 @@ const ZOOM_MAX_PCT: f32 = 200.0;
 
 /// Runs on shape switch: computes fit scale and sets initial zoom to 100%.
 fn on_model_loaded(
-    mut state: ResMut<ObjectEditorState>,
+    mut fit: ResMut<CameraFitState>,
     mut camera: Query<(&mut Projection, &Camera), With<OrbitCamera>>,
     mut limits: ResMut<ZoomLimits>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
 ) {
-    if !state.needs_fit { return; }
+    if !fit.needs_fit { return; }
     if mesh_aabbs.is_empty() { return; }
-    state.needs_fit = false;
+    fit.needs_fit = false;
 
     let fit_scale = compute_fit_scale(&mesh_aabbs);
     if fit_scale < 0.001 { return; }
 
-    state.fit_scale = fit_scale;
+    fit.fit_scale = fit_scale;
     update_zoom_limits(&mut limits, fit_scale);
 
     if let Ok((mut projection, _)) = camera.get_single_mut() {
@@ -245,25 +264,25 @@ fn on_model_loaded(
 
 /// Runs on every reload: updates stats, fit_scale, and zoom limits without changing zoom.
 fn compute_stats(
-    mut state: ResMut<ObjectEditorState>,
+    mut stats: ResMut<SceneStats>,
     mut limits: ResMut<ZoomLimits>,
     parts: Query<&ShapePart>,
     mesh_handles: Query<&Mesh3d>,
     mesh_assets: Res<Assets<Mesh>>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
 ) {
-    if !state.needs_stats { return; }
+    if !stats.needs_update { return; }
     if mesh_handles.is_empty() { return; }
-    state.needs_stats = false;
+    stats.needs_update = false;
 
     let fit_scale = compute_fit_scale(&mesh_aabbs);
     if fit_scale > 0.001 {
-        state.fit_scale = fit_scale;
+        stats.fit_scale = fit_scale;
         update_zoom_limits(&mut limits, fit_scale);
     }
 
-    let part_count = parts.iter().count();
-    let draw_calls = mesh_handles.iter().count();
+    stats.parts = parts.iter().count();
+    stats.draw_calls = mesh_handles.iter().count();
 
     let mut triangle_count = 0;
     for mesh_handle in &mesh_handles {
@@ -274,11 +293,7 @@ fn compute_stats(
         }
     }
 
-    state.stats = SceneStats {
-        parts: part_count,
-        triangles: triangle_count,
-        draw_calls,
-    };
+    stats.triangles = triangle_count;
 }
 
 /// Compute the orthographic scale at which the AABB fills the viewport with ~5% border.
@@ -472,11 +487,11 @@ fn draw_offset_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, color: C
 
 fn keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mut state: ResMut<ObjectEditorState>,
+    mut reload: ResMut<ShapeReloadState>,
     mut animators: Query<&mut ShapeAnimator>,
 ) {
     if keys.just_pressed(KeyCode::KeyR) {
-        state.needs_reload = true;
+        reload.needs_reload = true;
         info!("Reloading shape...");
     }
     if keys.just_pressed(KeyCode::Tab) {
@@ -499,13 +514,14 @@ fn part_tree_ui(
     mut commands: Commands,
     mut orbit: ResMut<OrbitState>,
     mut camera: Query<&mut Projection, With<OrbitCamera>>,
-    state: Res<ObjectEditorState>,
+    fit: Res<CameraFitState>,
+    stats: Res<SceneStats>,
 ) {
     let ctx = contexts.ctx_mut();
     let mut toggles: Vec<(Entity, Visibility)> = Vec::new();
 
     egui::SidePanel::left("part_tree").min_width(200.0).show(ctx, |ui| {
-        camera_controls(ui, &mut orbit, &mut camera, &state);
+        camera_controls(ui, &mut orbit, &mut camera, &fit, &stats);
         ui.separator();
         animation_controls(ui, &roots, &mut animators);
         ui.heading("Part Tree");
@@ -528,11 +544,11 @@ fn camera_controls(
     ui: &mut egui::Ui,
     orbit: &mut OrbitState,
     camera: &mut Query<&mut Projection, With<OrbitCamera>>,
-    state: &ObjectEditorState,
+    fit: &CameraFitState,
+    stats: &SceneStats,
 ) {
     ui.heading("Camera");
 
-    // Editable yaw and pitch
     ui.horizontal(|ui| {
         ui.label("Yaw:");
         ui.add(egui::DragValue::new(&mut orbit.yaw).range(-180.0..=180.0).suffix("°").speed(1.0));
@@ -542,16 +558,14 @@ fn camera_controls(
         ui.add(egui::DragValue::new(&mut orbit.pitch).range(-89.9..=89.9).suffix("°").speed(1.0));
     });
 
-    // Editable zoom as percentage
-    let mut zoom_pct = current_zoom_pct(camera, state);
+    let mut zoom_pct = current_zoom_pct(camera, fit.fit_scale);
     ui.horizontal(|ui| {
         ui.label("Zoom:");
         if ui.add(egui::DragValue::new(&mut zoom_pct).range(10.0..=200.0).suffix("%").speed(1.0)).changed() {
-            set_zoom_from_pct(camera, state, zoom_pct);
+            set_zoom_from_pct(camera, fit.fit_scale, zoom_pct);
         }
     });
 
-    // View direction buttons
     ui.horizontal(|ui| {
         if ui.button("Front").clicked() { orbit.yaw = 0.0; orbit.pitch = 0.0; }
         if ui.button("Right").clicked() { orbit.yaw = 90.0; orbit.pitch = 0.0; }
@@ -565,24 +579,23 @@ fn camera_controls(
             orbit.yaw = DEFAULT_YAW;
             orbit.pitch = DEFAULT_PITCH;
             orbit.target = Vec3::ZERO;
-            set_zoom_from_pct(camera, state, 100.0);
+            set_zoom_from_pct(camera, fit.fit_scale, 100.0);
         }
     });
 
-    // Scene stats
     ui.separator();
     ui.label(format!("Parts: {}  Tris: {}  Draws: {}",
-        state.stats.parts, state.stats.triangles, state.stats.draw_calls));
+        stats.parts, stats.triangles, stats.draw_calls));
 }
 
 fn current_zoom_pct(
     camera: &Query<&mut Projection, With<OrbitCamera>>,
-    state: &ObjectEditorState,
+    fit_scale: f32,
 ) -> f32 {
-    if state.fit_scale <= 0.0 { return 100.0; }
+    if fit_scale <= 0.0 { return 100.0; }
     if let Ok(proj) = camera.get_single() {
         if let Projection::Orthographic(ref ortho) = *proj {
-            return state.fit_scale / ortho.scale * 100.0;
+            return fit_scale / ortho.scale * 100.0;
         }
     }
     100.0
@@ -590,13 +603,13 @@ fn current_zoom_pct(
 
 fn set_zoom_from_pct(
     camera: &mut Query<&mut Projection, With<OrbitCamera>>,
-    state: &ObjectEditorState,
+    fit_scale: f32,
     pct: f32,
 ) {
-    if state.fit_scale <= 0.0 { return; }
+    if fit_scale <= 0.0 { return; }
     if let Ok(mut proj) = camera.get_single_mut() {
         if let Projection::Orthographic(ortho) = proj.as_mut() {
-            ortho.scale = state.fit_scale / (pct / 100.0);
+            ortho.scale = fit_scale / (pct / 100.0);
         }
     }
 }
