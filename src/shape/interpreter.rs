@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
@@ -42,8 +43,8 @@ pub fn spawn_shape(
         Visibility::default(),
     )).id();
 
-    let default_color = Color3(0.5, 0.5, 0.5);
-    process_node(commands, meshes, materials, root, shape, default_color, registry);
+    let colors = shape.colors.clone();
+    process_node(commands, meshes, materials, root, shape, &colors, registry);
     root
 }
 
@@ -51,6 +52,27 @@ pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
     for &e in roots {
         commands.entity(e).despawn_recursive();
     }
+}
+
+// =====================================================================
+// Color context
+// =====================================================================
+
+/// Merge parent colors over child colors. Parent wins on conflict.
+fn merge_colors(parent: &HashMap<String, Color3>, child: &HashMap<String, Color3>) -> HashMap<String, Color3> {
+    let mut merged = child.clone();
+    for (k, v) in parent {
+        merged.insert(k.clone(), *v);
+    }
+    merged
+}
+
+/// Resolve a color name to a Color3 value using the color context.
+fn resolve_color(name: &str, colors: &HashMap<String, Color3>) -> Color3 {
+    colors.get(name).copied().unwrap_or_else(|| {
+        warn!("Color '{}' not found in color map, using default gray", name);
+        Color3(0.5, 0.5, 0.5)
+    })
 }
 
 // =====================================================================
@@ -63,35 +85,40 @@ fn process_node(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    inherited_color: Color3,
+    colors: &HashMap<String, Color3>,
     registry: &AssetRegistry,
 ) {
-    let color = node.color.unwrap_or(inherited_color);
+    // Merge this node's color definitions into the context
+    let colors = if node.colors.is_empty() {
+        colors.clone()
+    } else {
+        merge_colors(colors, &node.colors)
+    };
 
     if !node.mirror.is_empty() {
-        process_mirror(commands, meshes, materials, parent, node, &node.mirror, color, registry);
+        process_mirror(commands, meshes, materials, parent, node, &node.mirror, &colors, registry);
         return;
     }
 
     if let Some(repeat) = &node.repeat {
-        process_repeat(commands, meshes, materials, parent, node, repeat, color, registry);
+        process_repeat(commands, meshes, materials, parent, node, repeat, &colors, registry);
         return;
     }
 
     if let Some(import_name) = &node.import {
-        process_import(commands, meshes, materials, parent, node, import_name, color, registry);
+        process_import(commands, meshes, materials, parent, node, import_name, &colors, registry);
         return;
     }
 
-    attach_geometry(commands, meshes, materials, parent, node, color);
+    attach_geometry(commands, meshes, materials, parent, node, &colors);
 
     for child in &node.children {
-        spawn_child(commands, meshes, materials, parent, child, color, registry);
+        spawn_child(commands, meshes, materials, parent, child, &colors, registry);
     }
 }
 
 // =====================================================================
-// Import — resolve from registry cache
+// Import
 // =====================================================================
 
 fn process_import(
@@ -101,7 +128,7 @@ fn process_import(
     parent: Entity,
     node: &ShapeNode,
     import_name: &str,
-    color: Color3,
+    colors: &HashMap<String, Color3>,
     registry: &AssetRegistry,
 ) {
     let imported = match registry.get_shape(import_name) {
@@ -112,25 +139,24 @@ fn process_import(
         }
     };
 
-    // Compute the imported shape's native AABB from all its descendants
     let native_aabb = imported.compute_aabb()
         .unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
     let placement = node.bounds.unwrap_or(native_aabb);
 
-    // Remap the entire imported tree from native space to placement space
     let mut remapped = imported;
     remapped.remap_bounds(&native_aabb, &placement);
 
-    // Process the remapped tree as if it were inline — no scale transforms needed
-    let import_color = node.color.unwrap_or(color);
-    attach_geometry(commands, meshes, materials, parent, &remapped, import_color);
+    // Parent colors override imported shape's colors
+    let import_colors = merge_colors(colors, &remapped.colors);
+
+    attach_geometry(commands, meshes, materials, parent, &remapped, &import_colors);
     for child in &remapped.children {
-        spawn_child(commands, meshes, materials, parent, child, import_color, registry);
+        spawn_child(commands, meshes, materials, parent, child, &import_colors, registry);
     }
 }
 
 // =====================================================================
-// Combinator handlers
+// Combinators
 // =====================================================================
 
 fn process_repeat(
@@ -140,7 +166,7 @@ fn process_repeat(
     parent: Entity,
     node: &ShapeNode,
     repeat: &RepeatSpec,
-    color: Color3,
+    colors: &HashMap<String, Color3>,
     registry: &AssetRegistry,
 ) {
     let start = if repeat.center {
@@ -157,7 +183,7 @@ fn process_repeat(
         if let Some(ref name) = instance.name {
             instance.name = Some(format!("{name}_{i}"));
         }
-        spawn_child(commands, meshes, materials, parent, &instance, color, registry);
+        spawn_child(commands, meshes, materials, parent, &instance, colors, registry);
     }
 }
 
@@ -168,21 +194,18 @@ fn process_mirror(
     parent: Entity,
     node: &ShapeNode,
     axes: &[Axis],
-    color: Color3,
+    colors: &HashMap<String, Color3>,
     registry: &AssetRegistry,
 ) {
     let mut base = node.clone();
     base.mirror = Vec::new();
 
-    // Generate all 2^N combinations of axis flips
     let combinations = mirror_combinations(axes);
     for (flipped_axes, suffix) in &combinations {
         let mut copy = base.clone();
-        // Reflect bounds (position) on each flipped axis
         for &axis in flipped_axes {
             flip_node_bounds(&mut copy, axis);
         }
-        // Reflect shape orientation for each flipped axis
         for &axis in flipped_axes {
             reflect_orientation(&mut copy, axis);
         }
@@ -191,12 +214,11 @@ fn process_mirror(
                 copy.name = Some(format!("{name}_{suffix}"));
             }
         }
-        spawn_child(commands, meshes, materials, parent, &copy, color, registry);
+        spawn_child(commands, meshes, materials, parent, &copy, colors, registry);
     }
 }
 
 /// Generate all 2^N combinations of flipping the given axes.
-/// Returns vec of (flipped_axes, name_suffix).
 fn mirror_combinations(axes: &[Axis]) -> Vec<(Vec<Axis>, String)> {
     let n = axes.len();
     let count = 1 << n;
@@ -233,7 +255,7 @@ fn spawn_child(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    inherited_color: Color3,
+    colors: &HashMap<String, Color3>,
     registry: &AssetRegistry,
 ) {
     let child_tf = build_child_transform(node);
@@ -245,14 +267,10 @@ fn spawn_child(
     )).id();
     commands.entity(parent).add_child(child);
 
-    let color = node.color.unwrap_or(inherited_color);
-    process_node(commands, meshes, materials, child, node, color, registry);
+    process_node(commands, meshes, materials, child, node, colors, registry);
 }
 
 fn build_child_transform(node: &ShapeNode) -> Transform {
-    // Nodes with combinators (mirror, repeat, import) are pass-through containers.
-    // Their children carry the actual positioning, so the combinator node itself
-    // should not add a position offset — otherwise the position is applied twice.
     let is_combinator = !node.mirror.is_empty() || node.repeat.is_some() || node.import.is_some();
     let position = if is_combinator {
         Vec3::ZERO
@@ -282,12 +300,20 @@ fn attach_geometry(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    color: Color3,
+    colors: &HashMap<String, Color3>,
 ) {
     let Some(shape) = &node.shape else { return };
     let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
     let om = node.orient;
     let is_mirrored = om.determinant() < 0.0;
+
+    let color = node.color.as_ref()
+        .map(|name| resolve_color(name, colors))
+        .unwrap_or_else(|| {
+            warn!("Shape '{}' has no color specified", node.name.as_deref().unwrap_or("unnamed"));
+            Color3(0.5, 0.5, 0.5)
+        });
+
     let (mesh, material) = make_mesh(meshes, materials, *shape, color, node.emissive, is_mirrored);
     let mesh_tf = mesh_transform(*shape, &bounds, &om);
 
@@ -320,42 +346,18 @@ fn attach_geometry(
 // Mesh creation
 // =====================================================================
 
-/// Compute the full mesh transform: rotation from orient, scale from bounds.
-/// Handles the axis remapping so scale is applied correctly before rotation.
-/// Build the mesh transform from bounds and orient.
-///
-/// The orient matrix M maps local axes to world axes. Each column is a signed unit vector.
-/// We scale each column by the corresponding bounds dimension to get the full transform.
-///
-/// For a unit mesh in a 1x1x1 box:
-///   world_pos = M * diag(size) * local_pos
-///
-/// This naturally handles both rotation and mirroring in one matrix,
-/// without needing to decompose into separate rotation + scale.
 fn mesh_transform(shape: PrimitiveShape, bounds: &Bounds, om: &Mat3) -> Transform {
     let size = bounds.size();
-
-    // Each column of the orient matrix is a unit direction.
-    // The local X axis of the mesh should span size along the orient's X direction.
-    // But size is in world space, and we need to figure out which size dimension
-    // maps to each local axis.
-    //
-    // The orient matrix column i tells us: "local axis i maps to world direction col_i."
-    // The size along local axis i = the world size projected onto col_i's direction.
-    // Since col_i is an axis-aligned unit vector, this is just picking the right component.
 
     let local_x_size = pick_size_for_direction(om.x_axis, size);
     let local_y_size = pick_size_for_direction(om.y_axis, size);
     let local_z_size = pick_size_for_direction(om.z_axis, size);
 
-    // Torus has non-uniform unit dimensions
     let local_scale = match shape {
         PrimitiveShape::Torus => Vec3::new(local_x_size, local_y_size / 0.3, local_z_size),
         _ => Vec3::new(local_x_size, local_y_size, local_z_size),
     };
 
-    // Build the final 3x3 matrix: orient columns scaled by local dimensions.
-    // This IS the complete transform — rotation, scale, and mirror all in one.
     let col_x = om.x_axis * local_scale.x;
     let col_y = om.y_axis * local_scale.y;
     let col_z = om.z_axis * local_scale.z;
@@ -365,8 +367,6 @@ fn mesh_transform(shape: PrimitiveShape, bounds: &Bounds, om: &Mat3) -> Transfor
     Transform::from_matrix(bevy::math::Mat4::from(affine))
 }
 
-/// Given a direction vector (signed unit axis) and world size (sx, sy, sz),
-/// return the size component corresponding to that direction.
 fn pick_size_for_direction(dir: Vec3, size: (f32, f32, f32)) -> f32 {
     if dir.x.abs() > 0.5 { size.0 }
     else if dir.y.abs() > 0.5 { size.1 }
@@ -382,7 +382,6 @@ fn make_mesh(
     is_mirrored: bool,
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
     let mesh = match shape {
-        // Unit meshes — one per primitive type, scaled by transform
         PrimitiveShape::Box => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         PrimitiveShape::Sphere => meshes.add(Sphere::new(0.5).mesh().build()),
         PrimitiveShape::Cylinder => meshes.add(Cylinder::new(0.5, 1.0).mesh().build()),
@@ -417,6 +416,14 @@ fn make_mesh(
 // Helpers
 // =====================================================================
 
+const DEFAULT_BOUNDS: Bounds = Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5);
+
+fn reify_bounds(node: &mut ShapeNode) {
+    if node.bounds.is_none() && node.shape.is_some() {
+        node.bounds = Some(DEFAULT_BOUNDS);
+    }
+}
+
 fn bounds_center(bounds: &Option<Bounds>) -> Vec3 {
     match bounds {
         Some(b) => {
@@ -424,26 +431,6 @@ fn bounds_center(bounds: &Option<Bounds>) -> Vec3 {
             Vec3::new(c.0, c.1, c.2)
         }
         None => Vec3::ZERO,
-    }
-}
-
-const DEFAULT_BOUNDS: Bounds = Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5);
-
-/// Ensure bounds are reified before transforming.
-fn reify_bounds(node: &mut ShapeNode) {
-    if node.bounds.is_none() && node.shape.is_some() {
-        node.bounds = Some(DEFAULT_BOUNDS);
-    }
-}
-
-/// Reflect the orientation of a node and all its descendants on a world axis.
-/// Used by the mirror combinator so reflected copies have physically correct shapes.
-fn reflect_orientation(node: &mut ShapeNode, axis: Axis) {
-    if node.shape.is_some() {
-        reflect_orient(&mut node.orient, axis);
-    }
-    for child in &mut node.children {
-        reflect_orientation(child, axis);
     }
 }
 
@@ -457,11 +444,8 @@ fn offset_bounds(bounds: &mut Option<Bounds>, axis: Axis, offset: f32) {
     }
 }
 
-/// Flip a node's bounds on the given axis. Recursively flips children.
-/// Does NOT modify orient — the mirror combinator only affects position, not shape orientation.
 fn flip_node_bounds(node: &mut ShapeNode, axis: Axis) {
     reify_bounds(node);
-
     if let Some(ref mut b) = node.bounds {
         match axis {
             Axis::X => { let tmp = -b.0; b.0 = -b.3; b.3 = tmp; }
@@ -469,9 +453,16 @@ fn flip_node_bounds(node: &mut ShapeNode, axis: Axis) {
             Axis::Z => { let tmp = -b.2; b.2 = -b.5; b.5 = tmp; }
         }
     }
-
     for child in &mut node.children {
         flip_node_bounds(child, axis);
     }
 }
 
+fn reflect_orientation(node: &mut ShapeNode, axis: Axis) {
+    if node.shape.is_some() {
+        reflect_orient(&mut node.orient, axis);
+    }
+    for child in &mut node.children {
+        reflect_orientation(child, axis);
+    }
+}

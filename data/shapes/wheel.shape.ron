@@ -1,7 +1,8 @@
 (
     name: "wheel",
+    colors: { "body": (0.25, 0.25, 0.28) },
     shape: Cylinder,
     bounds: (-1, -1, -1, 1, 1, 1),
     orient: (Right, NoMirror, NoRotation),
-    color: (0.25, 0.25, 0.28),
+    color: "body",
 )

@@ -1,5 +1,6 @@
 use bevy::math::{Mat3, Quat, Vec3};
 use serde::Deserialize;
+use std::collections::HashMap;
 use crate::util::Color3;
 
 /// A shape node is both the file format and the node type.
@@ -15,7 +16,9 @@ pub struct ShapeNode {
     #[serde(default, deserialize_with = "deserialize_orient")]
     pub orient: Mat3,
     #[serde(default)]
-    pub color: Option<Color3>,
+    pub colors: HashMap<String, Color3>,
+    #[serde(default)]
+    pub color: Option<String>,
     #[serde(default)]
     pub emissive: bool,
     #[serde(default)]

@@ -15,7 +15,9 @@
       "Read(//tmp/**)",
       "Bash(grep -v \"^.*//.*state\\\\.\")",
       "Bash(grep -E \"-->|warning:\")",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(grep -l \"color:\" data/shapes/*.ron)",
+      "Bash(ls data/shapes/*.ron)"
     ]
   }
 }
