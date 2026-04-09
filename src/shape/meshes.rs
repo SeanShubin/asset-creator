@@ -288,9 +288,6 @@ pub fn create_unit_corner() -> Mesh {
 /// Generate an ellipsoidal cap. The cap has base radius `base_radius` in XZ
 /// and rises `height` in Y. Centered so base is at `y = -height/2` and peak at `y = height/2`.
 /// `normal_sign`: 1.0 for outward (dome), -1.0 for inward (bowl).
-fn compute_sphere_radius(base_radius: f32, height: f32) -> f32 {
-    (base_radius * base_radius + height * height) / (2.0 * height)
-}
 
 fn generate_ellipsoid_cap(
     base_radius: f32,

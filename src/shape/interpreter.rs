@@ -334,42 +334,6 @@ fn attach_geometry(
 // Mesh creation
 // =====================================================================
 
-/// Compute the scale to apply to a unit mesh before rotation.
-/// All unit meshes are defined in a 1x1x1 box. The orient rotation will
-/// reposition the axes. We need the scale in the mesh's pre-rotation space.
-///
-/// For Orient::Single, the rotation maps the mesh's Y axis to the target axis.
-/// So the bounds dimension along the target axis should map to the mesh's Y scale.
-///
-/// For Orient::Full, the rotation maps (X,Y,Z) → (right,up,forward).
-/// The bounds are in world space. We need to figure out which bounds dimension
-/// maps to each mesh axis by applying the inverse rotation.
-fn mesh_scale_for_bounds(shape: PrimitiveShape, bounds: &Bounds) -> Vec3 {
-    let size = bounds.size();
-    // Scale in world space — the rotation quaternion will handle reorientation.
-    // Since Bevy applies scale in local space THEN rotation, we need the scale
-    // in the pre-rotation frame. But our orient.to_quat() produces the rotation,
-    // and we apply both to the mesh transform as scale + rotation.
-    //
-    // For this to work correctly: we set scale = bounds size in world space,
-    // and the mesh transform has rotation applied AFTER scale.
-    // Bevy's Transform applies: scale → rotation → translation.
-    // So scale stretches the unit mesh, then rotation reorients it.
-    //
-    // This means scale should be in the ROTATED frame. For a cylinder with
-    // orient Y (identity rotation), scale (sx, sy, sz) maps directly.
-    // For orient X (rotated 90° around Z), the mesh's Y becomes world X.
-    // Scale (sx, sy, sz) in local space means: sx along mesh-X (world-Y after rotation),
-    // sy along mesh-Y (world-X after rotation), sz along mesh-Z (world-Z).
-    //
-    // So for orient X: we need local_scale = (size.y, size.x, size.z)
-    // because local Y (which becomes world X) needs size.x.
-    //
-    // The general formula: inverse-rotate the world size vector to get local scale.
-    // But size is always positive, and rotation can flip signs. So we use abs().
-    Vec3::new(size.0, size.1, size.2)
-}
-
 /// Compute the full mesh transform: rotation from orient, scale from bounds.
 /// Handles the axis remapping so scale is applied correctly before rotation.
 /// Build the mesh transform from bounds and orient.

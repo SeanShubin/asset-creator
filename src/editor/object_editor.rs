@@ -6,7 +6,7 @@ use crate::browser::ActiveEditor;
 use crate::registry::AssetRegistry;
 use crate::shape::{
     animate_shapes, ShapeAnimator, ShapePart, ShapeRoot,
-    despawn_shape, load_shape, spawn_shape,
+    despawn_shape, spawn_shape,
 };
 use super::orbit_camera::{self, OrbitCamera, OrbitState, ZoomLimits};
 
@@ -52,8 +52,6 @@ struct ObjectEditorState {
     needs_reload: bool,
     spawned: bool,
     last_seen_editor: Option<ActiveEditor>,
-    last_file_check: f64,
-    last_mtime: Option<std::time::SystemTime>,
     last_shape_generation: u64,
     needs_fit: bool,
     needs_stats: bool,
@@ -97,7 +95,6 @@ fn handle_activation(
         despawn_all(&mut commands, &existing_editor, &existing_shapes);
         state.spawned = false;
         state.current_path = None;
-        state.last_mtime = None;
     }
 
     // Switching between shapes — despawn old shape, keep scene
@@ -117,7 +114,6 @@ fn handle_activation(
         state.current_path = Some(path.clone());
         state.needs_reload = true;
         state.needs_fit = true;
-        state.last_mtime = None;
         info!("Object editor activated for '{}'", path.display());
     }
 
