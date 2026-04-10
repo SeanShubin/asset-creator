@@ -483,6 +483,8 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
         GridPlane::YZ => (gmin.y, gmax.y, gmin.z, gmax.z),
     };
 
+    const ZERO_NUDGE: f32 = 0.015;
+
     // Lines along the first axis at integer positions of the second axis
     let b_start = b_min.ceil() as i32;
     let b_end = b_max.floor() as i32;
@@ -494,6 +496,15 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
             GridPlane::YZ => (Vec3::new(offset, a_min, t), Vec3::new(offset, a_max, t)),
         };
         gizmos.line(a, b, color);
+        if i == 0 {
+            let nudge = match plane {
+                GridPlane::XZ => Vec3::new(0.0, 0.0, ZERO_NUDGE),
+                GridPlane::XY => Vec3::new(0.0, ZERO_NUDGE, 0.0),
+                GridPlane::YZ => Vec3::new(0.0, 0.0, ZERO_NUDGE),
+            };
+            gizmos.line(a + nudge, b + nudge, color);
+            gizmos.line(a - nudge, b - nudge, color);
+        }
     }
 
     // Lines along the second axis at integer positions of the first axis
@@ -507,6 +518,15 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
             GridPlane::YZ => (Vec3::new(offset, t, b_min), Vec3::new(offset, t, b_max)),
         };
         gizmos.line(a, b, color);
+        if i == 0 {
+            let nudge = match plane {
+                GridPlane::XZ => Vec3::new(ZERO_NUDGE, 0.0, 0.0),
+                GridPlane::XY => Vec3::new(ZERO_NUDGE, 0.0, 0.0),
+                GridPlane::YZ => Vec3::new(0.0, ZERO_NUDGE, 0.0),
+            };
+            gizmos.line(a + nudge, b + nudge, color);
+            gizmos.line(a - nudge, b - nudge, color);
+        }
     }
 }
 
