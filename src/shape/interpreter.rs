@@ -1,6 +1,4 @@
 use bevy::prelude::*;
-use std::collections::HashMap;
-
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::animation::ShapeAnimator;
@@ -45,7 +43,7 @@ pub fn spawn_shape(
         Visibility::default(),
     )).id();
 
-    let colors = shape.colors.clone();
+    let colors = shape.palette.clone();
     process_node(commands, meshes, materials, root, shape, &colors, registry);
     root
 }
@@ -88,21 +86,68 @@ pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
 // Color context
 // =====================================================================
 
+type ColorMap = Vec<(String, Color3)>;
+
 /// Merge parent colors over child colors. Parent wins on conflict.
-fn merge_colors(parent: &HashMap<String, Color3>, child: &HashMap<String, Color3>) -> HashMap<String, Color3> {
+fn merge_colors(parent: &ColorMap, child: &ColorMap) -> ColorMap {
     let mut merged = child.clone();
-    for (k, v) in parent {
-        merged.insert(k.clone(), *v);
+    for (pk, pv) in parent {
+        if let Some(entry) = merged.iter_mut().find(|(k, _)| k == pk) {
+            entry.1 = *pv;
+        } else {
+            merged.push((pk.clone(), *pv));
+        }
     }
     merged
 }
 
+/// Apply color_map or colors from an import node to the imported shape's palette.
+/// Returns the remapped color map using the parent's color context.
+fn apply_color_remapping(
+    import_node: &ShapeNode,
+    imported_colors: &ColorMap,
+    parent_colors: &ColorMap,
+) -> ColorMap {
+    if !import_node.color_map.is_empty() && !import_node.colors.is_empty() {
+        warn!("Node '{}' specifies both color_map and colors — using color_map",
+            import_node.name.as_deref().unwrap_or("unnamed"));
+    }
+
+    if !import_node.color_map.is_empty() {
+        // Named remapping: child color name → parent color name
+        imported_colors.iter().map(|(child_name, child_val)| {
+            if let Some(parent_name) = import_node.color_map.get(child_name) {
+                let resolved = resolve_color(parent_name, parent_colors);
+                (child_name.clone(), resolved)
+            } else {
+                (child_name.clone(), *child_val)
+            }
+        }).collect()
+    } else if !import_node.colors.is_empty() {
+        // Positional remapping: parent color names in order
+        imported_colors.iter().enumerate().map(|(i, (child_name, child_val))| {
+            if let Some(parent_name) = import_node.colors.get(i) {
+                let resolved = resolve_color(parent_name, parent_colors);
+                (child_name.clone(), resolved)
+            } else {
+                (child_name.clone(), *child_val)
+            }
+        }).collect()
+    } else {
+        // No remapping — use parent colors merged over imported colors
+        merge_colors(parent_colors, imported_colors)
+    }
+}
+
 /// Resolve a color name to a Color3 value using the color context.
-fn resolve_color(name: &str, colors: &HashMap<String, Color3>) -> Color3 {
-    colors.get(name).copied().unwrap_or_else(|| {
-        warn!("Color '{}' not found in color map, using default gray", name);
-        Color3(0.5, 0.5, 0.5)
-    })
+fn resolve_color(name: &str, colors: &ColorMap) -> Color3 {
+    colors.iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| *v)
+        .unwrap_or_else(|| {
+            warn!("Color '{}' not found in color map, using default gray", name);
+            Color3(0.5, 0.5, 0.5)
+        })
 }
 
 // =====================================================================
@@ -115,14 +160,14 @@ fn process_node(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    colors: &HashMap<String, Color3>,
+    colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
     // Merge this node's color definitions into the context
-    let colors = if node.colors.is_empty() {
+    let colors = if node.palette.is_empty() {
         colors.clone()
     } else {
-        merge_colors(colors, &node.colors)
+        merge_colors(colors, &node.palette)
     };
 
     match node.combinator() {
@@ -155,7 +200,7 @@ fn process_import(
     parent: Entity,
     node: &ShapeNode,
     import_name: &str,
-    colors: &HashMap<String, Color3>,
+    colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
     let imported = match registry.get_shape(import_name) {
@@ -173,8 +218,8 @@ fn process_import(
     let mut remapped = imported;
     remapped.remap_bounds(&native_aabb, &placement);
 
-    // Parent colors override imported shape's colors
-    let import_colors = merge_colors(colors, &remapped.colors);
+    // Apply color remapping from the import node
+    let import_colors = apply_color_remapping(node, &remapped.palette, colors);
 
     attach_geometry(commands, meshes, materials, parent, &remapped, &import_colors);
     for child in &remapped.children {
@@ -193,7 +238,7 @@ fn process_repeat(
     parent: Entity,
     node: &ShapeNode,
     repeat: &RepeatSpec,
-    colors: &HashMap<String, Color3>,
+    colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
     let start = if repeat.center {
@@ -221,7 +266,7 @@ fn process_mirror(
     parent: Entity,
     node: &ShapeNode,
     axes: &[Axis],
-    colors: &HashMap<String, Color3>,
+    colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
     let mut base = node.clone();
@@ -282,7 +327,7 @@ fn spawn_child(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    colors: &HashMap<String, Color3>,
+    colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
     let child_tf = build_child_transform(node);
@@ -327,7 +372,7 @@ fn attach_geometry(
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    colors: &HashMap<String, Color3>,
+    colors: &ColorMap,
 ) {
     let Some(shape) = &node.shape else { return };
     let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));

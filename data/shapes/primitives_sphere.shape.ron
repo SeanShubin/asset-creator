@@ -1,6 +1,6 @@
 (
     name: "sphere",
-    colors: { "body": (0.6, 0.4, 0.4) },
+    palette: { "body": (0.6, 0.4, 0.4) },
     shape: Sphere,
     bounds: (-1, -1, -1, 1, 1, 1),
     color: "body",

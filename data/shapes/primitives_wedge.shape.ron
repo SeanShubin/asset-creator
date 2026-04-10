@@ -1,6 +1,6 @@
 (
     name: "wedge",
-    colors: { "body": (0.5, 0.6, 0.5) },
+    palette: { "body": (0.5, 0.6, 0.5) },
     shape: Wedge,
     bounds: (-1, -1, -1, 1, 1, 1),
     color: "body",

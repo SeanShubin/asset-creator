@@ -1,6 +1,8 @@
 use bevy::math::{Mat3, Quat, Vec3};
 use serde::Deserialize;
+use serde::de::{self, MapAccess, Visitor};
 use std::collections::HashMap;
+use std::fmt;
 use crate::util::Color3;
 
 /// A shape node is both the file format and the node type.
@@ -15,8 +17,8 @@ pub struct ShapeNode {
     pub bounds: Option<Bounds>,
     #[serde(default, deserialize_with = "deserialize_orient")]
     pub orient: Mat3,
-    #[serde(default)]
-    pub colors: HashMap<String, Color3>,
+    #[serde(default, deserialize_with = "deserialize_ordered_map")]
+    pub palette: Vec<(String, Color3)>,
     #[serde(default)]
     pub color: Option<String>,
     #[serde(default)]
@@ -25,6 +27,10 @@ pub struct ShapeNode {
     pub rotate: Option<(f32, Axis)>,
     #[serde(default)]
     pub import: Option<String>,
+    #[serde(default)]
+    pub color_map: HashMap<String, String>,
+    #[serde(default)]
+    pub colors: Vec<String>,
     #[serde(default)]
     pub children: Vec<ShapeNode>,
     #[serde(default)]
@@ -237,6 +243,33 @@ pub enum Axis {
 // =====================================================================
 // Orient — stored as Mat3, deserialized from (Facing, Mirroring, Rotation)
 // =====================================================================
+
+/// Deserialize a RON map into a Vec preserving insertion order.
+fn deserialize_ordered_map<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<(String, Color3)>, D::Error> {
+    struct OrderedMapVisitor;
+
+    impl<'de> Visitor<'de> for OrderedMapVisitor {
+        type Value = Vec<(String, Color3)>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a map of string to color")
+        }
+
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+            let mut entries = Vec::new();
+            while let Some((key, value)) = map.next_entry::<String, Color3>()? {
+                entries.push((key, value));
+            }
+            Ok(entries)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+    }
+
+    deserializer.deserialize_map(OrderedMapVisitor)
+}
 
 /// Deserialization helper: parse the human-readable tuple and convert to Mat3.
 fn deserialize_orient<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Mat3, D::Error> {

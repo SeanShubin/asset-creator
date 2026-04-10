@@ -1,6 +1,6 @@
 (
     name: "cone",
-    colors: { "body": (0.6, 0.6, 0.3) },
+    palette: { "body": (0.6, 0.6, 0.3) },
     shape: Cone,
     bounds: (-1, -1, -1, 1, 1, 1),
     color: "body",

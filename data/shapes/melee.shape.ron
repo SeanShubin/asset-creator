@@ -1,6 +1,6 @@
 (
     name: "melee",
-    colors: {
+    palette: {
         "body": (0.5, 0.5, 0.5),
         "blade": (1.0, 0.0, 0.0)
     },

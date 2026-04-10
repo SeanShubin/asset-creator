@@ -1,10 +1,10 @@
 (
     name: "disk",
-    colors: {
+    palette: {
         "body": (0.5, 0.5, 0.5),
-        "hover": (0, 1, 0),
+        "hover": (0, 0.5, 0),
         "sensor": (0.0, 0.0, 0.8),
-        "blade": (1.0, 0.4, 0.0)
+        "blade": (1.0, 0.0, 0.0)
     },
     children: [
         (
@@ -43,6 +43,7 @@
             name: "melee",
             import: "melee",
             bounds: (2, -1, -2, 3, 0, 6),
+            color_map: { "blade": "blade"},
             mirror: [X]
         ),
     ],
