@@ -167,7 +167,7 @@ fn update_camera_transform(tf: &mut Transform, orbit: &OrbitState) {
     tf.look_at(orbit.target, Vec3::Y);
 }
 
-fn compute_camera_pose(yaw: f32, pitch: f32, target: Vec3) -> (Vec3, Quat) {
+pub fn compute_camera_pose(yaw: f32, pitch: f32, target: Vec3) -> (Vec3, Quat) {
     let pitch_rad = pitch.to_radians();
     let yaw_rad = yaw.to_radians();
     let rotation = Quat::from_euler(EulerRot::YXZ, yaw_rad, -pitch_rad, 0.0);

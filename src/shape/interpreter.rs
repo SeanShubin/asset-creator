@@ -141,105 +141,24 @@ fn apply_events_as_entities(
     let mut entity_stack: Vec<Entity> = vec![root];
     let mut csg_stack: Vec<Option<CsgFrame>> = vec![None];
 
-    // Helper: insert render layers on an entity if specified
-    let tag = |commands: &mut Commands, entity: Entity| {
-        if let Some(ref layers) = render_layers {
-            commands.entity(entity).insert(layers.clone());
-        }
-    };
-
     for event in events {
         match event {
             ShapeEvent::EnterNode { node, local_tf, colors } => {
                 let parent = *entity_stack.last().unwrap();
                 let parent_is_csg = csg_stack.last().unwrap().is_some();
-
-                let entity = commands.spawn((
-                    ShapePart { name: node.name.clone() },
-                    BaseTransform(*local_tf),
-                    *local_tf,
-                    Visibility::default(),
-                )).id();
-                commands.entity(parent).add_child(entity);
-                tag(commands, entity);
-
-                if parent_is_csg {
-                    commands.entity(entity).insert(CsgMember);
-                }
-
-                let is_csg = node.has_csg_children();
-                let csg_frame = if is_csg {
-                    let all_active = vec![true; node.children.len()];
-                    commands.entity(entity).insert((
-                        CsgGroup {
-                            children: node.children.clone(),
-                            colors: colors.clone(),
-                        },
-                        CsgChildState { active: all_active },
-                    ));
-                    Some(CsgFrame {
-                        children: node.children.clone(),
-                        colors: colors.clone(),
-                    })
-                } else {
-                    None
-                };
-
+                let (entity, csg_frame) = spawn_part_entity(
+                    commands, parent, node, *local_tf, colors, parent_is_csg, render_layers,
+                );
                 entity_stack.push(entity);
                 csg_stack.push(csg_frame);
             }
             ShapeEvent::Geometry { node, mesh_tf, colors } => {
                 let parent = *entity_stack.last().unwrap();
-                let Some(shape) = node.shape else { continue };
-                let om = node.orient;
-                let is_mirrored = om.determinant() < 0.0;
-
-                let color = node.color.as_ref()
-                    .map(|name| resolve_color(name, colors))
-                    .unwrap_or_else(|| {
-                        warn!("Shape '{}' has no color specified",
-                            node.name.as_deref().unwrap_or("unnamed"));
-                        Color3(0.5, 0.5, 0.5)
-                    });
-
-                let (mesh, material) = make_mesh(meshes, materials, shape, color, node.emissive, is_mirrored);
-
-                if node.children.is_empty() {
-                    let mesh_entity = commands.spawn((
-                        Mesh3d(mesh),
-                        MeshMaterial3d(material),
-                        *mesh_tf,
-                        Visibility::default(),
-                    )).id();
-                    commands.entity(parent).add_child(mesh_entity);
-                    tag(commands, mesh_entity);
-                } else {
-                    let shape_name = node.name.as_ref()
-                        .map(|n| format!("{n}_shape"))
-                        .unwrap_or_else(|| "shape".to_string());
-                    let shape_entity = commands.spawn((
-                        ShapePart { name: Some(shape_name) },
-                        BaseTransform(Transform::default()),
-                        Transform::default(),
-                        Visibility::default(),
-                    )).id();
-                    commands.entity(parent).add_child(shape_entity);
-                    tag(commands, shape_entity);
-
-                    let mesh_entity = commands.spawn((
-                        Mesh3d(mesh),
-                        MeshMaterial3d(material),
-                        *mesh_tf,
-                        Visibility::default(),
-                    )).id();
-                    commands.entity(shape_entity).add_child(mesh_entity);
-                    tag(commands, mesh_entity);
-                }
+                attach_mesh(commands, meshes, materials, parent, node, *mesh_tf, colors, render_layers);
             }
             ShapeEvent::ExitNode => {
                 let entity = entity_stack.pop().unwrap();
                 let csg_frame = csg_stack.pop().unwrap();
-
                 if let Some(frame) = csg_frame {
                     build_csg_mesh(
                         commands, meshes, materials,
@@ -257,6 +176,111 @@ fn apply_events_as_entities(
 
 /// Build CSG mesh and attach it to the parent entity.
 /// Called during initial spawn and during toggle rebuild.
+fn tag_render_layer(commands: &mut Commands, entity: Entity, render_layers: &Option<RenderLayers>) {
+    if let Some(ref layers) = render_layers {
+        commands.entity(entity).insert(layers.clone());
+    }
+}
+
+fn spawn_part_entity(
+    commands: &mut Commands,
+    parent: Entity,
+    node: &ShapeNode,
+    local_tf: Transform,
+    colors: &ColorMap,
+    parent_is_csg: bool,
+    render_layers: &Option<RenderLayers>,
+) -> (Entity, Option<CsgFrame>) {
+    let entity = commands.spawn((
+        ShapePart { name: node.name.clone() },
+        BaseTransform(local_tf),
+        local_tf,
+        Visibility::default(),
+    )).id();
+    commands.entity(parent).add_child(entity);
+    tag_render_layer(commands, entity, render_layers);
+
+    if parent_is_csg {
+        commands.entity(entity).insert(CsgMember);
+    }
+
+    let csg_frame = if node.has_csg_children() {
+        let all_active = vec![true; node.children.len()];
+        commands.entity(entity).insert((
+            CsgGroup {
+                children: node.children.clone(),
+                colors: colors.clone(),
+            },
+            CsgChildState { active: all_active },
+        ));
+        Some(CsgFrame {
+            children: node.children.clone(),
+            colors: colors.clone(),
+        })
+    } else {
+        None
+    };
+
+    (entity, csg_frame)
+}
+
+fn attach_mesh(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    parent: Entity,
+    node: &ShapeNode,
+    mesh_tf: Transform,
+    colors: &ColorMap,
+    render_layers: &Option<RenderLayers>,
+) {
+    let Some(shape) = node.shape else { return };
+    let om = node.orient;
+    let is_mirrored = om.determinant() < 0.0;
+
+    let color = node.color.as_ref()
+        .map(|name| resolve_color(name, colors))
+        .unwrap_or_else(|| {
+            warn!("Shape '{}' has no color specified",
+                node.name.as_deref().unwrap_or("unnamed"));
+            Color3(0.5, 0.5, 0.5)
+        });
+
+    let (mesh, material) = make_mesh(meshes, materials, shape, color, node.emissive, is_mirrored);
+
+    if node.children.is_empty() {
+        let mesh_entity = commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            mesh_tf,
+            Visibility::default(),
+        )).id();
+        commands.entity(parent).add_child(mesh_entity);
+        tag_render_layer(commands, mesh_entity, render_layers);
+    } else {
+        let shape_name = node.name.as_ref()
+            .map(|n| format!("{n}_shape"))
+            .unwrap_or_else(|| "shape".to_string());
+        let shape_entity = commands.spawn((
+            ShapePart { name: Some(shape_name) },
+            BaseTransform(Transform::default()),
+            Transform::default(),
+            Visibility::default(),
+        )).id();
+        commands.entity(parent).add_child(shape_entity);
+        tag_render_layer(commands, shape_entity, render_layers);
+
+        let mesh_entity = commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            mesh_tf,
+            Visibility::default(),
+        )).id();
+        commands.entity(shape_entity).add_child(mesh_entity);
+        tag_render_layer(commands, mesh_entity, render_layers);
+    }
+}
+
 pub fn build_csg_mesh(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,

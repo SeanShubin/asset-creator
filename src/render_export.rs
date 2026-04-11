@@ -5,12 +5,12 @@ use bevy::render::view::RenderLayers;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use std::path::{Path, PathBuf};
 
+use crate::editor::compute_camera_pose;
 use crate::registry::AssetRegistry;
 use crate::shape::spawn_shape_with_layers;
 
 const EXPORT_RENDER_LAYER: usize = 1;
 const RENDER_SIZE: u32 = 1024;
-const ISO_DISTANCE: f32 = 15.0;
 const DEFAULT_YAW: f32 = 45.0;
 const DEFAULT_PITCH: f32 = 45.0;
 
@@ -187,68 +187,20 @@ fn process_render_queue(
     let Some(job) = queue.pending.pop() else { return };
     let Some(shape) = registry.get_shape_by_path(&job.shape_path) else { return };
 
+    let image_handle = create_render_target(&mut images);
+    let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
     let fit_scale = compute_fit_from_shape(shape);
     let shape_center = shape.compute_aabb()
         .map(|b| { let c = b.center(); Vec3::new(c.0, c.1, c.2) })
         .unwrap_or(Vec3::ZERO);
 
-    // Render target image
-    let size = Extent3d { width: RENDER_SIZE, height: RENDER_SIZE, depth_or_array_layers: 1 };
-    let mut image = Image {
-        texture_descriptor: TextureDescriptor {
-            label: Some("render_export"),
-            size,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8UnormSrgb,
-            mip_level_count: 1,
-            sample_count: 1,
-            usage: TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_SRC
-                | TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        },
-        ..default()
-    };
-    image.resize(size);
-    let image_handle = images.add(image);
-
-    let (cam_pos, _) = compute_camera_pose(DEFAULT_YAW, DEFAULT_PITCH, shape_center);
-    let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
-
-    // Camera
-    let camera = commands.spawn((
-        ExportEntity,
-        Camera3d::default(),
-        Camera {
-            target: RenderTarget::Image(image_handle.clone().into()),
-            clear_color: ClearColorConfig::Custom(Color::NONE),
-            ..default()
-        },
-        Projection::Orthographic(OrthographicProjection {
-            scale: fit_scale,
-            ..OrthographicProjection::default_3d()
-        }),
-        Transform::from_translation(cam_pos).looking_at(shape_center, Vec3::Y),
-        export_layer.clone(),
-    )).id();
-
-    // Light
-    let cam_rot = Quat::from_euler(EulerRot::YXZ, DEFAULT_YAW.to_radians(), -DEFAULT_PITCH.to_radians(), 0.0);
-    let light_offset = Quat::from_euler(EulerRot::YXZ, 15.0_f32.to_radians(), -30.0_f32.to_radians(), 0.0);
-    let light = commands.spawn((
-        ExportEntity,
-        DirectionalLight { illuminance: 6000.0, shadows_enabled: false, ..default() },
-        Transform::from_rotation(cam_rot * light_offset),
-        export_layer.clone(),
-    )).id();
-
-    // Shape — all entities get the export render layer at creation time
+    let camera = spawn_export_camera(&mut commands, &image_handle, fit_scale, shape_center, &export_layer);
+    let light = spawn_export_light(&mut commands, &export_layer);
     let shape_root = spawn_shape_with_layers(
         &mut commands, &mut meshes, &mut materials, shape, &registry,
         Some(export_layer),
     );
 
-    // Screenshot
     if let Some(parent) = job.output_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -267,10 +219,61 @@ fn process_render_queue(
 // Helpers
 // =====================================================================
 
-fn compute_camera_pose(yaw: f32, pitch: f32, target: Vec3) -> (Vec3, Quat) {
-    let rotation = Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), -pitch.to_radians(), 0.0);
-    let position = target + rotation * Vec3::new(0.0, 0.0, ISO_DISTANCE);
-    (position, rotation)
+fn create_render_target(images: &mut ResMut<Assets<Image>>) -> Handle<Image> {
+    let size = Extent3d { width: RENDER_SIZE, height: RENDER_SIZE, depth_or_array_layers: 1 };
+    let mut image = Image {
+        texture_descriptor: TextureDescriptor {
+            label: Some("render_export"),
+            size,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8UnormSrgb,
+            mip_level_count: 1,
+            sample_count: 1,
+            usage: TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC
+                | TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        },
+        ..default()
+    };
+    image.resize(size);
+    images.add(image)
+}
+
+fn spawn_export_camera(
+    commands: &mut Commands,
+    image_handle: &Handle<Image>,
+    fit_scale: f32,
+    shape_center: Vec3,
+    layer: &RenderLayers,
+) -> Entity {
+    let (cam_pos, _) = compute_camera_pose(DEFAULT_YAW, DEFAULT_PITCH, shape_center);
+    commands.spawn((
+        ExportEntity,
+        Camera3d::default(),
+        Camera {
+            target: RenderTarget::Image(image_handle.clone().into()),
+            clear_color: ClearColorConfig::Custom(Color::NONE),
+            ..default()
+        },
+        Projection::Orthographic(OrthographicProjection {
+            scale: fit_scale,
+            ..OrthographicProjection::default_3d()
+        }),
+        Transform::from_translation(cam_pos).looking_at(shape_center, Vec3::Y),
+        layer.clone(),
+    )).id()
+}
+
+fn spawn_export_light(commands: &mut Commands, layer: &RenderLayers) -> Entity {
+    let cam_rot = Quat::from_euler(EulerRot::YXZ, DEFAULT_YAW.to_radians(), -DEFAULT_PITCH.to_radians(), 0.0);
+    let light_offset = Quat::from_euler(EulerRot::YXZ, 15.0_f32.to_radians(), -30.0_f32.to_radians(), 0.0);
+    commands.spawn((
+        ExportEntity,
+        DirectionalLight { illuminance: 6000.0, shadows_enabled: false, ..default() },
+        Transform::from_rotation(cam_rot * light_offset),
+        layer.clone(),
+    )).id()
 }
 
 fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>) {

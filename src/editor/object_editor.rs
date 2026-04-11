@@ -23,6 +23,7 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<ShapeReloadState>()
             .init_resource::<CameraFitState>()
             .init_resource::<SceneStats>()
+            .init_resource::<SceneBounds>()
             .init_resource::<OrbitState>()
             .init_resource::<ZoomLimits>()
             .init_resource::<CameraIntent>()
@@ -93,13 +94,18 @@ struct CameraFitState {
     fit_scale: f32,
 }
 
-/// Scene statistics and AABB for grid sizing.
+/// Display statistics for the scene.
 #[derive(Resource, Default)]
 struct SceneStats {
     needs_update: bool,
     parts: usize,
     triangles: usize,
     draw_calls: usize,
+}
+
+/// Scene AABB and derived values for grid sizing and zoom.
+#[derive(Resource, Default)]
+struct SceneBounds {
     fit_scale: f32,
     scene_min: Vec3,
     scene_max: Vec3,
@@ -222,6 +228,7 @@ fn reload_shape(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut reload: ResMut<ShapeReloadState>,
     mut stats: ResMut<SceneStats>,
+    mut bounds: ResMut<SceneBounds>,
     activation: Res<EditorActivation>,
     registry: Res<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
@@ -243,8 +250,8 @@ fn reload_shape(
     if let Some(aabb) = shape_file.compute_aabb() {
         let min = aabb.min();
         let max = aabb.max();
-        stats.scene_min = Vec3::new(min.0, min.1, min.2);
-        stats.scene_max = Vec3::new(max.0, max.1, max.2);
+        bounds.scene_min = Vec3::new(min.0, min.1, min.2);
+        bounds.scene_max = Vec3::new(max.0, max.1, max.2);
     }
 
     spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
@@ -297,6 +304,7 @@ fn on_model_loaded(
 /// Runs on every reload: updates stats, fit_scale, and zoom limits without changing zoom.
 fn compute_stats(
     mut stats: ResMut<SceneStats>,
+    mut bounds: ResMut<SceneBounds>,
     mut limits: ResMut<ZoomLimits>,
     parts: Query<&ShapePart>,
     mesh_handles: Query<&Mesh3d>,
@@ -311,7 +319,7 @@ fn compute_stats(
     let window_size = windows.get_single().map(|w| Vec2::new(w.width(), w.height())).unwrap_or(Vec2::new(1100.0, 720.0));
     let fit_scale = compute_fit_scale(&mesh_aabbs, window_size);
     if fit_scale > 0.001 {
-        stats.fit_scale = fit_scale;
+        bounds.fit_scale = fit_scale;
         update_zoom_limits(&mut limits, fit_scale);
     }
 
@@ -429,11 +437,11 @@ const AXIS_COLOR_Z: Color = Color::srgba(0.2, 0.2, 0.8, 0.6);
 fn draw_grid(
     mut gizmos: Gizmos,
     orbit: Res<OrbitState>,
-    stats: Res<SceneStats>,
+    bounds: Res<SceneBounds>,
     camera: Query<&Projection, With<OrbitCamera>>,
     windows: Query<&Window>,
 ) {
-    if stats.scene_min == stats.scene_max { return; }
+    if bounds.scene_min == bounds.scene_max { return; }
 
     // Compute world-space size of one pixel for zero-line thickness
     let pixel_size = camera.get_single().ok().and_then(|proj| {
@@ -448,8 +456,8 @@ fn draw_grid(
     let yaw_rad = orbit.yaw.to_radians();
     let pitch = orbit.pitch;
 
-    let scene_min = stats.scene_min;
-    let scene_max = stats.scene_max;
+    let scene_min = bounds.scene_min;
+    let scene_max = bounds.scene_max;
     // Snap AABB to nearest integer first (handles float imprecision),
     // then add 1 unit margin
     let gmin = Vec3::new(

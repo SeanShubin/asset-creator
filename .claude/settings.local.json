@@ -21,7 +21,8 @@
       "WebSearch",
       "Bash(xargs grep:*)",
       "Bash(xargs head:*)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(awk:*)"
     ]
   }
 }
