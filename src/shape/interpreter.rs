@@ -20,6 +20,30 @@ pub struct BaseTransform(pub Transform);
 #[derive(Component)]
 pub struct ShapeRoot;
 
+/// Marks an entity whose children participate in CSG.
+/// Stores the data needed to rebuild the CSG mesh when children are toggled.
+#[derive(Component, Clone)]
+pub struct CsgGroup {
+    pub children: Vec<ShapeNode>,
+    pub colors: ColorMap,
+}
+
+/// Marks the entity that holds the CSG result mesh.
+#[derive(Component)]
+pub struct CsgResult;
+
+/// Tracks which CSG children were active last rebuild, so we detect changes.
+#[derive(Component)]
+pub struct CsgChildState {
+    pub active: Vec<bool>,
+}
+
+/// Marks a ShapePart entity whose rendered geometry is suppressed because
+/// it participates in a CSG group. The part is visible in the tree but its
+/// own mesh is hidden — the CsgResult mesh renders instead.
+#[derive(Component)]
+pub struct CsgMember;
+
 // =====================================================================
 // Public API
 // =====================================================================
@@ -245,19 +269,44 @@ fn process_csg_children(
     colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
-    // Spawn all children as normal entities (they appear in the part tree).
-    // Their rendered geometry is hidden — the CSG result replaces it.
+    // Spawn all children as normal entities (they appear in the part tree),
+    // but mark them as CSG members so their individual meshes are suppressed.
     for child in &node.children {
-        spawn_child_hidden(commands, meshes, materials, parent, child, colors, registry);
+        let child_entity = spawn_child_entity(commands, meshes, materials, parent, child, colors, registry);
+        commands.entity(child_entity).insert(CsgMember);
     }
 
-    // Collect raw meshes grouped by combine mode
+    // Store CSG data on the parent for rebuild on toggle
+    let all_active = vec![true; node.children.len()];
+    commands.entity(parent).insert((
+        CsgGroup {
+            children: node.children.clone(),
+            colors: colors.clone(),
+        },
+        CsgChildState { active: all_active },
+    ));
+
+    // Build and attach the CSG result mesh
+    build_csg_mesh(commands, meshes, materials, parent, &node.children, colors, registry, node);
+}
+
+/// Build the CSG result from the given children and attach it to the parent.
+fn build_csg_mesh(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    parent: Entity,
+    children: &[ShapeNode],
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+    node: &ShapeNode,
+) {
     let identity = Transform::IDENTITY;
     let mut union_meshes = Vec::new();
     let mut subtract_meshes = Vec::new();
     let mut clip_meshes = Vec::new();
 
-    for child in &node.children {
+    for child in children {
         let raw = csg::collect_node_mesh(child, identity, colors, registry);
         if raw.positions.is_empty() { continue; }
         match child.combine {
@@ -271,28 +320,16 @@ fn process_csg_children(
         return;
     }
 
-    // 1. Union all additive children
-    let mut result = csg::perform_union(union_meshes);
-
-    // 2. Subtract each subtractive child
-    for sub in subtract_meshes {
-        result = csg::perform_subtract(result, sub);
-    }
-
-    // 3. Intersect with each clip child
-    for clip in clip_meshes {
-        result = csg::perform_intersect(result, clip);
-    }
+    let result = csg::perform_csg_pipeline(union_meshes, subtract_meshes, clip_meshes);
 
     if result.positions.is_empty() {
         return;
     }
 
-    // Resolve color — use the parent's color, or fall back to the first union child's color
     let color = node.color.as_ref()
         .map(|name| resolve_color(name, colors))
         .unwrap_or_else(|| {
-            node.children.iter()
+            children.iter()
                 .find(|c| c.combine == CombineMode::Union)
                 .and_then(|c| c.color.as_ref())
                 .map(|name| resolve_color(name, colors))
@@ -309,36 +346,13 @@ fn process_csg_children(
     let mesh_handle = meshes.add(result.to_bevy_mesh());
 
     commands.entity(parent).with_child((
+        CsgResult,
         Mesh3d(mesh_handle),
         MeshMaterial3d(material),
         Transform::IDENTITY,
     ));
 }
 
-/// Spawn a child entity that appears in the part tree but has no visible geometry.
-/// The CSG result mesh replaces the individual child meshes.
-fn spawn_child_hidden(
-    commands: &mut Commands,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-    parent: Entity,
-    node: &ShapeNode,
-    colors: &ColorMap,
-    registry: &AssetRegistry,
-) {
-    let child_tf = build_child_transform(node);
-    let child = commands.spawn((
-        ShapePart { name: node.name.clone() },
-        BaseTransform(child_tf),
-        child_tf,
-        Visibility::Hidden,
-    )).id();
-    commands.entity(parent).add_child(child);
-
-    // Process the node so its subtree exists in the hierarchy (for part tree display),
-    // but the entity starts hidden.
-    process_node(commands, meshes, materials, child, node, colors, registry);
-}
 
 // =====================================================================
 // Combinators
@@ -443,6 +457,18 @@ fn spawn_child(
     colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
+    spawn_child_entity(commands, meshes, materials, parent, node, colors, registry);
+}
+
+fn spawn_child_entity(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    parent: Entity,
+    node: &ShapeNode,
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+) -> Entity {
     let child_tf = build_child_transform(node);
     let child = commands.spawn((
         ShapePart { name: node.name.clone() },
@@ -453,6 +479,7 @@ fn spawn_child(
     commands.entity(parent).add_child(child);
 
     process_node(commands, meshes, materials, child, node, colors, registry);
+    child
 }
 
 fn build_child_transform(node: &ShapeNode) -> Transform {
@@ -507,6 +534,7 @@ fn attach_geometry(
             Mesh3d(mesh),
             MeshMaterial3d(material),
             mesh_tf,
+            Visibility::default(),
         ));
     } else {
         let shape_name = node.name.as_ref()
@@ -523,6 +551,7 @@ fn attach_geometry(
             Mesh3d(mesh),
             MeshMaterial3d(material),
             mesh_tf,
+            Visibility::default(),
         ));
     }
 }
@@ -649,5 +678,129 @@ fn reflect_orientation(node: &mut ShapeNode, axis: Axis) {
     }
     for child in &mut node.children {
         reflect_orientation(child, axis);
+    }
+}
+
+// =====================================================================
+// CSG rebuild on visibility toggle
+// =====================================================================
+
+/// System that hides mesh geometry under CsgMember entities when a CsgResult
+/// exists on their parent. When no CsgResult exists (all CSG ops toggled off),
+/// the individual meshes are allowed to render normally.
+pub fn suppress_csg_member_meshes(
+    mut commands: Commands,
+    members: Query<(Entity, &Parent), With<CsgMember>>,
+    children_query: Query<&Children>,
+    mesh_entities: Query<Entity, With<Mesh3d>>,
+    csg_results: Query<&CsgResult>,
+) {
+    for (member, parent) in &members {
+        // Check if parent has a CsgResult child
+        let has_csg_result = children_query.get(parent.get())
+            .map(|children| children.iter().any(|e| csg_results.get(*e).is_ok()))
+            .unwrap_or(false);
+
+        let target_vis = if has_csg_result { Visibility::Hidden } else { Visibility::Inherited };
+        set_descendant_mesh_visibility(&mut commands, member, &children_query, &mesh_entities, target_vis);
+    }
+}
+
+fn set_descendant_mesh_visibility(
+    commands: &mut Commands,
+    entity: Entity,
+    children_query: &Query<&Children>,
+    mesh_entities: &Query<Entity, With<Mesh3d>>,
+    vis: Visibility,
+) {
+    if let Ok(children) = children_query.get(entity) {
+        for &child in children.iter() {
+            if mesh_entities.get(child).is_ok() {
+                if let Some(mut ec) = commands.get_entity(child) {
+                    ec.insert(vis);
+                }
+            }
+            set_descendant_mesh_visibility(commands, child, children_query, mesh_entities, vis);
+        }
+    }
+}
+
+/// System that detects when CSG children are toggled and rebuilds the CSG mesh.
+pub fn rebuild_csg_on_toggle(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    registry: Res<AssetRegistry>,
+    mut csg_groups: Query<(Entity, &CsgGroup, &mut CsgChildState, &Children)>,
+    parts: Query<&ShapePart>,
+    visibility: Query<&Visibility>,
+    csg_results: Query<Entity, With<CsgResult>>,
+) {
+    for (parent, group, mut state, children) in &mut csg_groups {
+        // Determine which CSG children are currently active (not hidden).
+        // CSG children are the ShapePart children of the parent, in order.
+        let part_children: Vec<Entity> = children.iter()
+            .filter(|e| parts.get(**e).is_ok())
+            .copied()
+            .collect();
+
+        let current_active: Vec<bool> = part_children.iter()
+            .map(|&e| {
+                visibility.get(e)
+                    .map(|v| *v != Visibility::Hidden)
+                    .unwrap_or(true)
+            })
+            .collect();
+
+        if current_active == state.active {
+            continue;
+        }
+        state.active = current_active.clone();
+
+        // Remove the old CSG result mesh
+        for &child in children.iter() {
+            if csg_results.get(child).is_ok() {
+                if let Some(ec) = commands.get_entity(child) {
+                    ec.despawn_recursive();
+                }
+            }
+        }
+
+        // Collect only the active children's ShapeNode data
+        let active_children: Vec<ShapeNode> = group.children.iter()
+            .zip(current_active.iter())
+            .filter(|(_, active)| **active)
+            .map(|(node, _)| node.clone())
+            .collect();
+
+        if active_children.is_empty() || !active_children.iter().any(|c| c.combine != CombineMode::Union) {
+            // No CSG needed — children render themselves via normal visibility
+            continue;
+        }
+
+        // Rebuild with a dummy parent node for color resolution
+        let dummy_node = ShapeNode {
+            name: None,
+            shape: None,
+            bounds: None,
+            orient: Mat3::IDENTITY,
+            palette: Vec::new(),
+            color: group.children.first().and_then(|c| c.color.clone()),
+            emissive: false,
+            rotate: None,
+            import: None,
+            color_map: Default::default(),
+            colors: Vec::new(),
+            children: Vec::new(),
+            mirror: Vec::new(),
+            repeat: None,
+            combine: CombineMode::Union,
+            animations: Vec::new(),
+        };
+
+        build_csg_mesh(
+            &mut commands, &mut meshes, &mut materials,
+            parent, &active_children, &group.colors, &registry, &dummy_node,
+        );
     }
 }

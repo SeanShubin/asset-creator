@@ -1,4 +1,4 @@
-// Cross pipe with a spherical cavity carved out of the center
+// Cross pipe with a hole bored through the center
 (
     name: "csg_union",
     palette: { "pipe": (0.5, 0.35, 0.25) },
@@ -9,10 +9,11 @@
             color: "pipe"),
         (name: "horizontal", shape: Cylinder,
             bounds: (-1, -0.3, -0.3, 1, 0.3, 0.3),
-            orient: (Right, NoMirror, NoRotation),
+            orient: (Front, NoMirror, RotateCounter),
             color: "pipe"),
-        (name: "cavity", shape: Sphere,
-            bounds: (-0.35, -0.35, -0.35, 0.35, 0.35, 0.35),
+        (name: "bore", shape: Cylinder,
+            bounds: (-0.15, -0.15, -0.5, 0.15, 0.15, 0.5),
+            orient: (Top, NoMirror, NoRotation),
             combine: Subtract),
     ],
 )

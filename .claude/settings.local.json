@@ -18,7 +18,8 @@
       "Bash(sed:*)",
       "Bash(grep -l \"color:\" data/shapes/*.ron)",
       "Bash(ls data/shapes/*.ron)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(xargs grep:*)"
     ]
   }
 }

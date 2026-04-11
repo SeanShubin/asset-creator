@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use crate::browser::ActiveEditor;
 use crate::registry::AssetRegistry;
 use crate::shape::{
-    animate_shapes, ShapeAnimator, ShapePart, ShapeRoot,
+    animate_shapes, rebuild_csg_on_toggle, suppress_csg_member_meshes,
+    ShapeAnimator, ShapePart, ShapeRoot,
     despawn_shape, spawn_shape,
 };
 use super::orbit_camera::{self, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
@@ -51,7 +52,13 @@ impl Plugin for ObjectEditorPlugin {
 
                 animate_shapes.run_if(is_object_active),
                 update_light.run_if(is_object_active),
-                part_tree_ui.run_if(is_object_active),
+                // CSG systems must be ordered: toggle UI → rebuild (may despawn) → flush → suppress meshes
+                (
+                    part_tree_ui.run_if(is_object_active),
+                    rebuild_csg_on_toggle.run_if(is_object_active),
+                    bevy::ecs::schedule::apply_deferred,
+                    suppress_csg_member_meshes.run_if(is_object_active),
+                ).chain(),
                 draw_grid.run_if(is_object_active),
             ));
     }

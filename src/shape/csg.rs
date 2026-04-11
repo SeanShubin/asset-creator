@@ -41,31 +41,36 @@ pub fn collect_node_mesh(
     }
 }
 
-/// Union a list of meshes into one.
-pub fn perform_union(meshes: Vec<RawMesh>) -> RawMesh {
-    if meshes.is_empty() {
+/// Perform the full CSG pipeline: union all additive meshes, subtract each
+/// subtractive mesh, intersect with each clip mesh. Stays in BSP space
+/// throughout to avoid normal corruption from intermediate conversions.
+pub fn perform_csg_pipeline(
+    union_meshes: Vec<RawMesh>,
+    subtract_meshes: Vec<RawMesh>,
+    clip_meshes: Vec<RawMesh>,
+) -> RawMesh {
+    if union_meshes.is_empty() {
         return empty_mesh();
     }
-    let mut iter = meshes.into_iter();
+
+    // Union all additive meshes in BSP space
+    let mut iter = union_meshes.into_iter();
     let mut result = mesh_to_bsp(iter.next().unwrap());
     for mesh in iter {
         result = bsp_union(result, mesh_to_bsp(mesh));
     }
+
+    // Subtract each subtractive mesh (stays in BSP space)
+    for mesh in subtract_meshes {
+        result = bsp_subtract(result, mesh_to_bsp(mesh));
+    }
+
+    // Intersect with each clip mesh (stays in BSP space)
+    for mesh in clip_meshes {
+        result = bsp_intersect(result, mesh_to_bsp(mesh));
+    }
+
     bsp_to_mesh(result)
-}
-
-/// Subtract operand from base.
-pub fn perform_subtract(base: RawMesh, operand: RawMesh) -> RawMesh {
-    let a = mesh_to_bsp(base);
-    let b = mesh_to_bsp(operand);
-    bsp_to_mesh(bsp_subtract(a, b))
-}
-
-/// Intersect base with operand.
-pub fn perform_intersect(base: RawMesh, operand: RawMesh) -> RawMesh {
-    let a = mesh_to_bsp(base);
-    let b = mesh_to_bsp(operand);
-    bsp_to_mesh(bsp_intersect(a, b))
 }
 
 fn empty_mesh() -> RawMesh {
@@ -115,13 +120,7 @@ fn collect_leaf(
         }
 
         if !union_meshes.is_empty() {
-            result = perform_union(union_meshes);
-            for sub in subtract_meshes {
-                result = perform_subtract(result, sub);
-            }
-            for clip in clip_meshes {
-                result = perform_intersect(result, clip);
-            }
+            result = perform_csg_pipeline(union_meshes, subtract_meshes, clip_meshes);
         }
     } else {
         for child in &node.children {
@@ -770,9 +769,14 @@ fn bsp_to_mesh(bsp: BspNode) -> RawMesh {
 
         let base = positions.len() as u32;
 
+        // Use the polygon's plane normal as the face normal.
+        // Vertex normals from BSP operations may be inconsistent after
+        // splits and inversions, but the plane normal is always authoritative.
+        let face_normal = [poly.plane.normal.x, poly.plane.normal.y, poly.plane.normal.z];
+
         for v in &poly.vertices {
             positions.push([v.pos.x, v.pos.y, v.pos.z]);
-            normals.push([v.normal.x, v.normal.y, v.normal.z]);
+            normals.push(face_normal);
             uvs.push(v.uv);
         }
 
