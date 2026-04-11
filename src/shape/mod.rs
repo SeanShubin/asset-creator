@@ -3,6 +3,7 @@ mod csg;
 mod definition;
 mod interpreter;
 mod meshes;
+mod traversal;
 
 pub use animation::{animate_shapes, ShapeAnimator};
 pub use definition::ShapeNode;
