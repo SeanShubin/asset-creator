@@ -37,25 +37,12 @@ impl Plugin for RenderExportPlugin {
 // Resources
 // =====================================================================
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct RenderQueue {
     pending: Vec<RenderJob>,
     active: Option<ActiveRender>,
     last_generation: u64,
     initial_scan_done: bool,
-    startup_delay: u32,
-}
-
-impl Default for RenderQueue {
-    fn default() -> Self {
-        Self {
-            pending: Vec::new(),
-            active: None,
-            last_generation: 0,
-            initial_scan_done: false,
-            startup_delay: 5,
-        }
-    }
 }
 
 struct RenderJob {
@@ -193,12 +180,6 @@ fn process_render_queue(
                 }
             }
         }
-        return;
-    }
-
-    // Wait for the render pipeline to fully initialize before first export.
-    if queue.startup_delay > 0 {
-        queue.startup_delay -= 1;
         return;
     }
 
