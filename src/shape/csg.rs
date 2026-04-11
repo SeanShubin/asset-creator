@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use super::definition::{Axis, Bounds, CsgOp, Combinator, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
+use super::definition::{Axis, Bounds, CombineMode, Combinator, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
 use super::meshes::{RawMesh, create_raw_mesh};
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
@@ -11,7 +11,7 @@ use crate::util::Color3;
 type ColorMap = Vec<(String, Color3)>;
 
 /// Collect all geometry from a ShapeNode subtree into a single RawMesh.
-/// Handles combinators (mirror/repeat/import/nested CSG) recursively.
+/// Handles combinators (mirror/repeat/import) and nested CSG recursively.
 /// The returned mesh has all transforms baked into vertex positions.
 pub fn collect_node_mesh(
     node: &ShapeNode,
@@ -26,9 +26,6 @@ pub fn collect_node_mesh(
     };
 
     match node.combinator() {
-        Combinator::Csg(op) => {
-            collect_csg(node, parent_tf, op, &colors, registry)
-        }
         Combinator::Mirror(axes) => {
             collect_mirror(node, parent_tf, axes, &colors, registry)
         }
@@ -44,44 +41,35 @@ pub fn collect_node_mesh(
     }
 }
 
-/// Perform a CSG operation on the children of a CSG node.
-/// Returns a single merged RawMesh.
-pub fn perform_csg(op: &CsgOp, meshes: Vec<RawMesh>) -> RawMesh {
+/// Union a list of meshes into one.
+pub fn perform_union(meshes: Vec<RawMesh>) -> RawMesh {
     if meshes.is_empty() {
-        return RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] };
+        return empty_mesh();
     }
-
     let mut iter = meshes.into_iter();
-    let first = iter.next().unwrap();
-    let mut result = mesh_to_bsp(first);
-
+    let mut result = mesh_to_bsp(iter.next().unwrap());
     for mesh in iter {
-        let operand = mesh_to_bsp(mesh);
-        result = match op {
-            CsgOp::Union => bsp_union(result, operand),
-            CsgOp::Subtract => bsp_subtract(result, operand),
-            CsgOp::Intersect => bsp_intersect(result, operand),
-        };
+        result = bsp_union(result, mesh_to_bsp(mesh));
     }
-
     bsp_to_mesh(result)
 }
 
-// =====================================================================
-// Mesh collection for each combinator type
-// =====================================================================
+/// Subtract operand from base.
+pub fn perform_subtract(base: RawMesh, operand: RawMesh) -> RawMesh {
+    let a = mesh_to_bsp(base);
+    let b = mesh_to_bsp(operand);
+    bsp_to_mesh(bsp_subtract(a, b))
+}
 
-fn collect_csg(
-    node: &ShapeNode,
-    parent_tf: Transform,
-    op: &CsgOp,
-    colors: &ColorMap,
-    registry: &AssetRegistry,
-) -> RawMesh {
-    let child_meshes: Vec<RawMesh> = node.children.iter()
-        .map(|child| collect_node_mesh(child, parent_tf, colors, registry))
-        .collect();
-    perform_csg(op, child_meshes)
+/// Intersect base with operand.
+pub fn perform_intersect(base: RawMesh, operand: RawMesh) -> RawMesh {
+    let a = mesh_to_bsp(base);
+    let b = mesh_to_bsp(operand);
+    bsp_to_mesh(bsp_intersect(a, b))
+}
+
+fn empty_mesh() -> RawMesh {
+    RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] }
 }
 
 fn collect_leaf(
@@ -90,24 +78,56 @@ fn collect_leaf(
     colors: &ColorMap,
     registry: &AssetRegistry,
 ) -> RawMesh {
-    let mut result = RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] };
+    let mut result = empty_mesh();
 
     // Attach this node's own geometry
     if let Some(shape) = &node.shape {
         let bounds = node.bounds.unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
         let mesh_tf = mesh_transform(*shape, &bounds, &node.orient);
-        // Combine parent transform with mesh transform
         let world_tf = combine_transforms(&parent_tf, &mesh_tf);
         let mut raw = create_raw_mesh(*shape);
         raw.apply_transform(&world_tf);
         result.merge(&raw);
     }
 
-    // Collect children
+    // Collect children — apply CSG if any child uses Subtract or Clip
     let child_tf = build_child_transform(node, &parent_tf);
-    for child in &node.children {
-        let child_mesh = collect_node_mesh(child, child_tf, colors, registry);
-        result.merge(&child_mesh);
+
+    if node.has_csg_children() {
+        let mut union_meshes = Vec::new();
+        let mut subtract_meshes = Vec::new();
+        let mut clip_meshes = Vec::new();
+
+        // The node's own geometry is part of the union base
+        if !result.positions.is_empty() {
+            union_meshes.push(result);
+            result = empty_mesh();
+        }
+
+        for child in &node.children {
+            let child_mesh = collect_node_mesh(child, child_tf, colors, registry);
+            if child_mesh.positions.is_empty() { continue; }
+            match child.combine {
+                CombineMode::Union => union_meshes.push(child_mesh),
+                CombineMode::Subtract => subtract_meshes.push(child_mesh),
+                CombineMode::Clip => clip_meshes.push(child_mesh),
+            }
+        }
+
+        if !union_meshes.is_empty() {
+            result = perform_union(union_meshes);
+            for sub in subtract_meshes {
+                result = perform_subtract(result, sub);
+            }
+            for clip in clip_meshes {
+                result = perform_intersect(result, clip);
+            }
+        }
+    } else {
+        for child in &node.children {
+            let child_mesh = collect_node_mesh(child, child_tf, colors, registry);
+            result.merge(&child_mesh);
+        }
     }
 
     result

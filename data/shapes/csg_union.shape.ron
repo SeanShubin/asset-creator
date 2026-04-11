@@ -1,8 +1,7 @@
-// CSG Union: two overlapping cylinders merged into a cross
+// Cross pipe with a spherical cavity carved out of the center
 (
     name: "csg_union",
     palette: { "pipe": (0.5, 0.35, 0.25) },
-    csg: Union,
     color: "pipe",
     children: [
         (name: "vertical", shape: Cylinder,
@@ -12,5 +11,8 @@
             bounds: (-1, -0.3, -0.3, 1, 0.3, 0.3),
             orient: (Right, NoMirror, NoRotation),
             color: "pipe"),
+        (name: "cavity", shape: Sphere,
+            bounds: (-0.35, -0.35, -0.35, 0.35, 0.35, 0.35),
+            combine: Subtract),
     ],
 )

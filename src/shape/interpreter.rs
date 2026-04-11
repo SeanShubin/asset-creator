@@ -3,8 +3,7 @@ use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::animation::ShapeAnimator;
 use super::csg;
-use super::definition::{Axis, Bounds, Combinator, CsgOp, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
-use super::meshes::RawMesh;
+use super::definition::{Axis, Bounds, Combinator, CombineMode, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
 
 // =====================================================================
 // Components
@@ -182,13 +181,14 @@ fn process_node(
         Combinator::Import(import_name) => {
             process_import(commands, meshes, materials, parent, node, import_name, &colors, registry);
         }
-        Combinator::Csg(op) => {
-            process_csg(commands, meshes, materials, parent, node, op, &colors, registry);
-        }
         Combinator::None => {
             attach_geometry(commands, meshes, materials, parent, node, &colors);
-            for child in &node.children {
-                spawn_child(commands, meshes, materials, parent, child, &colors, registry);
+            if node.has_csg_children() {
+                process_csg_children(commands, meshes, materials, parent, node, &colors, registry);
+            } else {
+                for child in &node.children {
+                    spawn_child(commands, meshes, materials, parent, child, &colors, registry);
+                }
             }
         }
     }
@@ -233,62 +233,78 @@ fn process_import(
 }
 
 // =====================================================================
-// CSG
+// CSG — triggered when any child has combine: Subtract or Clip
 // =====================================================================
 
-fn process_csg(
+fn process_csg_children(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
     node: &ShapeNode,
-    op: &CsgOp,
     colors: &ColorMap,
     registry: &AssetRegistry,
 ) {
-    // Collect raw meshes from each child (with transforms baked in)
-    let identity = Transform::IDENTITY;
-    let child_meshes: Vec<RawMesh> = node.children.iter()
-        .map(|child| csg::collect_node_mesh(child, identity, colors, registry))
-        .collect();
+    // Spawn all children as normal entities (they appear in the part tree).
+    // Their rendered geometry is hidden — the CSG result replaces it.
+    for child in &node.children {
+        spawn_child_hidden(commands, meshes, materials, parent, child, colors, registry);
+    }
 
-    if child_meshes.is_empty() {
+    // Collect raw meshes grouped by combine mode
+    let identity = Transform::IDENTITY;
+    let mut union_meshes = Vec::new();
+    let mut subtract_meshes = Vec::new();
+    let mut clip_meshes = Vec::new();
+
+    for child in &node.children {
+        let raw = csg::collect_node_mesh(child, identity, colors, registry);
+        if raw.positions.is_empty() { continue; }
+        match child.combine {
+            CombineMode::Union => union_meshes.push(raw),
+            CombineMode::Subtract => subtract_meshes.push(raw),
+            CombineMode::Clip => clip_meshes.push(raw),
+        }
+    }
+
+    if union_meshes.is_empty() {
         return;
     }
 
-    // Perform the CSG boolean operation
-    let result = csg::perform_csg(op, child_meshes);
+    // 1. Union all additive children
+    let mut result = csg::perform_union(union_meshes);
+
+    // 2. Subtract each subtractive child
+    for sub in subtract_meshes {
+        result = csg::perform_subtract(result, sub);
+    }
+
+    // 3. Intersect with each clip child
+    for clip in clip_meshes {
+        result = csg::perform_intersect(result, clip);
+    }
 
     if result.positions.is_empty() {
         return;
     }
 
-    // Resolve color for the CSG result
+    // Resolve color — use the parent's color, or fall back to the first union child's color
     let color = node.color.as_ref()
         .map(|name| resolve_color(name, colors))
         .unwrap_or_else(|| {
-            // Fall back to first child's color
-            node.children.first()
+            node.children.iter()
+                .find(|c| c.combine == CombineMode::Union)
                 .and_then(|c| c.color.as_ref())
                 .map(|name| resolve_color(name, colors))
                 .unwrap_or(Color3(0.5, 0.5, 0.5))
         });
 
     let base_color = Color::srgb(color.0, color.1, color.2);
-    let material = if node.emissive {
-        materials.add(StandardMaterial {
-            base_color,
-            emissive: base_color.into(),
-            cull_mode: None, // CSG results may have mixed winding
-            ..default()
-        })
-    } else {
-        materials.add(StandardMaterial {
-            base_color,
-            cull_mode: None,
-            ..default()
-        })
-    };
+    let material = materials.add(StandardMaterial {
+        base_color,
+        cull_mode: None,
+        ..default()
+    });
 
     let mesh_handle = meshes.add(result.to_bevy_mesh());
 
@@ -297,6 +313,31 @@ fn process_csg(
         MeshMaterial3d(material),
         Transform::IDENTITY,
     ));
+}
+
+/// Spawn a child entity that appears in the part tree but has no visible geometry.
+/// The CSG result mesh replaces the individual child meshes.
+fn spawn_child_hidden(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    parent: Entity,
+    node: &ShapeNode,
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+) {
+    let child_tf = build_child_transform(node);
+    let child = commands.spawn((
+        ShapePart { name: node.name.clone() },
+        BaseTransform(child_tf),
+        child_tf,
+        Visibility::Hidden,
+    )).id();
+    commands.entity(parent).add_child(child);
+
+    // Process the node so its subtree exists in the hierarchy (for part tree display),
+    // but the entity starts hidden.
+    process_node(commands, meshes, materials, child, node, colors, registry);
 }
 
 // =====================================================================

@@ -38,20 +38,21 @@ pub struct ShapeNode {
     #[serde(default)]
     pub repeat: Option<RepeatSpec>,
     #[serde(default)]
-    pub csg: Option<CsgOp>,
+    pub combine: CombineMode,
     #[serde(default)]
     pub animations: Vec<AnimState>,
 }
 
 // =====================================================================
-// CSG operations
+// Combine mode — how a child merges with its siblings
 // =====================================================================
 
-#[derive(Deserialize, Clone, Copy, Debug)]
-pub enum CsgOp {
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub enum CombineMode {
+    #[default]
     Union,
     Subtract,
-    Intersect,
+    Clip,
 }
 
 /// What kind of combinator this node is, if any.
@@ -59,7 +60,6 @@ pub enum Combinator<'a> {
     Mirror(&'a [Axis]),
     Repeat(&'a RepeatSpec),
     Import(&'a str),
-    Csg(&'a CsgOp),
     None,
 }
 
@@ -74,11 +74,14 @@ impl ShapeNode {
             Combinator::Repeat(repeat)
         } else if let Some(ref import) = self.import {
             Combinator::Import(import)
-        } else if let Some(ref csg) = self.csg {
-            Combinator::Csg(csg)
         } else {
             Combinator::None
         }
+    }
+
+    /// Whether any children use CSG (Subtract or Clip combine modes).
+    pub fn has_csg_children(&self) -> bool {
+        self.children.iter().any(|c| c.combine != CombineMode::Union)
     }
 
     /// Whether this node is a combinator (mirror, repeat, or import).
