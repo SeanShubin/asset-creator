@@ -431,8 +431,20 @@ fn draw_grid(
     mut gizmos: Gizmos,
     orbit: Res<OrbitState>,
     stats: Res<SceneStats>,
+    camera: Query<&Projection, With<OrbitCamera>>,
+    windows: Query<&Window>,
 ) {
     if stats.scene_min == stats.scene_max { return; }
+
+    // Compute world-space size of one pixel for zero-line thickness
+    let pixel_size = camera.get_single().ok().and_then(|proj| {
+        if let Projection::Orthographic(ref ortho) = *proj {
+            let height = windows.get_single().map(|w| w.height()).unwrap_or(1080.0);
+            Some(ortho.scale * 2.0 / height)
+        } else {
+            None
+        }
+    }).unwrap_or(0.005);
 
     let yaw_rad = orbit.yaw.to_radians();
     let pitch = orbit.pitch;
@@ -454,22 +466,22 @@ fn draw_grid(
 
     // Floor (XZ plane): visible when looking from above (pitch > 0)
     if pitch > 0.0 {
-        draw_plane_grid(&mut gizmos, GridPlane::XZ, gmin.y, gmin, gmax, GRID_COLOR_XZ);
+        draw_plane_grid(&mut gizmos, GridPlane::XZ, gmin.y, gmin, gmax, GRID_COLOR_XZ, pixel_size);
         draw_floor_axes(&mut gizmos, gmin.y, gmin, gmax);
     }
     // Ceiling: visible when looking from below (pitch < 0)
     if pitch < 0.0 {
-        draw_plane_grid(&mut gizmos, GridPlane::XZ, gmax.y, gmin, gmax, GRID_COLOR_XZ);
+        draw_plane_grid(&mut gizmos, GridPlane::XZ, gmax.y, gmin, gmax, GRID_COLOR_XZ, pixel_size);
         draw_floor_axes(&mut gizmos, gmax.y, gmin, gmax);
     }
 
     // XY wall: camera Z positive → wall at gmin.z (behind)
     let wall_z = if yaw_rad.cos() > 0.0 { gmin.z } else { gmax.z };
-    draw_plane_grid(&mut gizmos, GridPlane::XY, wall_z, gmin, gmax, GRID_COLOR_XY);
+    draw_plane_grid(&mut gizmos, GridPlane::XY, wall_z, gmin, gmax, GRID_COLOR_XY, pixel_size);
 
     // YZ wall: camera X positive → wall at gmin.x (behind)
     let wall_x = if yaw_rad.sin() > 0.0 { gmin.x } else { gmax.x };
-    draw_plane_grid(&mut gizmos, GridPlane::YZ, wall_x, gmin, gmax, GRID_COLOR_YZ);
+    draw_plane_grid(&mut gizmos, GridPlane::YZ, wall_x, gmin, gmax, GRID_COLOR_YZ, pixel_size);
 
     // Y axis on side wall
     gizmos.line(Vec3::new(wall_x, gmin.y, 0.0), Vec3::new(wall_x, gmax.y, 0.0), AXIS_COLOR_Y);
@@ -482,7 +494,7 @@ fn draw_floor_axes(gizmos: &mut Gizmos, y: f32, gmin: Vec3, gmax: Vec3) {
 
 enum GridPlane { XZ, XY, YZ }
 
-fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec3, gmax: Vec3, color: Color) {
+fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec3, gmax: Vec3, color: Color, pixel_size: f32) {
     // Draw lines at every integer position within the grid bounds
     let (a_min, a_max, b_min, b_max) = match plane {
         GridPlane::XZ => (gmin.x, gmax.x, gmin.z, gmax.z),
@@ -490,7 +502,8 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
         GridPlane::YZ => (gmin.y, gmax.y, gmin.z, gmax.z),
     };
 
-    const ZERO_NUDGE: f32 = 0.015;
+    // Extra lines drawn on each side of zero gridlines to make them thicker
+    const ZERO_EXTRA_LINES: i32 = 2;
 
     // Lines along the first axis at integer positions of the second axis
     let b_start = b_min.ceil() as i32;
@@ -504,13 +517,16 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
         };
         gizmos.line(a, b, color);
         if i == 0 {
-            let nudge = match plane {
-                GridPlane::XZ => Vec3::new(0.0, 0.0, ZERO_NUDGE),
-                GridPlane::XY => Vec3::new(0.0, ZERO_NUDGE, 0.0),
-                GridPlane::YZ => Vec3::new(0.0, 0.0, ZERO_NUDGE),
+            let nudge_dir = match plane {
+                GridPlane::XZ => Vec3::new(0.0, 0.0, pixel_size),
+                GridPlane::XY => Vec3::new(0.0, pixel_size, 0.0),
+                GridPlane::YZ => Vec3::new(0.0, 0.0, pixel_size),
             };
-            gizmos.line(a + nudge, b + nudge, color);
-            gizmos.line(a - nudge, b - nudge, color);
+            for n in 1..=ZERO_EXTRA_LINES {
+                let offset = nudge_dir * n as f32;
+                gizmos.line(a + offset, b + offset, color);
+                gizmos.line(a - offset, b - offset, color);
+            }
         }
     }
 
@@ -526,13 +542,16 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
         };
         gizmos.line(a, b, color);
         if i == 0 {
-            let nudge = match plane {
-                GridPlane::XZ => Vec3::new(ZERO_NUDGE, 0.0, 0.0),
-                GridPlane::XY => Vec3::new(ZERO_NUDGE, 0.0, 0.0),
-                GridPlane::YZ => Vec3::new(0.0, ZERO_NUDGE, 0.0),
+            let nudge_dir = match plane {
+                GridPlane::XZ => Vec3::new(pixel_size, 0.0, 0.0),
+                GridPlane::XY => Vec3::new(pixel_size, 0.0, 0.0),
+                GridPlane::YZ => Vec3::new(0.0, pixel_size, 0.0),
             };
-            gizmos.line(a + nudge, b + nudge, color);
-            gizmos.line(a - nudge, b - nudge, color);
+            for n in 1..=ZERO_EXTRA_LINES {
+                let offset = nudge_dir * n as f32;
+                gizmos.line(a + offset, b + offset, color);
+                gizmos.line(a - offset, b - offset, color);
+            }
         }
     }
 }
