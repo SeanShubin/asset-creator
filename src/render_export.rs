@@ -196,7 +196,7 @@ fn process_render_queue(
         return;
     }
 
-    // Wait a few frames after startup for the render pipeline to initialize
+    // Wait for the render pipeline to fully initialize before first export.
     if queue.startup_delay > 0 {
         queue.startup_delay -= 1;
         return;
@@ -298,6 +298,11 @@ fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>)
         match img.try_into_dynamic() {
             Ok(dyn_img) => {
                 let rgba = dyn_img.to_rgba8();
+                let has_content = rgba.pixels().any(|p| p[3] > 0);
+                if !has_content {
+                    warn!("Skipping blank render: {}", path.display());
+                    return;
+                }
                 match rgba.save_with_format(&path, image::ImageFormat::Png) {
                     Ok(_) => info!("Rendered: {}", path.display()),
                     Err(e) => error!("Cannot save render {}: {e}", path.display()),
