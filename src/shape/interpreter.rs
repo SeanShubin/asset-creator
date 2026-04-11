@@ -301,13 +301,15 @@ fn build_csg_mesh(
     registry: &AssetRegistry,
     node: &ShapeNode,
 ) {
-    let identity = Transform::IDENTITY;
     let mut union_meshes = Vec::new();
     let mut subtract_meshes = Vec::new();
     let mut clip_meshes = Vec::new();
 
     for child in children {
-        let raw = csg::collect_node_mesh(child, identity, colors, registry);
+        // Compute the child's transform (includes bounds center translation),
+        // matching what spawn_child/build_child_transform does in the entity path.
+        let child_tf = build_child_transform(child);
+        let raw = csg::collect_node_mesh(child, child_tf, colors, registry);
         if raw.positions.is_empty() { continue; }
         match child.combine {
             CombineMode::Union => union_meshes.push(raw),
