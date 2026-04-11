@@ -61,7 +61,7 @@ struct ActiveRender {
 // =====================================================================
 
 fn shapes_dir() -> PathBuf { PathBuf::from("data/shapes") }
-fn renders_dir() -> PathBuf { PathBuf::from("data/renders") }
+fn renders_dir() -> PathBuf { PathBuf::from("generated/renders") }
 
 fn shape_path_to_render_path(shape_path: &Path) -> Option<PathBuf> {
     let relative = shape_path.strip_prefix(shapes_dir()).ok()?;

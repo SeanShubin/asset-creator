@@ -36,7 +36,7 @@
 //! cargo run --example render_timing
 //! ```
 //!
-//! Output goes to `render_timing_output/` and results are printed to stdout.
+//! Output goes to `generated/render_timing/` and results are printed to stdout.
 
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
@@ -49,7 +49,7 @@ use std::path::PathBuf;
 
 const IMAGE_SIZE: u32 = 256;
 const RENDER_LAYER: usize = 1;
-const OUTPUT_DIR: &str = "render_timing_output";
+const OUTPUT_DIR: &str = "generated/render_timing";
 
 fn main() {
     let _ = std::fs::remove_dir_all(OUTPUT_DIR);

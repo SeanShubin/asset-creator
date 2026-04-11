@@ -1,20 +1,20 @@
 # Render Export System
 
 The render export system automatically renders every `.shape.ron` file to a
-PNG image in `data/renders/`, keeping them synchronized as shapes are added,
+PNG image in `generated/renders/`, keeping them synchronized as shapes are added,
 modified, or deleted.
 
 ## How it works
 
 1. **On startup**, scans `data/shapes/` and compares file modification times
-   against `data/renders/`. Queues any shape whose RON is newer than its PNG
+   against `generated/renders/`. Queues any shape whose RON is newer than its PNG
    (or whose PNG doesn't exist).
 
 2. **On shape change**, watches the registry's `shape_generation` counter.
    When it increments (a `.shape.ron` was modified on disk), re-scans for
    dirty shapes.
 
-3. **Orphan cleanup**: PNGs in `data/renders/` with no corresponding
+3. **Orphan cleanup**: PNGs in `generated/renders/` with no corresponding
    `.shape.ron` are deleted.
 
 4. **Rendering**: processes one shape at a time. For each shape:
