@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::render::view::RenderLayers;
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::animation::ShapeAnimator;
@@ -52,22 +53,37 @@ pub fn spawn_shape(
     shape: &ShapeNode,
     registry: &AssetRegistry,
 ) -> Entity {
+    spawn_shape_with_layers(commands, meshes, materials, shape, registry, None)
+}
+
+pub fn spawn_shape_with_layers(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    shape: &ShapeNode,
+    registry: &AssetRegistry,
+    render_layers: Option<RenderLayers>,
+) -> Entity {
     validate_names(shape, "");
 
     let position = bounds_center(&shape.bounds);
     let root_tf = Transform::from_translation(position);
-    let root = commands.spawn((
+    let mut root_cmd = commands.spawn((
         ShapeRoot,
         ShapePart { name: shape.name.clone() },
         BaseTransform(root_tf),
         ShapeAnimator::new(shape.animations.clone()),
         root_tf,
         Visibility::default(),
-    )).id();
+    ));
+    if let Some(ref layers) = render_layers {
+        root_cmd.insert(layers.clone());
+    }
+    let root = root_cmd.id();
 
     let colors = shape.palette.clone();
     let events = walk_shape_tree(shape, &colors, registry);
-    apply_events_as_entities(commands, meshes, materials, root, &events, registry);
+    apply_events_as_entities(commands, meshes, materials, root, &events, registry, &render_layers);
     root
 }
 
@@ -120,9 +136,17 @@ fn apply_events_as_entities(
     root: Entity,
     events: &[ShapeEvent],
     registry: &AssetRegistry,
+    render_layers: &Option<RenderLayers>,
 ) {
     let mut entity_stack: Vec<Entity> = vec![root];
     let mut csg_stack: Vec<Option<CsgFrame>> = vec![None];
+
+    // Helper: insert render layers on an entity if specified
+    let tag = |commands: &mut Commands, entity: Entity| {
+        if let Some(ref layers) = render_layers {
+            commands.entity(entity).insert(layers.clone());
+        }
+    };
 
     for event in events {
         match event {
@@ -137,6 +161,7 @@ fn apply_events_as_entities(
                     Visibility::default(),
                 )).id();
                 commands.entity(parent).add_child(entity);
+                tag(commands, entity);
 
                 if parent_is_csg {
                     commands.entity(entity).insert(CsgMember);
@@ -180,12 +205,14 @@ fn apply_events_as_entities(
                 let (mesh, material) = make_mesh(meshes, materials, shape, color, node.emissive, is_mirrored);
 
                 if node.children.is_empty() {
-                    commands.entity(parent).with_child((
+                    let mesh_entity = commands.spawn((
                         Mesh3d(mesh),
                         MeshMaterial3d(material),
                         *mesh_tf,
                         Visibility::default(),
-                    ));
+                    )).id();
+                    commands.entity(parent).add_child(mesh_entity);
+                    tag(commands, mesh_entity);
                 } else {
                     let shape_name = node.name.as_ref()
                         .map(|n| format!("{n}_shape"))
@@ -197,12 +224,16 @@ fn apply_events_as_entities(
                         Visibility::default(),
                     )).id();
                     commands.entity(parent).add_child(shape_entity);
-                    commands.entity(shape_entity).with_child((
+                    tag(commands, shape_entity);
+
+                    let mesh_entity = commands.spawn((
                         Mesh3d(mesh),
                         MeshMaterial3d(material),
                         *mesh_tf,
                         Visibility::default(),
-                    ));
+                    )).id();
+                    commands.entity(shape_entity).add_child(mesh_entity);
+                    tag(commands, mesh_entity);
                 }
             }
             ShapeEvent::ExitNode => {
@@ -212,7 +243,7 @@ fn apply_events_as_entities(
                 if let Some(frame) = csg_frame {
                     build_csg_mesh(
                         commands, meshes, materials,
-                        entity, &frame.children, &frame.colors, registry,
+                        entity, &frame.children, &frame.colors, registry, render_layers,
                     );
                 }
             }
@@ -234,6 +265,7 @@ pub fn build_csg_mesh(
     children: &[ShapeNode],
     colors: &ColorMap,
     registry: &AssetRegistry,
+    render_layers: &Option<RenderLayers>,
 ) {
     let mut union_meshes = Vec::new();
     let mut subtract_meshes = Vec::new();
@@ -274,13 +306,17 @@ pub fn build_csg_mesh(
 
     let mesh_handle = meshes.add(result.to_bevy_mesh());
 
-    commands.entity(parent).with_child((
+    let csg_entity = commands.spawn((
         CsgResult,
         Mesh3d(mesh_handle),
         MeshMaterial3d(material),
         Transform::IDENTITY,
         Visibility::default(),
-    ));
+    )).id();
+    commands.entity(parent).add_child(csg_entity);
+    if let Some(ref layers) = render_layers {
+        commands.entity(csg_entity).insert(layers.clone());
+    }
 }
 
 // =====================================================================
@@ -415,7 +451,7 @@ pub fn rebuild_csg_on_toggle(
 
         build_csg_mesh(
             &mut commands, &mut meshes, &mut materials,
-            parent, &active_children, &group.colors, &registry,
+            parent, &active_children, &group.colors, &registry, &None,
         );
     }
 }

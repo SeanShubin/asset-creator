@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 pub use animation::{animate_shapes, ShapeAnimator};
 pub use definition::ShapeNode;
-pub use interpreter::{despawn_shape, spawn_shape, rebuild_csg_on_toggle, suppress_csg_member_meshes, ShapePart, ShapeRoot};
+pub use interpreter::{despawn_shape, spawn_shape, spawn_shape_with_layers, rebuild_csg_on_toggle, suppress_csg_member_meshes, ShapePart, ShapeRoot};
 
 /// Plugin that maintains shape system invariants.
 /// Register this once; it ensures CSG member meshes are always suppressed

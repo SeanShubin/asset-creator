@@ -6,7 +6,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use std::path::{Path, PathBuf};
 
 use crate::registry::AssetRegistry;
-use crate::shape::spawn_shape;
+use crate::shape::spawn_shape_with_layers;
 
 const EXPORT_RENDER_LAYER: usize = 1;
 const RENDER_SIZE: u32 = 1024;
@@ -19,9 +19,6 @@ const DEFAULT_PITCH: f32 = 45.0;
 // =====================================================================
 
 #[derive(Component)]
-struct ExportShape;
-
-#[derive(Component)]
 struct ExportEntity;
 
 pub struct RenderExportPlugin;
@@ -32,37 +29,7 @@ impl Plugin for RenderExportPlugin {
             .add_systems(Update, (
                 queue_dirty_shapes,
                 process_render_queue,
-                propagate_export_render_layers,
             ).chain());
-    }
-}
-
-fn propagate_export_render_layers(
-    mut commands: Commands,
-    export_roots: Query<Entity, With<ExportShape>>,
-    children_query: Query<&Children>,
-    has_layer: Query<(), With<RenderLayers>>,
-) {
-    let layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
-    for root in &export_roots {
-        propagate_layer_recursive(&mut commands, root, &children_query, &has_layer, &layer);
-    }
-}
-
-fn propagate_layer_recursive(
-    commands: &mut Commands,
-    entity: Entity,
-    children_query: &Query<&Children>,
-    has_layer: &Query<(), With<RenderLayers>>,
-    layer: &RenderLayers,
-) {
-    if let Ok(children) = children_query.get(entity) {
-        for &child in children.iter() {
-            if has_layer.get(child).is_err() {
-                commands.entity(child).insert(layer.clone());
-            }
-            propagate_layer_recursive(commands, child, children_query, has_layer, layer);
-        }
     }
 }
 
@@ -186,9 +153,8 @@ fn walk_dir_recursive(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Process the render queue — one shape at a time.
-/// Everything is spawned on frame 0. The screenshot fires on the next render.
-/// We wait for the screenshot entity to be despawned (capture complete) before cleanup.
+/// Spawn shape + camera + light + screenshot all on the same frame.
+/// The shape gets RenderLayers at creation time (no propagation needed).
 fn process_render_queue(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -276,11 +242,13 @@ fn process_render_queue(
         export_layer.clone(),
     )).id();
 
-    // Shape
-    let shape_root = spawn_shape(&mut commands, &mut meshes, &mut materials, shape, &registry);
-    commands.entity(shape_root).insert((export_layer, ExportShape));
+    // Shape — all entities get the export render layer at creation time
+    let shape_root = spawn_shape_with_layers(
+        &mut commands, &mut meshes, &mut materials, shape, &registry,
+        Some(export_layer),
+    );
 
-    // Screenshot — fires on the next render
+    // Screenshot
     if let Some(parent) = job.output_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -321,7 +289,6 @@ fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>)
     }
 }
 
-/// Compute exact orthographic scale by projecting AABB corners through the view matrix.
 fn compute_fit_from_shape(shape: &crate::shape::ShapeNode) -> f32 {
     let aabb = shape.compute_aabb();
     let Some(aabb) = aabb else { return 0.01 };
