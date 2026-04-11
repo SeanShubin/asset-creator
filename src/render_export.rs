@@ -13,9 +13,6 @@ const RENDER_SIZE: u32 = 1024;
 const ISO_DISTANCE: f32 = 15.0;
 const DEFAULT_YAW: f32 = 45.0;
 const DEFAULT_PITCH: f32 = 45.0;
-const FIT_BORDER: f32 = 1.1;
-const ZOOM_PROJ_WIDTH_RATIO: f32 = 1.414214;
-const ZOOM_PROJ_HEIGHT_RATIO: f32 = 1.707107;
 
 // =====================================================================
 // Plugin
@@ -90,20 +87,14 @@ struct ActiveRender {
     cleanup_entities: Vec<Entity>,
     screenshot_entity: Entity,
     frames_waited: u32,
-    screenshot_triggered: bool,
 }
 
 // =====================================================================
 // Render directory structure
 // =====================================================================
 
-fn shapes_dir() -> PathBuf {
-    PathBuf::from("data/shapes")
-}
-
-fn renders_dir() -> PathBuf {
-    PathBuf::from("data/renders")
-}
+fn shapes_dir() -> PathBuf { PathBuf::from("data/shapes") }
+fn renders_dir() -> PathBuf { PathBuf::from("data/renders") }
 
 fn shape_path_to_render_path(shape_path: &Path) -> Option<PathBuf> {
     let relative = shape_path.strip_prefix(shapes_dir()).ok()?;
@@ -141,10 +132,7 @@ fn queue_dirty_shapes(
         for (_name, shape_path) in registry.shape_entries() {
             if let Some(render_path) = shape_path_to_render_path(&shape_path) {
                 if needs_render(&shape_path, &render_path) {
-                    queue.pending.push(RenderJob {
-                        shape_path,
-                        output_path: render_path,
-                    });
+                    queue.pending.push(RenderJob { shape_path, output_path: render_path });
                 }
             }
         }
@@ -154,19 +142,14 @@ fn queue_dirty_shapes(
         return;
     }
 
-    if current_gen == queue.last_generation {
-        return;
-    }
+    if current_gen == queue.last_generation { return; }
     queue.last_generation = current_gen;
 
     for (_name, shape_path) in registry.shape_entries() {
         if let Some(render_path) = shape_path_to_render_path(&shape_path) {
             if needs_render(&shape_path, &render_path) {
                 if !queue.pending.iter().any(|j| j.shape_path == shape_path) {
-                    queue.pending.push(RenderJob {
-                        shape_path,
-                        output_path: render_path,
-                    });
+                    queue.pending.push(RenderJob { shape_path, output_path: render_path });
                 }
             }
         }
@@ -183,7 +166,6 @@ fn clean_orphaned_renders(registry: &AssetRegistry) {
         for png_path in entries {
             if png_path.extension().is_some_and(|e| e == "png") && !render_paths.contains(&png_path) {
                 let _ = std::fs::remove_file(&png_path);
-                info!("Removed orphaned render: {}", png_path.display());
             }
         }
     }
@@ -204,6 +186,9 @@ fn walk_dir_recursive(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// Process the render queue — one shape at a time.
+/// Everything is spawned on frame 0. The screenshot fires on the next render.
+/// We wait for the screenshot entity to be despawned (capture complete) before cleanup.
 fn process_render_queue(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -213,21 +198,14 @@ fn process_render_queue(
     registry: Res<AssetRegistry>,
     entities: Query<Entity>,
 ) {
+    // Wait for active render to complete
     if let Some(ref mut active) = queue.active {
         active.frames_waited += 1;
 
-        if !active.screenshot_triggered && active.frames_waited >= 3 {
-            active.screenshot_triggered = true;
-        }
+        let done = entities.get(active.screenshot_entity).is_err();
+        let timed_out = active.frames_waited > 30;
 
-        let should_cleanup =
-            (active.screenshot_triggered && entities.get(active.screenshot_entity).is_err())
-            || active.frames_waited > 30;
-
-        if should_cleanup {
-            if active.frames_waited > 30 {
-                warn!("Render export timed out, skipping");
-            }
+        if done || timed_out {
             let cleanup = active.cleanup_entities.clone();
             queue.active = None;
             for entity in cleanup {
@@ -236,24 +214,20 @@ fn process_render_queue(
                 }
             }
         }
-
         return;
     }
 
+    // Start the next job
     let Some(job) = queue.pending.pop() else { return };
-
-    let Some(shape) = registry.get_shape_by_path(&job.shape_path) else {
-        warn!("Shape at '{}' not found for rendering", job.shape_path.display());
-        return;
-    };
+    let Some(shape) = registry.get_shape_by_path(&job.shape_path) else { return };
 
     let fit_scale = compute_fit_from_shape(shape);
+    let shape_center = shape.compute_aabb()
+        .map(|b| { let c = b.center(); Vec3::new(c.0, c.1, c.2) })
+        .unwrap_or(Vec3::ZERO);
 
-    let size = Extent3d {
-        width: RENDER_SIZE,
-        height: RENDER_SIZE,
-        depth_or_array_layers: 1,
-    };
+    // Render target image
+    let size = Extent3d { width: RENDER_SIZE, height: RENDER_SIZE, depth_or_array_layers: 1 };
     let mut image = Image {
         texture_descriptor: TextureDescriptor {
             label: Some("render_export"),
@@ -272,13 +246,10 @@ fn process_render_queue(
     image.resize(size);
     let image_handle = images.add(image);
 
-    let shape_center = shape.compute_aabb()
-        .map(|b| { let c = b.center(); Vec3::new(c.0, c.1, c.2) })
-        .unwrap_or(Vec3::ZERO);
     let (cam_pos, _) = compute_camera_pose(DEFAULT_YAW, DEFAULT_PITCH, shape_center);
-
     let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
 
+    // Camera
     let camera = commands.spawn((
         ExportEntity,
         Camera3d::default(),
@@ -295,57 +266,45 @@ fn process_render_queue(
         export_layer.clone(),
     )).id();
 
-    let cam_rot = Quat::from_euler(
-        EulerRot::YXZ,
-        DEFAULT_YAW.to_radians(),
-        -DEFAULT_PITCH.to_radians(),
-        0.0,
-    );
-    let light_offset = Quat::from_euler(
-        EulerRot::YXZ,
-        15.0_f32.to_radians(),
-        -30.0_f32.to_radians(),
-        0.0,
-    );
+    // Light
+    let cam_rot = Quat::from_euler(EulerRot::YXZ, DEFAULT_YAW.to_radians(), -DEFAULT_PITCH.to_radians(), 0.0);
+    let light_offset = Quat::from_euler(EulerRot::YXZ, 15.0_f32.to_radians(), -30.0_f32.to_radians(), 0.0);
     let light = commands.spawn((
         ExportEntity,
-        DirectionalLight {
-            illuminance: 6000.0,
-            shadows_enabled: false,
-            ..default()
-        },
+        DirectionalLight { illuminance: 6000.0, shadows_enabled: false, ..default() },
         Transform::from_rotation(cam_rot * light_offset),
         export_layer.clone(),
     )).id();
 
+    // Shape
     let shape_root = spawn_shape(&mut commands, &mut meshes, &mut materials, shape, &registry);
     commands.entity(shape_root).insert((export_layer, ExportShape));
 
-    let output_path = job.output_path.clone();
-    if let Some(parent) = output_path.parent() {
+    // Screenshot — fires on the next render
+    if let Some(parent) = job.output_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let screenshot_entity = commands.spawn(
         Screenshot::image(image_handle)
-    ).observe(save_png_with_alpha(output_path)).id();
+    ).observe(save_png_with_alpha(job.output_path)).id();
 
     queue.active = Some(ActiveRender {
         cleanup_entities: vec![camera, light, shape_root],
         screenshot_entity,
         frames_waited: 0,
-        screenshot_triggered: false,
     });
 }
 
+// =====================================================================
+// Helpers
+// =====================================================================
+
 fn compute_camera_pose(yaw: f32, pitch: f32, target: Vec3) -> (Vec3, Quat) {
-    let pitch_rad = pitch.to_radians();
-    let yaw_rad = yaw.to_radians();
-    let rotation = Quat::from_euler(EulerRot::YXZ, yaw_rad, -pitch_rad, 0.0);
+    let rotation = Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), -pitch.to_radians(), 0.0);
     let position = target + rotation * Vec3::new(0.0, 0.0, ISO_DISTANCE);
     (position, rotation)
 }
 
-/// Like Bevy's save_to_disk but preserves the alpha channel.
 fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>) {
     move |trigger| {
         let img = trigger.event().0.clone();
@@ -362,20 +321,39 @@ fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>)
     }
 }
 
+/// Compute exact orthographic scale by projecting AABB corners through the view matrix.
 fn compute_fit_from_shape(shape: &crate::shape::ShapeNode) -> f32 {
     let aabb = shape.compute_aabb();
     let Some(aabb) = aabb else { return 0.01 };
 
-    let size = aabb.size();
-    let max_extent = size.0.max(size.1).max(size.2);
-    if max_extent < 0.001 { return 0.01; }
+    let center = aabb.center();
+    let shape_center = Vec3::new(center.0, center.1, center.2);
+    let min = aabb.min();
+    let max = aabb.max();
 
-    let proj_width = max_extent * ZOOM_PROJ_WIDTH_RATIO;
-    let proj_height = max_extent * ZOOM_PROJ_HEIGHT_RATIO;
-    let image_size = RENDER_SIZE as f32;
+    let (cam_pos, _) = compute_camera_pose(DEFAULT_YAW, DEFAULT_PITCH, shape_center);
+    let view = Transform::from_translation(cam_pos)
+        .looking_at(shape_center, Vec3::Y)
+        .compute_matrix()
+        .inverse();
 
-    let scale_for_width = proj_width * FIT_BORDER / image_size;
-    let scale_for_height = proj_height * FIT_BORDER / image_size;
+    let mut view_min = Vec3::splat(f32::MAX);
+    let mut view_max = Vec3::splat(f32::MIN);
 
-    scale_for_width.max(scale_for_height)
+    for &x in &[min.0, max.0] {
+        for &y in &[min.1, max.1] {
+            for &z in &[min.2, max.2] {
+                let view_pos = view.transform_point3(Vec3::new(x, y, z));
+                view_min = view_min.min(view_pos);
+                view_max = view_max.max(view_pos);
+            }
+        }
+    }
+
+    let proj_width = view_max.x - view_min.x;
+    let proj_height = view_max.y - view_min.y;
+
+    if proj_width < 0.001 && proj_height < 0.001 { return 0.01; }
+
+    proj_width.max(proj_height) / RENDER_SIZE as f32
 }
