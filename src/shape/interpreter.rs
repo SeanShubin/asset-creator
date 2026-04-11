@@ -2,7 +2,9 @@ use bevy::prelude::*;
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::animation::ShapeAnimator;
-use super::definition::{Axis, Bounds, Combinator, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
+use super::csg;
+use super::definition::{Axis, Bounds, Combinator, CsgOp, PrimitiveShape, RepeatSpec, ShapeNode, reflect_orient};
+use super::meshes::RawMesh;
 
 // =====================================================================
 // Components
@@ -180,6 +182,9 @@ fn process_node(
         Combinator::Import(import_name) => {
             process_import(commands, meshes, materials, parent, node, import_name, &colors, registry);
         }
+        Combinator::Csg(op) => {
+            process_csg(commands, meshes, materials, parent, node, op, &colors, registry);
+        }
         Combinator::None => {
             attach_geometry(commands, meshes, materials, parent, node, &colors);
             for child in &node.children {
@@ -225,6 +230,73 @@ fn process_import(
     for child in &remapped.children {
         spawn_child(commands, meshes, materials, parent, child, &import_colors, registry);
     }
+}
+
+// =====================================================================
+// CSG
+// =====================================================================
+
+fn process_csg(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    parent: Entity,
+    node: &ShapeNode,
+    op: &CsgOp,
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+) {
+    // Collect raw meshes from each child (with transforms baked in)
+    let identity = Transform::IDENTITY;
+    let child_meshes: Vec<RawMesh> = node.children.iter()
+        .map(|child| csg::collect_node_mesh(child, identity, colors, registry))
+        .collect();
+
+    if child_meshes.is_empty() {
+        return;
+    }
+
+    // Perform the CSG boolean operation
+    let result = csg::perform_csg(op, child_meshes);
+
+    if result.positions.is_empty() {
+        return;
+    }
+
+    // Resolve color for the CSG result
+    let color = node.color.as_ref()
+        .map(|name| resolve_color(name, colors))
+        .unwrap_or_else(|| {
+            // Fall back to first child's color
+            node.children.first()
+                .and_then(|c| c.color.as_ref())
+                .map(|name| resolve_color(name, colors))
+                .unwrap_or(Color3(0.5, 0.5, 0.5))
+        });
+
+    let base_color = Color::srgb(color.0, color.1, color.2);
+    let material = if node.emissive {
+        materials.add(StandardMaterial {
+            base_color,
+            emissive: base_color.into(),
+            cull_mode: None, // CSG results may have mixed winding
+            ..default()
+        })
+    } else {
+        materials.add(StandardMaterial {
+            base_color,
+            cull_mode: None,
+            ..default()
+        })
+    };
+
+    let mesh_handle = meshes.add(result.to_bevy_mesh());
+
+    commands.entity(parent).with_child((
+        Mesh3d(mesh_handle),
+        MeshMaterial3d(material),
+        Transform::IDENTITY,
+    ));
 }
 
 // =====================================================================

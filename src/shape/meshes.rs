@@ -1,6 +1,159 @@
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
+use super::definition::PrimitiveShape;
+
+// =====================================================================
+// RawMesh — intermediate mesh representation for CSG and conversion
+// =====================================================================
+
+pub struct RawMesh {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
+}
+
+impl RawMesh {
+    pub fn to_bevy_mesh(self) -> Mesh {
+        build_mesh(self.positions, self.normals, self.uvs, self.indices)
+    }
+
+    /// Merge another RawMesh into this one (simple concatenation, no CSG).
+    pub fn merge(&mut self, other: &RawMesh) {
+        let offset = self.positions.len() as u32;
+        self.positions.extend_from_slice(&other.positions);
+        self.normals.extend_from_slice(&other.normals);
+        self.uvs.extend_from_slice(&other.uvs);
+        self.indices.extend(other.indices.iter().map(|i| i + offset));
+    }
+
+    /// Apply an affine transform to all positions and normals.
+    pub fn apply_transform(&mut self, tf: &Transform) {
+        let mat = tf.compute_matrix();
+        let normal_mat = mat.inverse().transpose();
+        for pos in &mut self.positions {
+            let p = mat.transform_point3(Vec3::from(*pos));
+            *pos = [p.x, p.y, p.z];
+        }
+        for normal in &mut self.normals {
+            let n = normal_mat.transform_vector3(Vec3::from(*normal)).normalize();
+            *normal = [n.x, n.y, n.z];
+        }
+    }
+}
+
+/// Generate a RawMesh for any primitive shape.
+pub fn create_raw_mesh(shape: PrimitiveShape) -> RawMesh {
+    match shape {
+        PrimitiveShape::Box => create_raw_box(),
+        PrimitiveShape::Sphere => create_raw_sphere(16, 32),
+        PrimitiveShape::Cylinder => create_raw_cylinder(32),
+        PrimitiveShape::Dome => create_raw_dome(24, 32),
+        PrimitiveShape::Cone => create_raw_cone(24, 32),
+        PrimitiveShape::Wedge => create_raw_wedge(),
+        PrimitiveShape::Torus => create_raw_torus(32, 16),
+        PrimitiveShape::Corner => create_raw_corner(),
+    }
+}
+
+// =====================================================================
+// Raw mesh builders for primitives that previously used Bevy built-ins
+// =====================================================================
+
+/// Unit box: 1x1x1 centered at origin.
+fn create_raw_box() -> RawMesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+
+    // +Y (top)
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
+        [0.0, 1.0, 0.0]);
+    // -Y (bottom)
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [-0.5, -0.5, -0.5],
+        [0.0, -1.0, 0.0]);
+    // +Z (front)
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5],
+        [0.0, 0.0, 1.0]);
+    // -Z (back)
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [-0.5, 0.5, -0.5], [-0.5, -0.5, -0.5],
+        [0.0, 0.0, -1.0]);
+    // +X (right)
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5], [0.5, -0.5, -0.5],
+        [1.0, 0.0, 0.0]);
+    // -X (left)
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [-0.5, -0.5, 0.5],
+        [-1.0, 0.0, 0.0]);
+
+    RawMesh { positions, normals, uvs, indices }
+}
+
+/// Unit sphere: radius 0.5 centered at origin.
+fn create_raw_sphere(rings: u32, segments: u32) -> RawMesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+
+    for ring in 0..=rings {
+        let theta = ring as f32 / rings as f32 * std::f32::consts::PI;
+        let y = 0.5 * theta.cos();
+        let r = 0.5 * theta.sin();
+
+        for seg in 0..=segments {
+            let phi = seg as f32 / segments as f32 * std::f32::consts::TAU;
+            let x = r * phi.cos();
+            let z = r * phi.sin();
+
+            positions.push([x, y, z]);
+            let n = Vec3::new(x, y, z).normalize();
+            normals.push([n.x, n.y, n.z]);
+            uvs.push([seg as f32 / segments as f32, ring as f32 / rings as f32]);
+        }
+    }
+
+    let indices = generate_grid_indices(rings, segments, false);
+    RawMesh { positions, normals, uvs, indices }
+}
+
+/// Unit cylinder: radius 0.5, height 1.0, centered at origin.
+fn create_raw_cylinder(segments: u32) -> RawMesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+
+    // Side wall: 2 rings (bottom and top)
+    for row in 0..=1u32 {
+        let y = -0.5 + row as f32;
+        for seg in 0..=segments {
+            let angle = seg as f32 / segments as f32 * std::f32::consts::TAU;
+            let x = 0.5 * angle.cos();
+            let z = 0.5 * angle.sin();
+            positions.push([x, y, z]);
+            normals.push([angle.cos(), 0.0, angle.sin()]);
+            uvs.push([seg as f32 / segments as f32, row as f32]);
+        }
+    }
+    indices.extend(generate_grid_indices(1, segments, false));
+
+    // Top cap
+    add_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
+        0.5, 0.5, segments, true);
+    // Bottom cap
+    add_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
+        0.5, -0.5, segments, false);
+
+    RawMesh { positions, normals, uvs, indices }
+}
+
 // =====================================================================
 // Dome — convex ellipsoidal cap, normals pointing outward
 // =====================================================================
@@ -8,6 +161,10 @@ use bevy::render::mesh::{Indices, PrimitiveTopology};
 /// Unit dome: half-ellipsoid, radius=0.5, height=1.0 (base at y=-0.5, peak at y=0.5).
 /// Scaled by transform to fill bounds.
 pub fn create_unit_dome(rings: u32, segments: u32) -> Mesh {
+    create_raw_dome(rings, segments).to_bevy_mesh()
+}
+
+fn create_raw_dome(rings: u32, segments: u32) -> RawMesh {
     let (mut positions, mut normals, mut uvs) = generate_ellipsoid_cap(
         0.5, 1.0, 1.0, rings, segments,
     );
@@ -16,7 +173,7 @@ pub fn create_unit_dome(rings: u32, segments: u32) -> Mesh {
     add_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
         0.5, -0.5, segments, false);
 
-    build_mesh(positions, normals, uvs, indices)
+    RawMesh { positions, normals, uvs, indices }
 }
 
 // =====================================================================
@@ -24,6 +181,10 @@ pub fn create_unit_dome(rings: u32, segments: u32) -> Mesh {
 // =====================================================================
 
 pub fn create_cone_mesh(rings: u32, segments: u32) -> Mesh {
+    create_raw_cone(rings, segments).to_bevy_mesh()
+}
+
+fn create_raw_cone(rings: u32, segments: u32) -> RawMesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut uvs = Vec::new();
@@ -49,11 +210,10 @@ pub fn create_cone_mesh(rings: u32, segments: u32) -> Mesh {
 
     let mut indices = generate_grid_indices(rings, segments, true);
 
-    // Bottom cap with its own downward-facing vertices
     add_disc(&mut positions, &mut normals, &mut uvs, &mut indices,
         0.5, -0.5, segments, false);
 
-    build_mesh(positions, normals, uvs, indices)
+    RawMesh { positions, normals, uvs, indices }
 }
 
 // =====================================================================
@@ -61,6 +221,10 @@ pub fn create_cone_mesh(rings: u32, segments: u32) -> Mesh {
 // =====================================================================
 
 pub fn create_wedge_mesh() -> Mesh {
+    create_raw_wedge().to_bevy_mesh()
+}
+
+fn create_raw_wedge() -> RawMesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut uvs = Vec::new();
@@ -93,7 +257,7 @@ pub fn create_wedge_mesh() -> Mesh {
         [ 0.5, -0.5, -0.5], [ 0.5, -0.5,  0.5], [ 0.5,  0.5, -0.5],
         [1.0, 0.0, 0.0]);
 
-    build_mesh(positions, normals, uvs, indices)
+    RawMesh { positions, normals, uvs, indices }
 }
 
 // =====================================================================
@@ -101,6 +265,10 @@ pub fn create_wedge_mesh() -> Mesh {
 // =====================================================================
 
 pub fn create_torus_mesh(ring_segments: u32, cross_segments: u32) -> Mesh {
+    create_raw_torus(ring_segments, cross_segments).to_bevy_mesh()
+}
+
+fn create_raw_torus(ring_segments: u32, cross_segments: u32) -> RawMesh {
     let major_r = 0.35;
     let minor_r = 0.15;
 
@@ -129,7 +297,7 @@ pub fn create_torus_mesh(ring_segments: u32, cross_segments: u32) -> Mesh {
     }
 
     let indices = generate_grid_indices(ring_segments, cross_segments, false);
-    build_mesh(positions, normals, uvs, indices)
+    RawMesh { positions, normals, uvs, indices }
 }
 
 // =====================================================================
@@ -140,6 +308,10 @@ pub fn create_torus_mesh(ring_segments: u32, cross_segments: u32) -> Mesh {
 /// Three right-triangle faces on the cube walls + one diagonal face.
 /// Orient/flip determines which corner the solid fills.
 pub fn create_unit_corner() -> Mesh {
+    create_raw_corner().to_bevy_mesh()
+}
+
+fn create_raw_corner() -> RawMesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut uvs = Vec::new();
@@ -180,7 +352,7 @@ pub fn create_unit_corner() -> Mesh {
         [diag_normal.x, diag_normal.y, diag_normal.z],
     );
 
-    build_mesh(positions, normals, uvs, indices)
+    RawMesh { positions, normals, uvs, indices }
 }
 
 // =====================================================================

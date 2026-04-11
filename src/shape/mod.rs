@@ -1,4 +1,5 @@
 mod animation;
+mod csg;
 mod definition;
 mod interpreter;
 mod meshes;

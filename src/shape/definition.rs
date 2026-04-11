@@ -38,7 +38,20 @@ pub struct ShapeNode {
     #[serde(default)]
     pub repeat: Option<RepeatSpec>,
     #[serde(default)]
+    pub csg: Option<CsgOp>,
+    #[serde(default)]
     pub animations: Vec<AnimState>,
+}
+
+// =====================================================================
+// CSG operations
+// =====================================================================
+
+#[derive(Deserialize, Clone, Copy, Debug)]
+pub enum CsgOp {
+    Union,
+    Subtract,
+    Intersect,
 }
 
 /// What kind of combinator this node is, if any.
@@ -46,6 +59,7 @@ pub enum Combinator<'a> {
     Mirror(&'a [Axis]),
     Repeat(&'a RepeatSpec),
     Import(&'a str),
+    Csg(&'a CsgOp),
     None,
 }
 
@@ -60,6 +74,8 @@ impl ShapeNode {
             Combinator::Repeat(repeat)
         } else if let Some(ref import) = self.import {
             Combinator::Import(import)
+        } else if let Some(ref csg) = self.csg {
+            Combinator::Csg(csg)
         } else {
             Combinator::None
         }
