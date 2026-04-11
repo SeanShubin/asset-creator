@@ -380,7 +380,7 @@ fn pattern_selector_widget(ui: &mut egui::Ui, pattern: &mut PatternType) -> bool
 fn secondary_color_editor(ui: &mut egui::Ui, surface: &mut SurfaceDef, dirty: &mut EditorDirty) {
     let mut has_secondary = surface.secondary_color.is_some();
     if ui.checkbox(&mut has_secondary, "Secondary Color").changed() {
-        surface.secondary_color = if has_secondary { Some(Color3(0.3, 0.3, 0.3)) } else { None };
+        surface.secondary_color = if has_secondary { Some(Color3(1, 1, 1)) } else { None };
         dirty.preview = true;
         dirty.file = true;
     }

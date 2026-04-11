@@ -7,22 +7,38 @@ pub fn parse_ron<T: serde::de::DeserializeOwned>(ron_str: &str) -> Result<T, ron
     options.from_str(ron_str)
 }
 
-/// RGB color with components in 0.0-1.0 range.
+/// RGB color with integer components in 0-3 range.
+/// Converted to float via value / 3.0 (0=0%, 1=33%, 2=67%, 3=100%).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Color3(pub f32, pub f32, pub f32);
+pub struct Color3(pub u8, pub u8, pub u8);
+
+const COLOR_DIVISOR: f32 = 3.0;
 
 impl Color3 {
     pub fn to_array(self) -> [f32; 3] {
-        [self.0, self.1, self.2]
+        [
+            self.0 as f32 / COLOR_DIVISOR,
+            self.1 as f32 / COLOR_DIVISOR,
+            self.2 as f32 / COLOR_DIVISOR,
+        ]
+    }
+
+    pub fn to_rgb(self) -> (f32, f32, f32) {
+        let a = self.to_array();
+        (a[0], a[1], a[2])
     }
 
     pub fn from_array(a: [f32; 3]) -> Self {
-        Self(a[0], a[1], a[2])
+        Self(
+            (a[0] * COLOR_DIVISOR).round() as u8,
+            (a[1] * COLOR_DIVISOR).round() as u8,
+            (a[2] * COLOR_DIVISOR).round() as u8,
+        )
     }
 }
 
 impl Default for Color3 {
     fn default() -> Self {
-        Self(0.5, 0.5, 0.5)
+        Self(1, 1, 1) // ~33% grey
     }
 }

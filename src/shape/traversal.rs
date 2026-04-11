@@ -28,7 +28,7 @@ pub fn resolve_color(name: &str, colors: &ColorMap) -> Color3 {
         .map(|(_, v)| *v)
         .unwrap_or_else(|| {
             warn!("Color '{}' not found in color map, using default gray", name);
-            Color3(0.5, 0.5, 0.5)
+            Color3(1, 1, 1)
         })
 }
 

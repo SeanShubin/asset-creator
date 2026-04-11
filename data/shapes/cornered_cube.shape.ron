@@ -1,6 +1,6 @@
 (
     name: "cornered_cube",
-    palette: { "body": (0.5, 0.5, 0.5) },
+    palette: { "body": (2, 2, 2) },
     children: [
         (
             name:"x-box",

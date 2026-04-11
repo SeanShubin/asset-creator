@@ -1,7 +1,7 @@
 // Box with a cylindrical hole — the hole uses combine: Subtract
 (
     name: "csg_subtract",
-    palette: { "metal": (0.6, 0.6, 0.65) },
+    palette: { "metal": (2, 2, 2) },
     color: "metal",
     children: [
         (name: "base", shape: Box,

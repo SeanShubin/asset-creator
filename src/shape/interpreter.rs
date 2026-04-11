@@ -243,7 +243,7 @@ fn attach_mesh(
         .unwrap_or_else(|| {
             warn!("Shape '{}' has no color specified",
                 node.name.as_deref().unwrap_or("unnamed"));
-            Color3(0.5, 0.5, 0.5)
+            Color3(1, 1, 1)
         });
 
     let (mesh, material) = make_mesh(meshes, materials, shape, color, node.emissive, is_mirrored);
@@ -319,9 +319,10 @@ pub fn build_csg_mesh(
         .find(|c| c.combine == CombineMode::Union)
         .and_then(|c| c.color.as_ref())
         .map(|name| resolve_color(name, colors))
-        .unwrap_or(Color3(0.5, 0.5, 0.5));
+        .unwrap_or(Color3(1, 1, 1));
 
-    let base_color = Color::srgb(color.0, color.1, color.2);
+    let (cr, cg, cb) = color.to_rgb();
+    let base_color = Color::srgb(cr, cg, cb);
     let material = materials.add(StandardMaterial {
         base_color,
         cull_mode: None,
@@ -366,7 +367,8 @@ fn make_mesh(
         PrimitiveShape::Corner => meshes.add(super::meshes::create_unit_corner()),
     };
 
-    let base_color = Color::srgb(color.0, color.1, color.2);
+    let (cr, cg, cb) = color.to_rgb();
+    let base_color = Color::srgb(cr, cg, cb);
     let cull_mode = if is_mirrored { None } else { Some(bevy::render::render_resource::Face::Back) };
     let material = if emissive {
         materials.add(StandardMaterial {

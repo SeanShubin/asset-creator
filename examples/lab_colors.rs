@@ -177,8 +177,10 @@ fn ui_system(
                                 color.b * 255.0,
                             ));
                             ui.label(format!(
-                                "RON: ({:.2}, {:.2}, {:.2})",
-                                color.r, color.g, color.b,
+                                "RON: ({}, {}, {})",
+                                (color.r * 3.0).round() as u8,
+                                (color.g * 3.0).round() as u8,
+                                (color.b * 3.0).round() as u8,
                             ));
                         });
                     }

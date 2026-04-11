@@ -1,6 +1,6 @@
 (
     name: "orientation_test",
-    palette: { "white": (1.0, 1.0, 1.0), "red": (1.0, 0.0, 0.0), "green": (0.0, 1.0, 0.0), "blue": (0.0, 0.0, 1.0) },
+    palette: { "white": (3, 3, 3), "red": (3, 0, 0), "green": (0, 3, 0), "blue": (0, 0, 3) },
     children: [
         (
             name:"center",

@@ -1,7 +1,7 @@
 (
     name: "arrow",
     palette: {
-        "highlight": (0.5, 0.5, 0.5)
+        "highlight": (2, 2, 2)
     },
     children: [
         (

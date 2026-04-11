@@ -1,6 +1,6 @@
 (
     name: "wheel",
-    palette: { "body": (0.25, 0.25, 0.28) },
+    palette: { "body": (1, 1, 1) },
     shape: Cylinder,
     bounds: (-1, -1, -1, 1, 1, 1),
     orient: (Right, NoMirror, NoRotation),

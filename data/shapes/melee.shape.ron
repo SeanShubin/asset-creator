@@ -1,8 +1,8 @@
 (
     name: "melee",
     palette: {
-        "body": (0.1, 0.1, 0.1),
-        "blade": (1.0, 0.0, 0.0)
+        "body": (0, 0, 0),
+        "blade": (3, 0, 0)
     },
     children: [
         (

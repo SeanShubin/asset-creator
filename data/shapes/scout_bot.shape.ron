@@ -1,7 +1,7 @@
 // Procedural robot: wheels + melee blades
 (
     name: "scout_bot",
-    palette: { "chassis": (0.45, 0.45, 0.50), "head": (0.55, 0.55, 0.60), "eye": (0.9, 0.2, 0.1), "arm": (0.25, 0.25, 0.28), "wheel": (0.25, 0.25, 0.28), "blade": (0.6, 0.25, 0.25) },
+    palette: { "chassis": (1, 1, 2), "head": (2, 2, 2), "eye": (3, 1, 0), "arm": (1, 1, 1), "wheel": (1, 1, 1), "blade": (2, 1, 1) },
     children: [
         // Chassis: pos=(0, 0.55, 0), size=(0.7, 0.35, 0.5)
         (name: "chassis", shape: Box,

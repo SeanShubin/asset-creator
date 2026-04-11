@@ -69,10 +69,10 @@ fn default_name() -> String {
     "unnamed".into()
 }
 fn default_base_color() -> Color3 {
-    Color3(0.5, 0.5, 0.55)
+    Color3(2, 2, 2)
 }
 fn default_color_variation() -> Color3 {
-    Color3(0.08, 0.06, 0.04)
+    Color3(0, 0, 0)
 }
 fn default_noise_scale() -> f32 {
     8.0
@@ -84,7 +84,7 @@ fn default_roughness() -> f32 {
     0.6
 }
 fn default_speckle_color() -> Color3 {
-    Color3(1.0, 1.0, 1.0)
+    Color3(3, 3, 3)
 }
 fn default_stripe_angle() -> f32 {
     90.0
