@@ -19,7 +19,9 @@
       "Bash(grep -l \"color:\" data/shapes/*.ron)",
       "Bash(ls data/shapes/*.ron)",
       "WebSearch",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(xargs head:*)",
+      "Bash(python3 -c ':*)"
     ]
   }
 }

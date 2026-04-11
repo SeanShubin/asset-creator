@@ -2,6 +2,7 @@ mod browser;
 mod editor;
 mod noise;
 mod registry;
+mod render_export;
 mod shape;
 mod surface;
 mod util;
@@ -24,9 +25,11 @@ fn main() {
         }),
         EguiPlugin,
         registry::RegistryPlugin::default(),
+        shape::ShapePlugin,
         browser::BrowserPlugin,
         editor::SurfaceEditorPlugin,
         editor::ObjectEditorPlugin,
+        render_export::RenderExportPlugin,
     ));
 
     if let Some(editor) = browser::resolve_from_cli() {

@@ -5,6 +5,22 @@ mod interpreter;
 mod meshes;
 mod traversal;
 
+use bevy::prelude::*;
+
 pub use animation::{animate_shapes, ShapeAnimator};
 pub use definition::ShapeNode;
 pub use interpreter::{despawn_shape, spawn_shape, rebuild_csg_on_toggle, suppress_csg_member_meshes, ShapePart, ShapeRoot};
+
+/// Plugin that maintains shape system invariants.
+/// Register this once; it ensures CSG member meshes are always suppressed
+/// regardless of which editor or consumer spawns shapes.
+pub struct ShapePlugin;
+
+impl Plugin for ShapePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, (
+            bevy::ecs::schedule::apply_deferred,
+            suppress_csg_member_meshes,
+        ).chain());
+    }
+}
