@@ -1,7 +1,7 @@
 (
     name: "melee",
     palette: {
-        "body": (0.5, 0.5, 0.5),
+        "body": (0.1, 0.1, 0.1),
         "blade": (1.0, 0.0, 0.0)
     },
     children: [

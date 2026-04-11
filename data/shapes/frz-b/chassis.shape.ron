@@ -1,0 +1,32 @@
+(
+    name: "frz-b",
+    palette: {
+        "body": (0.2, 0.0, 0.0),
+        "hover": (0, 0.5, 0),
+        "sensor": (0.0, 0.0, 0.8),
+        "blade": (1.0, 0.0, 0.0),
+        "bay":(0, 0, 0)
+    },
+    children: [
+        (
+            name: "body",
+            shape: Cylinder,
+            bounds: (-4.0, -1.0, -4.0, 4.0, 0.0, 4.0),
+            color: "body"
+        ),
+        (
+            name: "top",
+            shape: Dome,
+            bounds: (-4.0, 0.0, -4.0, 4.0, 1.0, 4.0),
+            color: "body"
+        ),
+        (
+            name: "weapon_bay",
+            shape: Box,
+            bounds: (2,-1,-2,3,0,4),
+            color: "bay",
+            combine: Subtract
+
+        )
+    ],
+)
