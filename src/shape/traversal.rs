@@ -70,13 +70,23 @@ pub fn apply_color_remapping(
 // =====================================================================
 
 
-/// Compute the local transform for a node. Uses bounds min (always integer)
-/// as the entity position. Combinators have no position.
-pub fn compute_local_transform(node: &ShapeNode) -> Transform {
+/// Compute the local transform for a node. Divides integer coordinates by
+/// the accumulated scale to get correct world-space floats.
+pub fn compute_local_transform(node: &ShapeNode, scale: (i32, i32, i32)) -> Transform {
     let position = if node.is_combinator() {
         Vec3::ZERO
     } else {
-        bounds_min_vec(&node.bounds)
+        match &node.bounds {
+            Some(b) => {
+                let m = b.min();
+                Vec3::new(
+                    m.0 as f32 / scale.0 as f32,
+                    m.1 as f32 / scale.1 as f32,
+                    m.2 as f32 / scale.2 as f32,
+                )
+            }
+            None => Vec3::ZERO,
+        }
     };
 
     let mut tf = Transform::from_translation(position);
@@ -94,9 +104,14 @@ pub fn compute_local_transform(node: &ShapeNode) -> Transform {
 /// Compute the mesh transform. The unit mesh (centered at origin, -0.5 to 0.5)
 /// is scaled by orient × size, then translated by size/2 so it fills
 /// the bounds from (0,0,0) to (size) relative to the entity at bounds.min().
-pub fn compute_mesh_transform(shape: PrimitiveShape, bounds: &Bounds, om: &Mat3) -> Transform {
+/// Divides by scale to convert from integer space to world space.
+pub fn compute_mesh_transform(shape: PrimitiveShape, bounds: &Bounds, om: &Mat3, scale: (i32, i32, i32)) -> Transform {
     let isize = bounds.size();
-    let size = (isize.0 as f32, isize.1 as f32, isize.2 as f32);
+    let size = (
+        isize.0 as f32 / scale.0 as f32,
+        isize.1 as f32 / scale.1 as f32,
+        isize.2 as f32 / scale.2 as f32,
+    );
 
     let local_x_size = pick_size_for_direction(om.x_axis, size);
     let local_y_size = pick_size_for_direction(om.y_axis, size);
@@ -124,17 +139,6 @@ fn pick_size_for_direction(dir: Vec3, size: (f32, f32, f32)) -> f32 {
     if dir.x.abs() > 0.5 { size.0 }
     else if dir.y.abs() > 0.5 { size.1 }
     else { size.2 }
-}
-
-/// Bounds min as Vec3 (integer values cast to f32).
-pub fn bounds_min_vec(bounds: &Option<Bounds>) -> Vec3 {
-    match bounds {
-        Some(b) => {
-            let m = b.min();
-            Vec3::new(m.0 as f32, m.1 as f32, m.2 as f32)
-        }
-        None => Vec3::ZERO,
-    }
 }
 
 /// Bounds center as Vec3 (float — only for camera/render positioning).
@@ -230,12 +234,20 @@ pub enum ShapeEvent {
         node: ShapeNode,
         local_tf: Transform,
         colors: ColorMap,
+        /// Accumulated coordinate scale from import nesting.
+        scale: (i32, i32, i32),
     },
     /// The current node has a primitive shape to render.
     Geometry {
         node: ShapeNode,
         mesh_tf: Transform,
         colors: ColorMap,
+    },
+    /// A pre-computed mesh from CSG resolution within an import.
+    /// The import's internal CSG is fully resolved; the result is a single mesh.
+    PrecomputedMesh {
+        mesh: RawMesh,
+        color: Color3,
     },
     /// Leaving the current node.
     ExitNode,
@@ -253,8 +265,19 @@ pub fn walk_shape_tree(
     colors: &ColorMap,
     registry: &AssetRegistry,
 ) -> Vec<ShapeEvent> {
+    walk_shape_tree_scaled(node, colors, registry, (1, 1, 1))
+}
+
+/// Walk a ShapeNode tree starting with an accumulated coordinate scale.
+/// Used when the children's bounds have already been remapped (e.g. inside an import).
+pub fn walk_shape_tree_scaled(
+    node: &ShapeNode,
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+    scale: (i32, i32, i32),
+) -> Vec<ShapeEvent> {
     let mut events = Vec::new();
-    walk_node(&mut events, node, colors, registry);
+    walk_node(&mut events, node, colors, registry, scale);
     events
 }
 
@@ -263,6 +286,7 @@ fn walk_node(
     node: &ShapeNode,
     colors: &ColorMap,
     registry: &AssetRegistry,
+    scale: (i32, i32, i32),
 ) {
     let colors = if node.palette.is_empty() {
         colors.clone()
@@ -272,33 +296,44 @@ fn walk_node(
 
     match node.combinator() {
         Combinator::Mirror(axes) => {
-            walk_mirror(events, node, axes, &colors, registry);
+            walk_mirror(events, node, axes, &colors, registry, scale);
         }
         Combinator::Repeat(repeat) => {
-            walk_repeat(events, node, repeat, &colors, registry);
+            walk_repeat(events, node, repeat, &colors, registry, scale);
         }
         Combinator::Import(import_name) => {
-            walk_import(events, node, import_name, &colors, registry);
+            walk_import(events, node, import_name, &colors, registry, scale);
         }
         Combinator::None => {
-            let local_tf = compute_local_transform(node);
+            let local_tf = compute_local_transform(node, scale);
             events.push(ShapeEvent::EnterNode {
                 node: node.clone(),
                 local_tf,
                 colors: colors.clone(),
+                scale,
             });
+
+            if let Some(bounds) = &node.bounds {
+                let size = bounds.size();
+                if size.0 == 0 || size.1 == 0 || size.2 == 0 {
+                    error!("'{}' has zero-size bounds ({},{},{}) — skipping",
+                        node.name.as_deref().unwrap_or("unnamed"), size.0, size.1, size.2);
+                    events.push(ShapeEvent::ExitNode);
+                    return;
+                }
+            }
 
             if let Some(shape) = node.shape {
                 let Some(bounds) = node.bounds else {
                     warn!("Shape '{}' has no bounds — skipping geometry",
                         node.name.as_deref().unwrap_or("unnamed"));
                     for child in &node.children {
-                        walk_node(events, child, &colors, registry);
+                        walk_node(events, child, &colors, registry, scale);
                     }
                     events.push(ShapeEvent::ExitNode);
                     return;
                 };
-                let mesh_tf = compute_mesh_transform(shape, &bounds, &node.orient);
+                let mesh_tf = compute_mesh_transform(shape, &bounds, &node.orient, scale);
                 events.push(ShapeEvent::Geometry {
                     node: node.clone(),
                     mesh_tf,
@@ -307,7 +342,7 @@ fn walk_node(
             }
 
             for child in &node.children {
-                walk_node(events, child, &colors, registry);
+                walk_node(events, child, &colors, registry, scale);
             }
 
             events.push(ShapeEvent::ExitNode);
@@ -321,6 +356,7 @@ fn walk_mirror(
     axes: &[Axis],
     colors: &ColorMap,
     registry: &AssetRegistry,
+    scale: (i32, i32, i32),
 ) {
     let mut base = node.clone();
     base.mirror = Vec::new();
@@ -339,7 +375,7 @@ fn walk_mirror(
                 copy.name = Some(format!("{name}_{suffix}"));
             }
         }
-        walk_node(events, &copy, colors, registry);
+        walk_node(events, &copy, colors, registry, scale);
     }
 }
 
@@ -349,6 +385,7 @@ fn walk_repeat(
     repeat: &RepeatSpec,
     colors: &ColorMap,
     registry: &AssetRegistry,
+    scale: (i32, i32, i32),
 ) {
     let start = if repeat.center {
         -(repeat.count as f32 - 1.0) * repeat.spacing * 0.5
@@ -364,7 +401,7 @@ fn walk_repeat(
         if let Some(ref name) = instance.name {
             instance.name = Some(format!("{name}_{i}"));
         }
-        walk_node(events, &instance, colors, registry);
+        walk_node(events, &instance, colors, registry, scale);
     }
 }
 
@@ -374,6 +411,7 @@ fn walk_import(
     import_name: &str,
     colors: &ColorMap,
     registry: &AssetRegistry,
+    parent_scale: (i32, i32, i32),
 ) {
     let imported = match registry.get_shape(import_name) {
         Some(shape) => shape.clone(),
@@ -389,12 +427,75 @@ fn walk_import(
     };
     let placement = node.bounds.unwrap_or(native_aabb);
 
+    let remap_scale = Bounds::remap_scale(&native_aabb);
+    let new_scale = (
+        parent_scale.0 * remap_scale.0,
+        parent_scale.1 * remap_scale.1,
+        parent_scale.2 * remap_scale.2,
+    );
+
     let mut remapped = imported;
     remapped.remap_bounds(&native_aabb, &placement);
 
     let import_colors = apply_color_remapping(node, &remapped.palette, colors);
 
-    walk_node(events, &remapped, &import_colors, registry);
+    if remapped.has_csg_children() {
+        walk_import_with_csg(events, node, &remapped, &import_colors, registry, new_scale);
+    } else {
+        walk_node(events, &remapped, &import_colors, registry, new_scale);
+    }
+}
+
+/// Resolve CSG within an imported shape and emit the result as a pre-computed mesh.
+/// The import's internal subtract/clip operations are fully applied here;
+/// the parent sees only a computed shape, not the raw CSG structure.
+fn walk_import_with_csg(
+    events: &mut Vec<ShapeEvent>,
+    _import_node: &ShapeNode,
+    remapped: &ShapeNode,
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+    scale: (i32, i32, i32),
+) {
+    let merged_colors = if remapped.palette.is_empty() {
+        colors.clone()
+    } else {
+        merge_colors(colors, &remapped.palette)
+    };
+
+    let aabb = Bounds::enclosing(&remapped.children)
+        .unwrap_or(Bounds(-1, -1, -1, 1, 1, 1));
+
+    let (mesh, _stats) = super::csg::perform_csg_from_children(
+        &remapped.children, &merged_colors, registry, &aabb, scale,
+    );
+
+    let color = remapped.children.iter()
+        .find(|c| c.combine == super::definition::CombineMode::Union)
+        .and_then(|c| c.color.as_ref())
+        .map(|name| resolve_color(name, &merged_colors))
+        .unwrap_or(Color3(1, 1, 1));
+
+    let mut container = remapped.clone();
+    container.children.clear();
+    container.shape = None;
+
+    let local_tf = compute_local_transform(&container, scale);
+    events.push(ShapeEvent::EnterNode {
+        node: container,
+        local_tf,
+        colors: merged_colors,
+        scale,
+    });
+
+    if !mesh.positions.is_empty() {
+        events.push(ShapeEvent::PrecomputedMesh { mesh, color });
+    }
+
+    // Also walk any non-CSG children that might exist alongside the CSG group.
+    // (Currently all children of a CSG parent participate, but this is future-safe.)
+
+    events.push(ShapeEvent::ExitNode);
 }
 
 // =====================================================================
@@ -418,6 +519,12 @@ pub fn collect_mesh_from_events(events: &[ShapeEvent]) -> RawMesh {
                 let world_mesh_tf = combine_transforms(&world, mesh_tf);
                 let mut raw = create_raw_mesh(node.shape.unwrap());
                 raw.apply_transform(&world_mesh_tf);
+                result.merge(&raw);
+            }
+            ShapeEvent::PrecomputedMesh { mesh, .. } => {
+                let world = *tf_stack.last().unwrap();
+                let mut raw = mesh.clone();
+                raw.apply_transform(&world);
                 result.merge(&raw);
             }
             ShapeEvent::ExitNode => {

@@ -150,8 +150,10 @@ impl ShapeNode {
         }
     }
 
-    /// Remap all bounds in this node and its descendants from one coordinate space to another.
-    /// Also remaps repeat spacing to match the new coordinate scale.
+    /// Remap all bounds in this node and its descendants from one coordinate
+    /// space to another. Uses only integer multiplication — no division, no
+    /// rounding. The result is in a coordinate space scaled by from_size per
+    /// axis, which the traversal handles when converting to float at render time.
     pub fn remap_bounds(&mut self, from: &Bounds, to: &Bounds) {
         if let Some(ref mut b) = self.bounds {
             *b = b.remap(from, to);
@@ -250,19 +252,21 @@ impl Bounds {
         (self.0.max(self.3), self.1.max(self.4), self.2.max(self.5))
     }
 
-    /// Remap this bounds from `from` coordinate space into `to` coordinate space.
-    /// Uses float arithmetic for the division, rounds result to integer.
+    /// Remap this bounds from `from` to `to` coordinate space using only
+    /// integer multiplication. No division, no rounding, no precision loss.
+    /// The result is in units scaled by from_size per axis.
+    /// Formula: result = to_min * from_size + (val - from_min) * to_size
     pub fn remap(&self, from: &Bounds, to: &Bounds) -> Bounds {
-        let remap = |val: i32, from_min: i32, from_size: i32, to_min: i32, to_size: i32| -> i32 {
-            if from_size == 0 { to_min } else {
-                to_min + ((val - from_min) as f32 * to_size as f32 / from_size as f32).round() as i32
-            }
-        };
-
         let from_min = from.min();
         let from_size = from.size();
         let to_min = to.min();
         let to_size = to.size();
+
+        let remap = |val: i32, from_min: i32, from_size: i32, to_min: i32, to_size: i32| -> i32 {
+            if from_size == 0 { to_min } else {
+                to_min * from_size + (val - from_min) * to_size
+            }
+        };
 
         Bounds(
             remap(self.0, from_min.0, from_size.0, to_min.0, to_size.0),
@@ -272,6 +276,13 @@ impl Bounds {
             remap(self.4, from_min.1, from_size.1, to_min.1, to_size.1),
             remap(self.5, from_min.2, from_size.2, to_min.2, to_size.2),
         )
+    }
+
+    /// Returns the per-axis scale factor introduced by a remap from `from` to `to`.
+    /// This is from_size — the denominator that the caller must accumulate.
+    pub fn remap_scale(from: &Bounds) -> (i32, i32, i32) {
+        let s = from.size();
+        (s.0.max(1), s.1.max(1), s.2.max(1))
     }
 }
 

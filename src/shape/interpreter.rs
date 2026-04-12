@@ -29,6 +29,7 @@ pub struct ShapeRoot;
 pub struct CsgGroup {
     pub children: Vec<ShapeNode>,
     pub colors: ColorMap,
+    pub scale: (i32, i32, i32),
 }
 
 #[derive(Component)]
@@ -182,6 +183,7 @@ pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
 struct CsgFrame {
     children: Vec<ShapeNode>,
     colors: ColorMap,
+    scale: (i32, i32, i32),
 }
 
 fn apply_events_as_entities(
@@ -198,11 +200,11 @@ fn apply_events_as_entities(
 
     for event in events {
         match event {
-            ShapeEvent::EnterNode { node, local_tf, colors } => {
+            ShapeEvent::EnterNode { node, local_tf, colors, scale } => {
                 let parent = *entity_stack.last().unwrap();
                 let parent_is_csg = csg_stack.last().unwrap().is_some();
                 let (entity, csg_frame) = spawn_part_entity(
-                    commands, parent, node, *local_tf, colors, parent_is_csg, render_layers,
+                    commands, parent, node, *local_tf, colors, parent_is_csg, render_layers, *scale,
                 );
                 entity_stack.push(entity);
                 csg_stack.push(csg_frame);
@@ -211,6 +213,10 @@ fn apply_events_as_entities(
                 let parent = *entity_stack.last().unwrap();
                 attach_mesh(commands, meshes, materials, parent, node, *mesh_tf, colors, render_layers);
             }
+            ShapeEvent::PrecomputedMesh { mesh, color } => {
+                let parent = *entity_stack.last().unwrap();
+                attach_precomputed_mesh(commands, meshes, materials, parent, mesh, *color, render_layers);
+            }
             ShapeEvent::ExitNode => {
                 let entity = entity_stack.pop().unwrap();
                 let csg_frame = csg_stack.pop().unwrap();
@@ -218,6 +224,7 @@ fn apply_events_as_entities(
                     build_csg_mesh(
                         commands, meshes, materials,
                         entity, &frame.children, &frame.colors, registry, render_layers,
+                        frame.scale,
                     );
                 }
             }
@@ -245,6 +252,7 @@ fn spawn_part_entity(
     colors: &ColorMap,
     parent_is_csg: bool,
     render_layers: &Option<RenderLayers>,
+    scale: (i32, i32, i32),
 ) -> (Entity, Option<CsgFrame>) {
     let entity = commands.spawn((
         ShapePart { name: node.name.clone() },
@@ -265,12 +273,14 @@ fn spawn_part_entity(
             CsgGroup {
                 children: node.children.clone(),
                 colors: colors.clone(),
+                scale,
             },
             CsgChildState { active: all_active },
         ));
         Some(CsgFrame {
             children: node.children.clone(),
             colors: colors.clone(),
+            scale,
         })
     } else {
         None
@@ -336,6 +346,36 @@ fn attach_mesh(
     }
 }
 
+fn attach_precomputed_mesh(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    parent: Entity,
+    mesh: &super::meshes::RawMesh,
+    color: Color3,
+    render_layers: &Option<RenderLayers>,
+) {
+    if mesh.positions.is_empty() { return; }
+
+    let (cr, cg, cb) = color.to_rgb();
+    let base_color = Color::srgb(cr, cg, cb);
+    let material = materials.add(StandardMaterial {
+        base_color,
+        cull_mode: None,
+        ..default()
+    });
+
+    let mesh_handle = meshes.add(mesh.clone().to_bevy_mesh());
+    let mesh_entity = commands.spawn((
+        Mesh3d(mesh_handle),
+        MeshMaterial3d(material),
+        Transform::IDENTITY,
+        Visibility::default(),
+    )).id();
+    commands.entity(parent).add_child(mesh_entity);
+    tag_render_layer(commands, mesh_entity, render_layers);
+}
+
 pub fn build_csg_mesh(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -345,12 +385,13 @@ pub fn build_csg_mesh(
     colors: &ColorMap,
     registry: &AssetRegistry,
     render_layers: &Option<RenderLayers>,
+    scale: (i32, i32, i32),
 ) {
     // Compute AABB enclosing all children to bound the SDF meshing region
     let aabb = super::definition::Bounds::enclosing(children)
         .unwrap_or(super::definition::Bounds(-1, -1, -1, 1, 1, 1));
 
-    let (result, stats) = csg::perform_csg_from_children(children, colors, registry, &aabb);
+    let (result, stats) = csg::perform_csg_from_children(children, colors, registry, &aabb, scale);
     info!("CSG: {} tris in {:.0}ms", stats.output_tris, stats.mesh_time_ms);
     if result.positions.is_empty() {
         return;
@@ -519,6 +560,7 @@ pub fn rebuild_csg_on_toggle(
         build_csg_mesh(
             &mut commands, &mut meshes, &mut materials,
             parent, &active_children, &group.colors, &registry, &None,
+            group.scale,
         );
     }
 }

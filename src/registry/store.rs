@@ -303,6 +303,7 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
     });
 }
 
+
 /// Compute the registry key for a shape file: relative path from data/shapes/.
 /// e.g., "data/shapes/wheel.shape.ron" → "wheel.shape.ron"
 ///        "data/shapes/robots/arm.shape.ron" → "robots/arm.shape.ron"

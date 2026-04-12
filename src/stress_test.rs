@@ -101,7 +101,7 @@ fn run_csg_for_shape(shape: &ShapeNode, colors: &ColorMap, registry: &AssetRegis
         writeln!(log, "    child '{}': combine={}", name, combine).unwrap();
     }
 
-    let (_result, stats) = perform_csg_uncached(&shape.children, colors, registry, &aabb);
+    let (_result, stats) = perform_csg_uncached(&shape.children, colors, registry, &aabb, (1, 1, 1));
     stats
 }
 

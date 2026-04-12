@@ -35,6 +35,11 @@ pub fn collect_sdf_from_events(events: &[ShapeEvent]) -> Option<Tree> {
                     });
                 }
             }
+            ShapeEvent::PrecomputedMesh { .. } => {
+                // Pre-computed meshes can't be converted back to SDF.
+                // This case doesn't arise in practice: CSG walks individual
+                // children, which don't contain pre-computed mesh events.
+            }
             ShapeEvent::ExitNode => {
                 tf_stack.pop();
                 let child_sdf = sdf_stack.pop().unwrap();
@@ -154,19 +159,27 @@ fn sdf_corner(x: Tree, y: Tree, z: Tree) -> Tree {
 }
 
 /// Mesh an SDF tree using fidget's octree, returning positions and indices.
-pub fn mesh_sdf(tree: &Tree, bounds: &Bounds) -> (Vec<[f32; 3]>, Vec<u32>) {
+/// The `scale` parameter converts the integer AABB into the same coordinate
+/// space as the SDF (which divides by scale when building transforms).
+pub fn mesh_sdf(tree: &Tree, bounds: &Bounds, scale: (i32, i32, i32)) -> (Vec<[f32; 3]>, Vec<u32>) {
     use fidget::vm::VmShape;
     use fidget::mesh::{Octree, Settings};
 
     let shape = VmShape::from(tree.clone());
 
-    // world_to_model maps fidget's [-1,1]³ sampling grid to the world coordinates
-    // the SDF expects. We need [-1,1] → [center-extent/2, center+extent/2].
-    // That's: world_pos = center + sample_pos * extent/2
-    // As a matrix: translate by center, scale by extent/2
-    let center = bounds.center_f32();
-    let size = bounds.size();
-    let max_extent = (size.0.max(size.1).max(size.2) as f32).max(0.001);
+    let raw_center = bounds.center_f32();
+    let raw_size = bounds.size();
+    let center = (
+        raw_center.0 / scale.0 as f32,
+        raw_center.1 / scale.1 as f32,
+        raw_center.2 / scale.2 as f32,
+    );
+    let extent = (
+        raw_size.0 as f32 / scale.0 as f32,
+        raw_size.1 as f32 / scale.1 as f32,
+        raw_size.2 as f32 / scale.2 as f32,
+    );
+    let max_extent = extent.0.max(extent.1).max(extent.2).max(0.001);
     let half = max_extent / 2.0;
 
     let world_to_model = nalgebra::Matrix4::new(
