@@ -90,10 +90,10 @@ impl ShapeNode {
         !matches!(self.combinator(), Combinator::None)
     }
 
-    /// Compute the AABB enclosing this node and all descendants.
+    /// Compute the AABB enclosing this node and all descendants. Integer arithmetic throughout.
     pub fn compute_aabb(&self) -> Option<Bounds> {
-        let mut min = (f32::MAX, f32::MAX, f32::MAX);
-        let mut max = (f32::MIN, f32::MIN, f32::MIN);
+        let mut min = (i32::MAX, i32::MAX, i32::MAX);
+        let mut max = (i32::MIN, i32::MIN, i32::MIN);
         let mut found = false;
 
         self.collect_bounds(&mut min, &mut max, &mut found);
@@ -105,23 +105,20 @@ impl ShapeNode {
         }
     }
 
-    fn collect_bounds(&self, min: &mut (f32, f32, f32), max: &mut (f32, f32, f32), found: &mut bool) {
+    fn collect_bounds(&self, min: &mut (i32, i32, i32), max: &mut (i32, i32, i32), found: &mut bool) {
         if let Some(b) = &self.bounds {
             let b_min = b.min();
             let b_max = b.max();
 
-            // Include this node's bounds
             include_point(min, max, b_min, found);
             include_point(min, max, b_max, found);
 
-            // Include mirrored copies
             for &axis in &self.mirror {
                 let (mir_min, mir_max) = reflect_extents(b_min, b_max, axis);
                 include_point(min, max, mir_min, found);
                 include_point(min, max, mir_max, found);
             }
 
-            // Include repeated copies
             if let Some(ref repeat) = self.repeat {
                 let start = if repeat.center {
                     -(repeat.count as f32 - 1.0) * repeat.spacing * 0.5
@@ -129,10 +126,20 @@ impl ShapeNode {
                     0.0
                 };
                 let last_offset = start + (repeat.count as f32 - 1.0) * repeat.spacing;
+                // Repeat offsets may be fractional — floor/ceil to integer AABB
                 let (first, last) = match repeat.along {
-                    Axis::X => ((b_min.0 + start, b_min.1, b_min.2), (b_max.0 + last_offset, b_max.1, b_max.2)),
-                    Axis::Y => ((b_min.0, b_min.1 + start, b_min.2), (b_max.0, b_max.1 + last_offset, b_max.2)),
-                    Axis::Z => ((b_min.0, b_min.1, b_min.2 + start), (b_max.0, b_max.1, b_max.2 + last_offset)),
+                    Axis::X => (
+                        ((b_min.0 as f32 + start).floor() as i32, b_min.1, b_min.2),
+                        ((b_max.0 as f32 + last_offset).ceil() as i32, b_max.1, b_max.2),
+                    ),
+                    Axis::Y => (
+                        (b_min.0, (b_min.1 as f32 + start).floor() as i32, b_min.2),
+                        (b_max.0, (b_max.1 as f32 + last_offset).ceil() as i32, b_max.2),
+                    ),
+                    Axis::Z => (
+                        (b_min.0, b_min.1, (b_min.2 as f32 + start).floor() as i32),
+                        (b_max.0, b_max.1, (b_max.2 as f32 + last_offset).ceil() as i32),
+                    ),
                 };
                 include_point(min, max, first, found);
                 include_point(min, max, last, found);
@@ -153,9 +160,9 @@ impl ShapeNode {
             let from_size = from.size();
             let to_size = to.size();
             let scale = match repeat.along {
-                Axis::X => if from_size.0.abs() > 0.001 { to_size.0 / from_size.0 } else { 1.0 },
-                Axis::Y => if from_size.1.abs() > 0.001 { to_size.1 / from_size.1 } else { 1.0 },
-                Axis::Z => if from_size.2.abs() > 0.001 { to_size.2 / from_size.2 } else { 1.0 },
+                Axis::X => if from_size.0 != 0 { to_size.0 as f32 / from_size.0 as f32 } else { 1.0 },
+                Axis::Y => if from_size.1 != 0 { to_size.1 as f32 / from_size.1 as f32 } else { 1.0 },
+                Axis::Z => if from_size.2 != 0 { to_size.2 as f32 / from_size.2 as f32 } else { 1.0 },
             };
             repeat.spacing *= scale;
         }
@@ -165,7 +172,7 @@ impl ShapeNode {
     }
 }
 
-fn include_point(min: &mut (f32, f32, f32), max: &mut (f32, f32, f32), p: (f32, f32, f32), found: &mut bool) {
+fn include_point(min: &mut (i32, i32, i32), max: &mut (i32, i32, i32), p: (i32, i32, i32), found: &mut bool) {
     min.0 = min.0.min(p.0);
     min.1 = min.1.min(p.1);
     min.2 = min.2.min(p.2);
@@ -175,7 +182,7 @@ fn include_point(min: &mut (f32, f32, f32), max: &mut (f32, f32, f32), p: (f32, 
     *found = true;
 }
 
-fn reflect_extents(b_min: (f32, f32, f32), b_max: (f32, f32, f32), axis: Axis) -> ((f32, f32, f32), (f32, f32, f32)) {
+fn reflect_extents(b_min: (i32, i32, i32), b_max: (i32, i32, i32), axis: Axis) -> ((i32, i32, i32), (i32, i32, i32)) {
     match axis {
         Axis::X => ((-b_max.0, b_min.1, b_min.2), (-b_min.0, b_max.1, b_max.2)),
         Axis::Y => ((b_min.0, -b_max.1, b_min.2), (b_max.0, -b_min.1, b_max.2)),
@@ -204,31 +211,40 @@ pub enum PrimitiveShape {
 // =====================================================================
 
 #[derive(Deserialize, Clone, Copy, Debug)]
-pub struct Bounds(pub f32, pub f32, pub f32, pub f32, pub f32, pub f32);
+pub struct Bounds(pub i32, pub i32, pub i32, pub i32, pub i32, pub i32);
 
 impl Bounds {
-    pub fn center(&self) -> (f32, f32, f32) {
-        ((self.0 + self.3) / 2.0, (self.1 + self.4) / 2.0, (self.2 + self.5) / 2.0)
+    /// Center as float — only needed for camera positioning and render export.
+    pub fn center_f32(&self) -> (f32, f32, f32) {
+        (
+            (self.0 + self.3) as f32 / 2.0,
+            (self.1 + self.4) as f32 / 2.0,
+            (self.2 + self.5) as f32 / 2.0,
+        )
     }
 
-    pub fn size(&self) -> (f32, f32, f32) {
-        ((self.3 - self.0).abs(), (self.4 - self.1).abs(), (self.5 - self.2).abs())
+    pub fn size(&self) -> (i32, i32, i32) {
+        (
+            (self.3 - self.0).abs(),
+            (self.4 - self.1).abs(),
+            (self.5 - self.2).abs(),
+        )
     }
 
-    pub fn min(&self) -> (f32, f32, f32) {
+    pub fn min(&self) -> (i32, i32, i32) {
         (self.0.min(self.3), self.1.min(self.4), self.2.min(self.5))
     }
 
-    pub fn max(&self) -> (f32, f32, f32) {
+    pub fn max(&self) -> (i32, i32, i32) {
         (self.0.max(self.3), self.1.max(self.4), self.2.max(self.5))
     }
 
     /// Remap this bounds from `from` coordinate space into `to` coordinate space.
-    /// Each corner is mapped: to_min + (point - from_min) * (to_size / from_size)
+    /// Uses float arithmetic for the division, rounds result to integer.
     pub fn remap(&self, from: &Bounds, to: &Bounds) -> Bounds {
-        let remap_component = |val: f32, from_min: f32, from_size: f32, to_min: f32, to_size: f32| -> f32 {
-            if from_size.abs() < 0.001 { to_min } else {
-                to_min + (val - from_min) * (to_size / from_size)
+        let remap = |val: i32, from_min: i32, from_size: i32, to_min: i32, to_size: i32| -> i32 {
+            if from_size == 0 { to_min } else {
+                to_min + ((val - from_min) as f32 * to_size as f32 / from_size as f32).round() as i32
             }
         };
 
@@ -238,12 +254,12 @@ impl Bounds {
         let to_size = to.size();
 
         Bounds(
-            remap_component(self.0, from_min.0, from_size.0, to_min.0, to_size.0),
-            remap_component(self.1, from_min.1, from_size.1, to_min.1, to_size.1),
-            remap_component(self.2, from_min.2, from_size.2, to_min.2, to_size.2),
-            remap_component(self.3, from_min.0, from_size.0, to_min.0, to_size.0),
-            remap_component(self.4, from_min.1, from_size.1, to_min.1, to_size.1),
-            remap_component(self.5, from_min.2, from_size.2, to_min.2, to_size.2),
+            remap(self.0, from_min.0, from_size.0, to_min.0, to_size.0),
+            remap(self.1, from_min.1, from_size.1, to_min.1, to_size.1),
+            remap(self.2, from_min.2, from_size.2, to_min.2, to_size.2),
+            remap(self.3, from_min.0, from_size.0, to_min.0, to_size.0),
+            remap(self.4, from_min.1, from_size.1, to_min.1, to_size.1),
+            remap(self.5, from_min.2, from_size.2, to_min.2, to_size.2),
         )
     }
 }

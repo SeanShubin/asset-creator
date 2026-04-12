@@ -1,14 +1,14 @@
-// Sphere clipped to a smaller box — produces a sphere with flat sides
+// Box with corners clipped by a sphere
 (
     name: "csg_intersect",
     palette: { "glass": (1, 2, 2) },
     color: "glass",
     children: [
-        (name: "sphere", shape: Sphere,
-            bounds: (-10, -10, -10, 10, 10, 10),
+        (name: "box", shape: Box,
+            bounds: (-3, -3, -3, 3, 3, 3),
             color: "glass"),
-        (name: "clip_box", shape: Box,
-            bounds: (-7, -7, -7, 7, 7, 7),
+        (name: "sphere", shape: Sphere,
+            bounds: (-4, -4, -4, 4, 4, 4),
             combine: Clip),
     ],
 )

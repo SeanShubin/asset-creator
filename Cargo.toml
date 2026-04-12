@@ -13,3 +13,5 @@ ron = "0.8"
 serde = { version = "1", features = ["derive"] }
 image = "0.25"
 noise = "0.9"
+fidget = { version = "0.4", default-features = false, features = ["mesh"] }
+nalgebra = "0.34"

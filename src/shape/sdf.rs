@@ -1,0 +1,200 @@
+//! SDF (Signed Distance Field) builders for shape primitives.
+//! Each primitive is expressed as a fidget Tree — a mathematical function
+//! of (x, y, z) where negative = inside, positive = outside.
+
+use bevy::prelude::*;
+use fidget::context::Tree;
+use super::definition::{Bounds, PrimitiveShape};
+use super::traversal::ShapeEvent;
+
+/// Build an SDF Tree from shape events. The tree represents the combined
+/// geometry of all Geometry events, positioned in world space.
+pub fn collect_sdf_from_events(events: &[ShapeEvent]) -> Option<Tree> {
+    let mut sdf_stack: Vec<Option<Tree>> = vec![None];
+    let mut tf_stack: Vec<Transform> = vec![Transform::IDENTITY];
+
+    for event in events {
+        match event {
+            ShapeEvent::EnterNode { local_tf, .. } => {
+                let parent_world = *tf_stack.last().unwrap();
+                let world = combine_transforms(&parent_world, local_tf);
+                tf_stack.push(world);
+                sdf_stack.push(None);
+            }
+            ShapeEvent::Geometry { node, mesh_tf, .. } => {
+                let parent_world = *tf_stack.last().unwrap();
+                let world_mesh_tf = combine_transforms(&parent_world, mesh_tf);
+
+                if let Some(shape) = node.shape {
+                    let bounds = node.bounds.unwrap_or(Bounds(-1, -1, -1, 1, 1, 1));
+                    let sdf = primitive_sdf(shape, &bounds, &world_mesh_tf);
+                    // Union with any existing SDF at this level
+                    let current = sdf_stack.last_mut().unwrap();
+                    *current = Some(match current.take() {
+                        Some(existing) => existing.min(sdf),
+                        None => sdf,
+                    });
+                }
+            }
+            ShapeEvent::ExitNode => {
+                tf_stack.pop();
+                let child_sdf = sdf_stack.pop().unwrap();
+                if let Some(child) = child_sdf {
+                    let current = sdf_stack.last_mut().unwrap();
+                    *current = Some(match current.take() {
+                        Some(existing) => existing.min(child),
+                        None => child,
+                    });
+                }
+            }
+        }
+    }
+
+    sdf_stack.pop().unwrap()
+}
+
+/// Build an SDF for a single primitive shape at its world transform.
+fn primitive_sdf(shape: PrimitiveShape, _bounds: &Bounds, world_tf: &Transform) -> Tree {
+    // The world transform maps the unit mesh (-0.5..0.5) to world position.
+    // For the SDF, we need the inverse: map world (x,y,z) to local coordinates,
+    // then evaluate the unit SDF.
+    let mat = world_tf.compute_matrix();
+    let inv = mat.inverse();
+
+    // Transform world coordinates to local
+    let wx = Tree::x();
+    let wy = Tree::y();
+    let wz = Tree::z();
+
+    // Mat4 is column-major: x_axis is column 0, y_axis is column 1, etc.
+    // To compute local = inv * world_point, row i of the result is:
+    //   col0[i]*wx + col1[i]*wy + col2[i]*wz + col3[i]
+    let lx = wx.clone() * inv.x_axis.x + wy.clone() * inv.y_axis.x + wz.clone() * inv.z_axis.x + inv.w_axis.x;
+    let ly = wx.clone() * inv.x_axis.y + wy.clone() * inv.y_axis.y + wz.clone() * inv.z_axis.y + inv.w_axis.y;
+    let lz = wx * inv.x_axis.z + wy * inv.y_axis.z + wz * inv.z_axis.z + inv.w_axis.z;
+
+    // Unit SDFs: shapes from -0.5 to 0.5
+    match shape {
+        PrimitiveShape::Box => sdf_box(lx, ly, lz),
+        PrimitiveShape::Sphere => sdf_sphere(lx, ly, lz),
+        PrimitiveShape::Cylinder => sdf_cylinder(lx, ly, lz),
+        PrimitiveShape::Dome => sdf_dome(lx, ly, lz),
+        PrimitiveShape::Cone => sdf_cone(lx, ly, lz),
+        PrimitiveShape::Wedge => sdf_wedge(lx, ly, lz),
+        PrimitiveShape::Torus => sdf_torus(lx, ly, lz),
+        PrimitiveShape::Corner => sdf_corner(lx, ly, lz),
+    }
+}
+
+// === Unit SDF functions (shapes from -0.5 to 0.5) ===
+
+fn sdf_box(x: Tree, y: Tree, z: Tree) -> Tree {
+    (x.abs() - 0.5).max(y.abs() - 0.5).max(z.abs() - 0.5)
+}
+
+fn sdf_sphere(x: Tree, y: Tree, z: Tree) -> Tree {
+    (x.square() + y.square() + z.square()).sqrt() - 0.5
+}
+
+fn sdf_cylinder(x: Tree, y: Tree, z: Tree) -> Tree {
+    // Cylinder along Y axis, radius 0.5, height 1.0
+    let radial = (x.square() + z.square()).sqrt() - 0.5;
+    let vertical = y.abs() - 0.5;
+    radial.max(vertical)
+}
+
+fn sdf_dome(x: Tree, y: Tree, z: Tree) -> Tree {
+    // Half sphere: sphere clipped by y >= -0.5 (base at -0.5, peak at 0.5)
+    let sphere = (x.square() + y.square() + z.square()).sqrt() - 0.5;
+    let clip = -y.clone() - 0.5; // y >= -0.5
+    sphere.max(clip)
+}
+
+fn sdf_cone(x: Tree, y: Tree, z: Tree) -> Tree {
+    // Cone: base at y=-0.5 (radius 0.5), tip at y=0.5
+    // Radius at height y: r = 0.5 * (0.5 - y)
+    let r_at_y = (Tree::from(0.5) - y.clone()) * 0.5;
+    let radial = (x.square() + z.square()).sqrt() - r_at_y;
+    let cap = -y - 0.5; // y >= -0.5
+    radial.max(cap)
+}
+
+fn sdf_wedge(x: Tree, y: Tree, z: Tree) -> Tree {
+    // Wedge: box that tapers to zero height at z=0.5
+    // Back face at z=-0.5, slope from (z=-0.5,y=0.5) to (z=0.5,y=-0.5)
+    let bottom = -y.clone() - 0.5;
+    let back = -z.clone() - 0.5;
+    let left = -x.clone() - 0.5;
+    let right = x - 0.5;
+    // Slope plane: y + z <= 0 (normalized)
+    let slope = (y + z) * std::f32::consts::FRAC_1_SQRT_2;
+    bottom.max(back).max(left).max(right).max(slope)
+}
+
+fn sdf_torus(x: Tree, y: Tree, z: Tree) -> Tree {
+    // Torus: major radius 0.35, minor radius 0.15
+    let major_r = 0.35;
+    let minor_r = 0.15;
+    let xz_dist = (x.square() + z.square()).sqrt() - major_r;
+    (xz_dist.square() + y.square()).sqrt() - minor_r
+}
+
+fn sdf_corner(x: Tree, y: Tree, z: Tree) -> Tree {
+    // Tetrahedron in the (-x, -y, -z) corner
+    let bottom = -y.clone() - 0.5;
+    let back = -z.clone() - 0.5;
+    let left = -x.clone() - 0.5;
+    // Diagonal plane: x + y + z <= -0.5 → the cut face
+    let diag = (x + y + z + 0.5) * (1.0 / 3.0_f32.sqrt());
+    bottom.max(back).max(left).max(diag)
+}
+
+fn combine_transforms(parent: &Transform, child: &Transform) -> Transform {
+    let parent_mat = parent.compute_matrix();
+    let child_mat = child.compute_matrix();
+    Transform::from_matrix(parent_mat * child_mat)
+}
+
+/// Mesh an SDF tree using fidget's octree, returning positions and indices.
+pub fn mesh_sdf(tree: &Tree, bounds: &Bounds) -> (Vec<[f32; 3]>, Vec<u32>) {
+    use fidget::vm::VmShape;
+    use fidget::mesh::{Octree, Settings};
+
+    let shape = VmShape::from(tree.clone());
+
+    // world_to_model maps fidget's [-1,1]³ sampling grid to the world coordinates
+    // the SDF expects. We need [-1,1] → [center-extent/2, center+extent/2].
+    // That's: world_pos = center + sample_pos * extent/2
+    // As a matrix: translate by center, scale by extent/2
+    let center = bounds.center_f32();
+    let size = bounds.size();
+    let max_extent = (size.0.max(size.1).max(size.2) as f32).max(0.001);
+    let half = max_extent / 2.0;
+
+    let world_to_model = nalgebra::Matrix4::new(
+        half, 0.0, 0.0, center.0,
+        0.0, half, 0.0, center.1,
+        0.0, 0.0, half, center.2,
+        0.0, 0.0, 0.0, 1.0,
+    );
+
+    let settings = Settings {
+        depth: 6,
+        world_to_model,
+        ..Default::default()
+    };
+
+    let Some(octree) = Octree::build(&shape, &settings) else {
+        return (vec![], vec![]);
+    };
+    let mesh = octree.walk_dual();
+
+    let positions: Vec<[f32; 3]> = mesh.vertices.iter()
+        .map(|v| [v.x, v.y, v.z])
+        .collect();
+    let indices: Vec<u32> = mesh.triangles.iter()
+        .flat_map(|t| [t.x as u32, t.y as u32, t.z as u32])
+        .collect();
+
+    (positions, indices)
+}

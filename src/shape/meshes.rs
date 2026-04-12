@@ -7,6 +7,7 @@ use super::definition::PrimitiveShape;
 // RawMesh — intermediate mesh representation for CSG and conversion
 // =====================================================================
 
+#[derive(Clone)]
 pub struct RawMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,

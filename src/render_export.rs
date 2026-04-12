@@ -191,7 +191,7 @@ fn process_render_queue(
     let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
     let fit_scale = compute_fit_from_shape(shape);
     let shape_center = shape.compute_aabb()
-        .map(|b| { let c = b.center(); Vec3::new(c.0, c.1, c.2) })
+        .map(|b| { let c = b.center_f32(); Vec3::new(c.0, c.1, c.2) })
         .unwrap_or(Vec3::ZERO);
 
     let camera = spawn_export_camera(&mut commands, &image_handle, fit_scale, shape_center, &export_layer);
@@ -301,7 +301,7 @@ fn compute_fit_from_shape(shape: &crate::shape::ShapeNode) -> f32 {
     let aabb = shape.compute_aabb();
     let Some(aabb) = aabb else { return 0.01 };
 
-    let center = aabb.center();
+    let center = aabb.center_f32();
     let shape_center = Vec3::new(center.0, center.1, center.2);
     let min = aabb.min();
     let max = aabb.max();
@@ -315,9 +315,9 @@ fn compute_fit_from_shape(shape: &crate::shape::ShapeNode) -> f32 {
     let mut view_min = Vec3::splat(f32::MAX);
     let mut view_max = Vec3::splat(f32::MIN);
 
-    for &x in &[min.0, max.0] {
-        for &y in &[min.1, max.1] {
-            for &z in &[min.2, max.2] {
+    for &x in &[min.0 as f32, max.0 as f32] {
+        for &y in &[min.1 as f32, max.1 as f32] {
+            for &z in &[min.2 as f32, max.2 as f32] {
                 let view_pos = view.transform_point3(Vec3::new(x, y, z));
                 view_min = view_min.min(view_pos);
                 view_max = view_max.max(view_pos);

@@ -379,6 +379,27 @@ Editors that support export can run headless from the command line:
 cargo run -- tileset --preset Concrete --export wall.png --tile-size 128
 ```
 
+## Future: SDF-based CSG via fidget
+
+The current CSG implementation uses triangle mesh booleans (via `boolmesh`).
+This works for all current shapes but has inherent limitations: curved surfaces
+must be tessellated before CSG, and the result quality depends on mesh
+resolution.
+
+The `fidget` crate (by Matt Keeter, author of libfive) offers an alternative:
+SDF (Signed Distance Field) evaluation with interval arithmetic and JIT
+compilation. With SDF-based CSG:
+- Shapes stay mathematical (implicit functions) until final meshing
+- Union = min(a, b), subtract = max(a, -b), intersect = max(a, b)
+- Spheres, cylinders, etc. remain perfect regardless of CSG complexity
+- Final mesh extraction via marching cubes at any desired resolution
+
+This would require rethinking how the shape definition system works — shapes
+would produce distance functions instead of triangle meshes. Evaluate when
+CSG complexity or curved surface quality becomes a bottleneck.
+
+Crate: `fidget` on crates.io (pure Rust, actively maintained).
+
 ## Dependencies
 
 | Crate       | Purpose                                               |

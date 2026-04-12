@@ -22,7 +22,24 @@
       "Bash(xargs grep:*)",
       "Bash(xargs head:*)",
       "Bash(python3 -c ':*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(ls:*)",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=csg&per_page=10\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=mesh+boolean&per_page=10\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=manifold3d&per_page=5\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=constructive+solid+geometry&per_page=10\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates/boolmesh\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=sdf&per_page=10\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=manifold+mesh&per_page=5\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=mesh_tools&per_page=5\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=fidget+sdf&per_page=5\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates?q=trimesh&per_page=5\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates/boolmesh/0.1.9/dependencies\")",
+      "Bash(curl -s \"https://crates.io/api/v1/crates/csgrs/0.20.1/dependencies\")",
+      "Bash(cargo fetch:*)",
+      "Bash(find:*)",
+      "Bash(grep -A5 '\\\\[features\\\\]' C:/Users/seans/.cargo/registry/src/index.crates.io-*/fidget-0.4.3/Cargo.toml)",
+      "Bash(grep:*)"
     ]
   }
 }

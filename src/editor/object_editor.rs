@@ -250,8 +250,8 @@ fn reload_shape(
     if let Some(aabb) = shape_file.compute_aabb() {
         let min = aabb.min();
         let max = aabb.max();
-        bounds.scene_min = Vec3::new(min.0, min.1, min.2);
-        bounds.scene_max = Vec3::new(max.0, max.1, max.2);
+        bounds.scene_min = Vec3::new(min.0 as f32, min.1 as f32, min.2 as f32);
+        bounds.scene_max = Vec3::new(max.0 as f32, max.1 as f32, max.2 as f32);
     }
 
     spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);

@@ -7,7 +7,7 @@ use super::csg;
 use super::definition::{CombineMode, PrimitiveShape, ShapeNode};
 use super::traversal::{
     ColorMap, ShapeEvent,
-    bounds_center, resolve_color, walk_shape_tree, collect_mesh_from_events,
+    bounds_center, resolve_color, walk_shape_tree,
 };
 
 // =====================================================================
@@ -291,26 +291,18 @@ pub fn build_csg_mesh(
     registry: &AssetRegistry,
     render_layers: &Option<RenderLayers>,
 ) {
-    let mut union_meshes = Vec::new();
-    let mut subtract_meshes = Vec::new();
-    let mut clip_meshes = Vec::new();
+    // Compute AABB for all children to bound the SDF meshing region
+    let parent_node = ShapeNode {
+        name: None, shape: None, bounds: None, orient: bevy::math::Mat3::IDENTITY,
+        palette: vec![], color: None, emissive: false, rotate: None,
+        import: None, color_map: Default::default(), colors: vec![],
+        children: children.to_vec(), mirror: vec![], repeat: None,
+        combine: CombineMode::Union, animations: vec![],
+    };
+    let aabb = parent_node.compute_aabb()
+        .unwrap_or(super::definition::Bounds(-1, -1, -1, 1, 1, 1));
 
-    for child in children {
-        let events = walk_shape_tree(child, colors, registry);
-        let raw = collect_mesh_from_events(&events);
-        if raw.positions.is_empty() { continue; }
-        match child.combine {
-            CombineMode::Union => union_meshes.push(raw),
-            CombineMode::Subtract => subtract_meshes.push(raw),
-            CombineMode::Clip => clip_meshes.push(raw),
-        }
-    }
-
-    if union_meshes.is_empty() {
-        return;
-    }
-
-    let (result, _csg_stats) = csg::perform_csg_pipeline(union_meshes, subtract_meshes, clip_meshes);
+    let (result, _stats) = csg::perform_csg_from_children(children, colors, registry, &aabb);
     if result.positions.is_empty() {
         return;
     }

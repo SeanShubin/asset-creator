@@ -70,13 +70,13 @@ pub fn apply_color_remapping(
 // =====================================================================
 
 
-/// Compute the local transform for a node (bounds center + rotate).
-/// This is the transform of the ShapePart entity relative to its parent.
+/// Compute the local transform for a node. Uses bounds min (always integer)
+/// as the entity position. Combinators have no position.
 pub fn compute_local_transform(node: &ShapeNode) -> Transform {
     let position = if node.is_combinator() {
         Vec3::ZERO
     } else {
-        bounds_center(&node.bounds)
+        bounds_min_vec(&node.bounds)
     };
 
     let mut tf = Transform::from_translation(position);
@@ -91,10 +91,12 @@ pub fn compute_local_transform(node: &ShapeNode) -> Transform {
     tf
 }
 
-/// Compute the mesh transform (scale + orient from bounds).
-/// This positions the unit mesh within its bounding box.
+/// Compute the mesh transform. The unit mesh (centered at origin, -0.5 to 0.5)
+/// is scaled by orient × size, then translated by size/2 so it fills
+/// the bounds from (0,0,0) to (size) relative to the entity at bounds.min().
 pub fn compute_mesh_transform(shape: PrimitiveShape, bounds: &Bounds, om: &Mat3) -> Transform {
-    let size = bounds.size();
+    let isize = bounds.size();
+    let size = (isize.0 as f32, isize.1 as f32, isize.2 as f32);
 
     let local_x_size = pick_size_for_direction(om.x_axis, size);
     let local_y_size = pick_size_for_direction(om.y_axis, size);
@@ -109,8 +111,12 @@ pub fn compute_mesh_transform(shape: PrimitiveShape, bounds: &Bounds, om: &Mat3)
     let col_y = om.y_axis * local_scale.y;
     let col_z = om.z_axis * local_scale.z;
 
+    // Offset: the entity is at bounds.min(), the mesh center needs to be at
+    // bounds.min() + size/2 = bounds.center(). So offset = size/2.
+    let offset = Vec3::new(size.0 / 2.0, size.1 / 2.0, size.2 / 2.0);
+
     let mat = Mat3::from_cols(col_x, col_y, col_z);
-    let affine = bevy::math::Affine3A::from_mat3(mat);
+    let affine = bevy::math::Affine3A::from_mat3_translation(mat, offset);
     Transform::from_matrix(bevy::math::Mat4::from(affine))
 }
 
@@ -120,10 +126,22 @@ fn pick_size_for_direction(dir: Vec3, size: (f32, f32, f32)) -> f32 {
     else { size.2 }
 }
 
+/// Bounds min as Vec3 (integer values cast to f32).
+pub fn bounds_min_vec(bounds: &Option<Bounds>) -> Vec3 {
+    match bounds {
+        Some(b) => {
+            let m = b.min();
+            Vec3::new(m.0 as f32, m.1 as f32, m.2 as f32)
+        }
+        None => Vec3::ZERO,
+    }
+}
+
+/// Bounds center as Vec3 (float — only for camera/render positioning).
 pub fn bounds_center(bounds: &Option<Bounds>) -> Vec3 {
     match bounds {
         Some(b) => {
-            let c = b.center();
+            let c = b.center_f32();
             Vec3::new(c.0, c.1, c.2)
         }
         None => Vec3::ZERO,
@@ -148,11 +166,12 @@ fn reify_bounds(node: &mut ShapeNode) {
 }
 
 fn offset_bounds(bounds: &mut Option<Bounds>, axis: Axis, offset: f32) {
+    let o = offset.round() as i32;
     if let Some(ref mut b) = bounds {
         match axis {
-            Axis::X => { b.0 += offset; b.3 += offset; }
-            Axis::Y => { b.1 += offset; b.4 += offset; }
-            Axis::Z => { b.2 += offset; b.5 += offset; }
+            Axis::X => { b.0 += o; b.3 += o; }
+            Axis::Y => { b.1 += o; b.4 += o; }
+            Axis::Z => { b.2 += o; b.5 += o; }
         }
     }
 }
