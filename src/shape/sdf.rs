@@ -103,10 +103,15 @@ fn sdf_cylinder(x: Tree, y: Tree, z: Tree) -> Tree {
 }
 
 fn sdf_dome(x: Tree, y: Tree, z: Tree) -> Tree {
-    // Half sphere: sphere clipped by y >= -0.5 (base at -0.5, peak at 0.5)
-    let sphere = (x.square() + y.square() + z.square()).sqrt() - 0.5;
-    let clip = -y.clone() - 0.5; // y >= -0.5
-    sphere.max(clip)
+    // Ellipsoidal cap matching the mesh builder's profile:
+    // r = 0.5*cos(t), y = -0.5 + sin(t) for t in [0, PI/2]
+    // This traces an ellipse: (r/0.5)² + (y+0.5)² = 1
+    // Which is: 4(x² + z²) + (y+0.5)² = 1, clipped to y >= -0.5
+    let scaled_xz = (x.square() + z.square()) * 4.0;
+    let dy = y.clone() + 0.5;
+    let ellipsoid = (scaled_xz + dy.square()).sqrt() - 1.0;
+    let clip = -(y + 0.5); // y >= -0.5
+    ellipsoid.max(clip)
 }
 
 fn sdf_cone(x: Tree, y: Tree, z: Tree) -> Tree {

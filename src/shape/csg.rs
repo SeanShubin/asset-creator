@@ -9,7 +9,7 @@ use fidget::context::Tree;
 use super::definition::{Bounds, CombineMode};
 use super::meshes::RawMesh;
 use super::sdf::{collect_sdf_from_events, mesh_sdf};
-use super::traversal::{walk_shape_tree, ColorMap};
+use super::traversal::{walk_shape_tree, ColorMap, ShapeEvent};
 use crate::registry::AssetRegistry;
 
 const CACHE_DIR: &str = "generated/csg-cache";
@@ -49,6 +49,17 @@ pub fn perform_csg_uncached(
     parent_aabb: &Bounds,
 ) -> (RawMesh, CsgStats) {
     perform_csg_impl(children, colors, registry, parent_aabb, false)
+}
+
+/// Build an SDF from shape events, mesh it, and return a RawMesh with normals.
+/// Used for the "Preview CSG mesh" toggle.
+pub fn mesh_sdf_from_events(events: &[ShapeEvent], aabb: &Bounds) -> RawMesh {
+    let Some(sdf) = collect_sdf_from_events(events) else {
+        return RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] };
+    };
+
+    let (shared_pos, shared_idx) = mesh_sdf(&sdf, aabb);
+    build_raw_mesh_with_normals(&sdf, shared_pos, shared_idx)
 }
 
 fn perform_csg_impl(
@@ -112,17 +123,30 @@ fn perform_csg_impl(
     let (shared_pos, shared_idx) = mesh_sdf(&result, parent_aabb);
     stats.mesh_time_ms = mesh_start.elapsed().as_secs_f64() * 1000.0;
 
-    // Unshare vertices: each triangle gets its own copy with a face normal.
-    // Shared vertices produce inconsistent normals when multiple faces write to them.
+    let mesh = build_raw_mesh_with_normals(&result, shared_pos, shared_idx);
+    stats.output_tris = mesh.indices.len() as u32 / 3;
+
+    // Save to cache
+    if let Some(ref key) = cache_key {
+        save_cache(key, &mesh);
+    }
+
+    (mesh, stats)
+}
+
+// =====================================================================
+// SDF mesh with oriented flat normals
+// =====================================================================
+
+/// Convert shared-vertex mesh from fidget into a RawMesh with per-face
+/// flat normals oriented using the SDF gradient.
+fn build_raw_mesh_with_normals(sdf: &Tree, shared_pos: Vec<[f32; 3]>, shared_idx: Vec<u32>) -> RawMesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut uvs = Vec::new();
     let mut indices = Vec::new();
 
-    // Compute per-vertex normals from SDF gradient for correct orientation,
-    // then use them to orient flat face normals from the triangle cross product.
-    // This gives flat shading (correct for planar faces) with correct facing direction.
-    let sdf_normals = compute_sdf_normals(&result, &shared_pos);
+    let sdf_normals = compute_sdf_normals(sdf, &shared_pos);
 
     for tri in shared_idx.chunks(3) {
         if tri.len() < 3 { continue; }
@@ -135,7 +159,6 @@ fn perform_csg_impl(
         let mut face_n = cross.normalize();
         if face_n.is_nan() { continue; }
 
-        // Use SDF gradient to determine correct facing direction
         let avg_sdf_n = bevy::math::Vec3::from(sdf_normals[i0])
             + bevy::math::Vec3::from(sdf_normals[i1])
             + bevy::math::Vec3::from(sdf_normals[i2]);
@@ -159,23 +182,20 @@ fn perform_csg_impl(
         indices.push(base + 2);
     }
 
-    let mesh = RawMesh { positions, normals, uvs, indices };
-    stats.output_tris = mesh.indices.len() as u32 / 3;
-
-    // Save to cache
-    if let Some(ref key) = cache_key {
-        save_cache(key, &mesh);
-    }
-
-    (mesh, stats)
+    RawMesh { positions, normals, uvs, indices }
 }
 
 // =====================================================================
 // Disk cache
 // =====================================================================
 
+/// Bump this when SDF logic, mesh builders, or normal computation changes.
+/// Invalidates all cached CSG meshes.
+const CACHE_VERSION: u32 = 2;
+
 fn compute_cache_key(children: &[super::definition::ShapeNode], aabb: &Bounds) -> PathBuf {
     let mut hasher = DefaultHasher::new();
+    CACHE_VERSION.hash(&mut hasher);
     format!("{children:?}{aabb:?}").hash(&mut hasher);
     let hash = hasher.finish();
     PathBuf::from(CACHE_DIR).join(format!("{hash:016x}.mesh"))

@@ -56,6 +56,61 @@ pub fn spawn_shape(
     spawn_shape_with_layers(commands, meshes, materials, shape, registry, None)
 }
 
+/// Spawn a shape rendered entirely through the SDF/dual contouring pipeline.
+/// Produces the same visual style as CSG output — flat shading, uniform mesh.
+pub fn spawn_shape_as_sdf(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+    shape: &ShapeNode,
+    registry: &AssetRegistry,
+) -> Entity {
+    let position = bounds_center(&shape.bounds);
+    let root_tf = Transform::from_translation(position);
+    let root = commands.spawn((
+        ShapeRoot,
+        ShapePart { name: shape.name.clone() },
+        BaseTransform(root_tf),
+        ShapeAnimator::new(shape.animations.clone()),
+        root_tf,
+        Visibility::default(),
+    )).id();
+
+    let colors = shape.palette.clone();
+    let aabb = shape.compute_aabb()
+        .unwrap_or(super::definition::Bounds(-1, -1, -1, 1, 1, 1));
+
+    // Build SDF from the entire shape tree and mesh it
+    let events = walk_shape_tree(shape, &colors, registry);
+    let result = csg::mesh_sdf_from_events(&events, &aabb);
+    info!("SDF preview: {} tris", result.indices.len() / 3);
+
+    if !result.positions.is_empty() {
+        let color = shape.children.first()
+            .and_then(|c| c.color.as_ref())
+            .map(|name| resolve_color(name, &colors))
+            .unwrap_or(Color3(1, 1, 1));
+
+        let (cr, cg, cb) = color.to_rgb();
+    let base_color = Color::srgb(cr, cg, cb);
+        let material = materials.add(StandardMaterial {
+            base_color,
+            cull_mode: None,
+            ..default()
+        });
+
+        let mesh_handle = meshes.add(result.to_bevy_mesh());
+        commands.entity(root).with_child((
+            Mesh3d(mesh_handle),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            Visibility::default(),
+        ));
+    }
+
+    root
+}
+
 pub fn spawn_shape_with_layers(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
