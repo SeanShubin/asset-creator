@@ -1,7 +1,7 @@
 (
     name: "melee",
     palette: {
-        "body": (1, 1, 1),
+        "body": (0, 0, 1),
         "hover": (0, 2, 0),
         "sensor": (0, 0, 2),
         "blade": (3, 0, 0),
