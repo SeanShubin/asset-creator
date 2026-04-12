@@ -105,7 +105,7 @@ impl ShapeNode {
         }
     }
 
-    fn collect_bounds(&self, min: &mut (i32, i32, i32), max: &mut (i32, i32, i32), found: &mut bool) {
+    pub(super) fn collect_bounds(&self, min: &mut (i32, i32, i32), max: &mut (i32, i32, i32), found: &mut bool) {
         if let Some(b) = &self.bounds {
             let b_min = b.min();
             let b_max = b.max();
@@ -214,6 +214,17 @@ pub enum PrimitiveShape {
 pub struct Bounds(pub i32, pub i32, pub i32, pub i32, pub i32, pub i32);
 
 impl Bounds {
+    /// Compute the AABB enclosing a list of shape nodes.
+    pub fn enclosing(nodes: &[ShapeNode]) -> Option<Bounds> {
+        let mut min = (i32::MAX, i32::MAX, i32::MAX);
+        let mut max = (i32::MIN, i32::MIN, i32::MIN);
+        let mut found = false;
+        for node in nodes {
+            node.collect_bounds(&mut min, &mut max, &mut found);
+        }
+        if found { Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2)) } else { None }
+    }
+
     /// Center as float — only needed for camera positioning and render export.
     pub fn center_f32(&self) -> (f32, f32, f32) {
         (

@@ -291,15 +291,8 @@ pub fn build_csg_mesh(
     registry: &AssetRegistry,
     render_layers: &Option<RenderLayers>,
 ) {
-    // Compute AABB for all children to bound the SDF meshing region
-    let parent_node = ShapeNode {
-        name: None, shape: None, bounds: None, orient: bevy::math::Mat3::IDENTITY,
-        palette: vec![], color: None, emissive: false, rotate: None,
-        import: None, color_map: Default::default(), colors: vec![],
-        children: children.to_vec(), mirror: vec![], repeat: None,
-        combine: CombineMode::Union, animations: vec![],
-    };
-    let aabb = parent_node.compute_aabb()
+    // Compute AABB enclosing all children to bound the SDF meshing region
+    let aabb = super::definition::Bounds::enclosing(children)
         .unwrap_or(super::definition::Bounds(-1, -1, -1, 1, 1, 1));
 
     let (result, stats) = csg::perform_csg_from_children(children, colors, registry, &aabb);

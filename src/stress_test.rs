@@ -6,7 +6,7 @@ use std::io::Write;
 use crate::registry::AssetRegistry;
 use crate::shape::{
     ShapeNode, walk_shape_tree, collect_mesh_from_events,
-    ColorMap, CsgStats, CombineMode, ShapeEvent, perform_csg_from_children,
+    ColorMap, CsgStats, CombineMode, ShapeEvent, perform_csg_uncached,
 };
 
 const OUTPUT_DIR: &str = "generated/stress-test";
@@ -101,7 +101,7 @@ fn run_csg_for_shape(shape: &ShapeNode, colors: &ColorMap, registry: &AssetRegis
         writeln!(log, "    child '{}': combine={}", name, combine).unwrap();
     }
 
-    let (_result, stats) = perform_csg_from_children(&shape.children, colors, registry, &aabb);
+    let (_result, stats) = perform_csg_uncached(&shape.children, colors, registry, &aabb);
     stats
 }
 

@@ -1,12 +1,18 @@
 //! CSG operations using SDF-based evaluation via fidget.
 //! Shapes stay mathematical until the final meshing step.
+//! Results are cached to disk to avoid recomputation on subsequent loads.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use fidget::context::Tree;
 use super::definition::{Bounds, CombineMode};
 use super::meshes::RawMesh;
 use super::sdf::{collect_sdf_from_events, mesh_sdf};
 use super::traversal::{walk_shape_tree, ColorMap};
 use crate::registry::AssetRegistry;
+
+const CACHE_DIR: &str = "generated/csg-cache";
 
 // =====================================================================
 // Stats tracking
@@ -25,16 +31,44 @@ pub struct CsgStats {
 // Public API
 // =====================================================================
 
-/// Perform CSG on shape children using SDF evaluation.
-/// Each child's geometry is converted to an SDF tree, combined with
-/// min/max operations, then meshed once at the end.
+/// Perform CSG on shape children using SDF evaluation, with disk caching.
 pub fn perform_csg_from_children(
     children: &[super::definition::ShapeNode],
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_aabb: &Bounds,
 ) -> (RawMesh, CsgStats) {
+    perform_csg_impl(children, colors, registry, parent_aabb, true)
+}
+
+/// Perform CSG without caching (for stress tests).
+pub fn perform_csg_uncached(
+    children: &[super::definition::ShapeNode],
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+    parent_aabb: &Bounds,
+) -> (RawMesh, CsgStats) {
+    perform_csg_impl(children, colors, registry, parent_aabb, false)
+}
+
+fn perform_csg_impl(
+    children: &[super::definition::ShapeNode],
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+    parent_aabb: &Bounds,
+    use_cache: bool,
+) -> (RawMesh, CsgStats) {
     let mut stats = CsgStats::default();
+
+    // Check cache first
+    let cache_key = if use_cache { Some(compute_cache_key(children, parent_aabb)) } else { None };
+    if let Some(ref key) = cache_key {
+        if let Some(cached) = load_cache(key) {
+            stats.output_tris = cached.indices.len() as u32 / 3;
+            stats.mesh_time_ms = 0.0;
+            return (cached, stats);
+        }
+    }
 
     let mut union_sdfs: Vec<Tree> = Vec::new();
     let mut subtract_sdfs: Vec<Tree> = Vec::new();
@@ -64,7 +98,6 @@ pub fn perform_csg_from_children(
         return (RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] }, stats);
     }
 
-    // Combine SDFs: union = min, subtract = max(a, -b), intersect = max(a, b)
     let mut result = union_sdfs.into_iter().reduce(|a, b| a.min(b)).unwrap();
 
     for sub in subtract_sdfs {
@@ -75,7 +108,6 @@ pub fn perform_csg_from_children(
         result = result.max(clip);
     }
 
-    // Mesh the combined SDF
     let mesh_start = std::time::Instant::now();
     let (shared_pos, shared_idx) = mesh_sdf(&result, parent_aabb);
     stats.mesh_time_ms = mesh_start.elapsed().as_secs_f64() * 1000.0;
@@ -129,7 +161,97 @@ pub fn perform_csg_from_children(
 
     let mesh = RawMesh { positions, normals, uvs, indices };
     stats.output_tris = mesh.indices.len() as u32 / 3;
+
+    // Save to cache
+    if let Some(ref key) = cache_key {
+        save_cache(key, &mesh);
+    }
+
     (mesh, stats)
+}
+
+// =====================================================================
+// Disk cache
+// =====================================================================
+
+fn compute_cache_key(children: &[super::definition::ShapeNode], aabb: &Bounds) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    format!("{children:?}{aabb:?}").hash(&mut hasher);
+    let hash = hasher.finish();
+    PathBuf::from(CACHE_DIR).join(format!("{hash:016x}.mesh"))
+}
+
+fn load_cache(path: &PathBuf) -> Option<RawMesh> {
+    let data = std::fs::read(path).ok()?;
+    deserialize_mesh(&data)
+}
+
+fn save_cache(path: &PathBuf, mesh: &RawMesh) {
+    let _ = std::fs::create_dir_all(CACHE_DIR);
+    if let Some(data) = serialize_mesh(mesh) {
+        let _ = std::fs::write(path, data);
+    }
+}
+
+fn serialize_mesh(mesh: &RawMesh) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    let n_pos = mesh.positions.len() as u32;
+    let n_idx = mesh.indices.len() as u32;
+    buf.extend_from_slice(&n_pos.to_le_bytes());
+    buf.extend_from_slice(&n_idx.to_le_bytes());
+    for p in &mesh.positions {
+        for &v in p { buf.extend_from_slice(&v.to_le_bytes()); }
+    }
+    for n in &mesh.normals {
+        for &v in n { buf.extend_from_slice(&v.to_le_bytes()); }
+    }
+    for u in &mesh.uvs {
+        for &v in u { buf.extend_from_slice(&v.to_le_bytes()); }
+    }
+    for &i in &mesh.indices {
+        buf.extend_from_slice(&i.to_le_bytes());
+    }
+    Some(buf)
+}
+
+fn deserialize_mesh(data: &[u8]) -> Option<RawMesh> {
+    if data.len() < 8 { return None; }
+    let n_pos = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    let n_idx = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+
+    let expected = 8 + n_pos * 12 + n_pos * 12 + n_pos * 8 + n_idx * 4;
+    if data.len() < expected { return None; }
+
+    let mut offset = 8;
+    let read_f32 = |o: &mut usize| -> f32 {
+        let v = f32::from_le_bytes(data[*o..*o + 4].try_into().unwrap());
+        *o += 4;
+        v
+    };
+    let read_u32 = |o: &mut usize| -> u32 {
+        let v = u32::from_le_bytes(data[*o..*o + 4].try_into().unwrap());
+        *o += 4;
+        v
+    };
+
+    let mut positions = Vec::with_capacity(n_pos);
+    for _ in 0..n_pos {
+        positions.push([read_f32(&mut offset), read_f32(&mut offset), read_f32(&mut offset)]);
+    }
+    let mut normals = Vec::with_capacity(n_pos);
+    for _ in 0..n_pos {
+        normals.push([read_f32(&mut offset), read_f32(&mut offset), read_f32(&mut offset)]);
+    }
+    let mut uvs = Vec::with_capacity(n_pos);
+    for _ in 0..n_pos {
+        uvs.push([read_f32(&mut offset), read_f32(&mut offset)]);
+    }
+    let mut indices = Vec::with_capacity(n_idx);
+    for _ in 0..n_idx {
+        indices.push(read_u32(&mut offset));
+    }
+
+    Some(RawMesh { positions, normals, uvs, indices })
 }
 
 /// Compute normals from SDF gradient using central differences.
