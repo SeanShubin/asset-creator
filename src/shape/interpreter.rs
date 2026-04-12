@@ -302,7 +302,8 @@ pub fn build_csg_mesh(
     let aabb = parent_node.compute_aabb()
         .unwrap_or(super::definition::Bounds(-1, -1, -1, 1, 1, 1));
 
-    let (result, _stats) = csg::perform_csg_from_children(children, colors, registry, &aabb);
+    let (result, stats) = csg::perform_csg_from_children(children, colors, registry, &aabb);
+    info!("CSG: {} tris in {:.0}ms", stats.output_tris, stats.mesh_time_ms);
     if result.positions.is_empty() {
         return;
     }

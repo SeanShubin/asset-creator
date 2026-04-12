@@ -18,6 +18,7 @@ pub struct CsgStats {
     pub input_subtract_count: u32,
     pub input_clip_count: u32,
     pub output_tris: u32,
+    pub mesh_time_ms: f64,
 }
 
 // =====================================================================
@@ -75,7 +76,9 @@ pub fn perform_csg_from_children(
     }
 
     // Mesh the combined SDF
+    let mesh_start = std::time::Instant::now();
     let (shared_pos, shared_idx) = mesh_sdf(&result, parent_aabb);
+    stats.mesh_time_ms = mesh_start.elapsed().as_secs_f64() * 1000.0;
 
     // Unshare vertices: each triangle gets its own copy with a face normal.
     // Shared vertices produce inconsistent normals when multiple faces write to them.

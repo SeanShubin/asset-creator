@@ -38,6 +38,7 @@ pub fn run(registry: &AssetRegistry) {
 
         // Walk the shape tree and collect events
         let colors: ColorMap = shape.palette.clone();
+        let t0 = std::time::Instant::now();
         let events = walk_shape_tree(shape, &colors, registry);
 
         let enter_count = events.iter().filter(|e| matches!(e, ShapeEvent::EnterNode { .. })).count();
@@ -46,7 +47,8 @@ pub fn run(registry: &AssetRegistry) {
 
         // Collect mesh
         let mesh = collect_mesh_from_events(&events);
-        writeln!(log, "  mesh: {} tris, {} verts", mesh.indices.len() / 3, mesh.positions.len()).unwrap();
+        let mesh_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        writeln!(log, "  mesh: {} tris, {} verts ({:.1}ms)", mesh.indices.len() / 3, mesh.positions.len(), mesh_ms).unwrap();
 
         // Check for CSG children
         if shape.has_csg_children() {
@@ -120,5 +122,5 @@ fn find_and_run_csg(node: &ShapeNode, colors: &ColorMap, registry: &AssetRegistr
 fn log_csg_stats(log: &mut std::fs::File, stats: &CsgStats, _any_warning: &mut bool) {
     writeln!(log, "    inputs: {} union, {} subtract, {} clip",
         stats.input_union_count, stats.input_subtract_count, stats.input_clip_count).unwrap();
-    writeln!(log, "    output tris: {}", stats.output_tris).unwrap();
+    writeln!(log, "    output tris: {} ({:.1}ms)", stats.output_tris, stats.mesh_time_ms).unwrap();
 }
