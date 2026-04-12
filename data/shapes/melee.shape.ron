@@ -8,13 +8,13 @@
         (
             name: "body",
             shape: Box,
-            bounds: (-1.0, -1.0, -4.0, 1, 1.0, 4.0),
+            bounds: (-2, -2, -8, 2, 2, 8),
             color: "body"
         ),
         (
             name: "blade",
             shape: Box,
-            bounds: (-0.5, -0.5, 0.0, 0.5, 0.5, 8.0),
+            bounds: (-1, -1, 0, 1, 1, 16),
             color: "blade"
         ),
     ],

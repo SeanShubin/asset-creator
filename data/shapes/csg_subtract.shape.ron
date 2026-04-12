@@ -5,10 +5,10 @@
     color: "metal",
     children: [
         (name: "base", shape: Box,
-            bounds: (-1, -1, -1, 1, 1, 1),
+            bounds: (-4, -4, -4, 4, 4, 4),
             color: "metal"),
         (name: "hole", shape: Cylinder,
-            bounds: (-0.4, -2, -0.4, 0.4, 2, 0.4),
+            bounds: (-2, -5, -2, 2, 5, 2),
             combine: Subtract),
     ],
 )

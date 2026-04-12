@@ -5,10 +5,10 @@
     color: "glass",
     children: [
         (name: "sphere", shape: Sphere,
-            bounds: (-1, -1, -1, 1, 1, 1),
+            bounds: (-10, -10, -10, 10, 10, 10),
             color: "glass"),
         (name: "clip_box", shape: Box,
-            bounds: (-0.7, -0.7, -0.7, 0.7, 0.7, 0.7),
+            bounds: (-7, -7, -7, 7, 7, 7),
             combine: Clip),
     ],
 )

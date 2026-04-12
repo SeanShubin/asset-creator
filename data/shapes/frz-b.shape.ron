@@ -10,13 +10,13 @@
         (
             name: "body",
             shape: Cylinder,
-            bounds: (-4.0, -1.0, -4.0, 4.0, 0.0, 4.0),
+            bounds: (-4, -1, -4, 4, 0, 4),
             color: "body"
         ),
         (
             name: "top",
             shape: Dome,
-            bounds: (-4.0, 0.0, -4.0, 4.0, 1.0, 4.0),
+            bounds: (-4, 0, -4, 4, 1, 4),
             color: "body"
         ),
         (
@@ -30,7 +30,7 @@
         (
             name: "sensor-cap",
             shape: Dome,
-            bounds: (-1, 1, -1, 1, 1.5, 1),
+            bounds: (-1, 1, -1, 1, 2, 1),
             color: "sensor"
         ),
         (
