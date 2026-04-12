@@ -153,6 +153,39 @@ struct EditorDirty {
 
 ## Coordinate System
 
+### Integer Coordinate Principle
+
+All spatial coordinates in RON files are integers. Colors use integer components
+(0-3 per channel). Floats are never used in the specification format.
+
+Internally, the system operates in integer arithmetic as long as possible.
+Floats are introduced only at the rendering boundary — when vertex positions
+are sent to the GPU. This gives several properties:
+
+- **AABB tests are exact.** No epsilon comparisons, no false positives from
+  rounding. `min <= point && point <= max` is exact with integers.
+- **Collision detection is exact.** Separating axis tests, overlap checks,
+  point-in-box — all exact with integer arithmetic.
+- **Spatial hashing is trivial.** Integer coordinates map directly to grid
+  cells with no floor/round.
+- **CSG plane classification is exact.** No ambiguity zone around splitting
+  planes, no degenerate coplanar classifications from floating point noise.
+
+**Scale through nesting.** When a shape is imported at smaller bounds, the
+internal coordinates become fractional — but this happens in the system's
+math, not in the specification. The author never leaves whole numbers. If
+global integer coordinates are needed (e.g., for a physics grid), the entire
+scene can be multiplied to a scale where all nested features land on integers.
+A few levels of half-scale nesting (multiplier 8 or 16) covers more detail
+than humans can perceive, well within i32 range.
+
+**Rotations preserve integers.** The orient system constrains rotations
+between parts to 90-degree increments (Front/Back/Left/Right/Top/Bottom ×
+four Z-rotations), which map integer coordinates to integer coordinates.
+Arbitrary rotation at render time (camera orbit, animation) is unaffected —
+it operates on the final float vertex data sent to the GPU, not on the
+integer coordinate definitions.
+
 ### World Space (3D)
 
 The application uses Bevy's right-handed, Y-up coordinate system:

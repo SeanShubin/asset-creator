@@ -8,8 +8,10 @@ mod traversal;
 use bevy::prelude::*;
 
 pub use animation::{animate_shapes, ShapeAnimator};
-pub use definition::ShapeNode;
+pub use csg::{CsgStats, perform_csg_pipeline};
+pub use definition::{CombineMode, ShapeNode};
 pub use interpreter::{despawn_shape, spawn_shape, spawn_shape_with_layers, rebuild_csg_on_toggle, suppress_csg_member_meshes, ShapePart, ShapeRoot};
+pub use traversal::{walk_shape_tree, collect_mesh_from_events, ColorMap, ShapeEvent};
 
 /// Plugin that maintains shape system invariants.
 /// Register this once; it ensures CSG member meshes are always suppressed

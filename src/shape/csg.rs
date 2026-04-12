@@ -1,37 +1,117 @@
 use bevy::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 use super::meshes::RawMesh;
+
+// =====================================================================
+// Stats tracking
+// =====================================================================
+
+/// Tracks the maximum clip_polygons recursion depth across all CSG operations.
+static MAX_CLIP_DEPTH: AtomicU32 = AtomicU32::new(0);
+
+fn track_clip_depth(depth: u32) {
+    MAX_CLIP_DEPTH.fetch_max(depth, Ordering::Relaxed);
+}
+
+/// Statistics from a single CSG pipeline run.
+#[derive(Debug, Clone, Default)]
+pub struct CsgStats {
+    pub input_union_tris: Vec<u32>,
+    pub input_subtract_tris: Vec<u32>,
+    pub input_clip_tris: Vec<u32>,
+    pub max_bsp_depth: u32,
+    pub max_bsp_polys: u32,
+    pub max_clip_recursion: u32,
+    pub output_tris: u32,
+}
+
+fn reset_clip_depth() {
+    MAX_CLIP_DEPTH.store(0, Ordering::Relaxed);
+}
+
+fn read_clip_depth() -> u32 {
+    MAX_CLIP_DEPTH.load(Ordering::Relaxed)
+}
+
+fn bsp_depth(node: &BspNode) -> u32 {
+    let mut max = 0u32;
+    let mut stack: Vec<(&BspNode, u32)> = vec![(node, 1)];
+    while let Some((n, d)) = stack.pop() {
+        max = max.max(d);
+        if let Some(ref front) = n.front { stack.push((front, d + 1)); }
+        if let Some(ref back) = n.back { stack.push((back, d + 1)); }
+    }
+    max
+}
+
+fn bsp_polygon_count(node: &BspNode) -> u32 {
+    let mut count = 0u32;
+    let mut stack: Vec<&BspNode> = vec![node];
+    while let Some(n) = stack.pop() {
+        count += n.polygons.len() as u32;
+        if let Some(ref front) = n.front { stack.push(front); }
+        if let Some(ref back) = n.back { stack.push(back); }
+    }
+    count
+}
 
 // =====================================================================
 // Public API
 // =====================================================================
 
-/// Perform the full CSG pipeline: union all additive meshes, subtract each
-/// subtractive mesh, intersect with each clip mesh. Stays in BSP space
-/// throughout to avoid normal corruption from intermediate conversions.
+/// Perform the full CSG pipeline, returning both the result mesh and stats.
 pub fn perform_csg_pipeline(
     union_meshes: Vec<RawMesh>,
     subtract_meshes: Vec<RawMesh>,
     clip_meshes: Vec<RawMesh>,
-) -> RawMesh {
+) -> (RawMesh, CsgStats) {
+    let mut stats = CsgStats::default();
+
     if union_meshes.is_empty() {
-        return RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] };
+        return (RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] }, stats);
     }
+
+    reset_clip_depth();
+
+    for m in &union_meshes { stats.input_union_tris.push(m.indices.len() as u32 / 3); }
+    for m in &subtract_meshes { stats.input_subtract_tris.push(m.indices.len() as u32 / 3); }
+    for m in &clip_meshes { stats.input_clip_tris.push(m.indices.len() as u32 / 3); }
 
     let mut iter = union_meshes.into_iter();
     let mut result = mesh_to_bsp(iter.next().unwrap());
+    stats.max_bsp_depth = stats.max_bsp_depth.max(bsp_depth(&result));
+    stats.max_bsp_polys = stats.max_bsp_polys.max(bsp_polygon_count(&result));
+
     for mesh in iter {
-        result = bsp_union(result, mesh_to_bsp(mesh));
+        let operand = mesh_to_bsp(mesh);
+        stats.max_bsp_depth = stats.max_bsp_depth.max(bsp_depth(&operand));
+        stats.max_bsp_polys = stats.max_bsp_polys.max(bsp_polygon_count(&operand));
+        result = bsp_union(result, operand);
+        stats.max_bsp_depth = stats.max_bsp_depth.max(bsp_depth(&result));
+        stats.max_bsp_polys = stats.max_bsp_polys.max(bsp_polygon_count(&result));
     }
 
     for mesh in subtract_meshes {
-        result = bsp_subtract(result, mesh_to_bsp(mesh));
+        let operand = mesh_to_bsp(mesh);
+        stats.max_bsp_depth = stats.max_bsp_depth.max(bsp_depth(&operand));
+        result = bsp_subtract(result, operand);
+        stats.max_bsp_depth = stats.max_bsp_depth.max(bsp_depth(&result));
+        stats.max_bsp_polys = stats.max_bsp_polys.max(bsp_polygon_count(&result));
     }
 
     for mesh in clip_meshes {
-        result = bsp_intersect(result, mesh_to_bsp(mesh));
+        let operand = mesh_to_bsp(mesh);
+        stats.max_bsp_depth = stats.max_bsp_depth.max(bsp_depth(&operand));
+        result = bsp_intersect(result, operand);
+        stats.max_bsp_depth = stats.max_bsp_depth.max(bsp_depth(&result));
+        stats.max_bsp_polys = stats.max_bsp_polys.max(bsp_polygon_count(&result));
     }
 
-    bsp_to_mesh(result)
+    stats.max_clip_recursion = read_clip_depth();
+
+    let out = bsp_to_mesh(result);
+    stats.output_tris = out.indices.len() as u32 / 3;
+    (out, stats)
 }
 
 // =====================================================================
@@ -244,6 +324,12 @@ impl BspNode {
     }
 
     fn clip_polygons(&self, polygons: &[Polygon]) -> Vec<Polygon> {
+        self.clip_polygons_depth(polygons, 0)
+    }
+
+    fn clip_polygons_depth(&self, polygons: &[Polygon], depth: u32) -> Vec<Polygon> {
+        track_clip_depth(depth);
+
         let Some(ref plane) = self.plane else {
             return polygons.to_vec();
         };
@@ -264,10 +350,10 @@ impl BspNode {
         }
 
         if let Some(ref front) = self.front {
-            front_list = front.clip_polygons(&front_list);
+            front_list = front.clip_polygons_depth(&front_list, depth + 1);
         }
         if let Some(ref back) = self.back {
-            back_list = back.clip_polygons(&back_list);
+            back_list = back.clip_polygons_depth(&back_list, depth + 1);
         } else {
             back_list.clear();
         }

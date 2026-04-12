@@ -151,6 +151,16 @@ pub struct DeleteSurface {
     pub name: String,
 }
 
+impl AssetRegistry {
+    /// Load all shapes and surfaces from the data directory without Bevy.
+    pub fn load_from_disk(data_dir: &Path) -> Self {
+        let mut registry = AssetRegistry::default();
+        load_all_surfaces(data_dir, &mut registry);
+        load_all_shapes(data_dir, &mut registry);
+        registry
+    }
+}
+
 impl Plugin for RegistryPlugin {
     fn build(&self, app: &mut App) {
         let mut registry = AssetRegistry::default();

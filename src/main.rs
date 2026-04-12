@@ -4,6 +4,7 @@ mod noise;
 mod registry;
 mod render_export;
 mod shape;
+mod stress_test;
 mod surface;
 mod util;
 
@@ -12,6 +13,12 @@ use bevy_egui::EguiPlugin;
 
 fn main() {
     install_panic_hook();
+
+    if stress_test::is_stress_test() {
+        let registry = registry::AssetRegistry::load_from_disk(std::path::Path::new("data"));
+        stress_test::run(&registry);
+        return;
+    }
 
     let mut app = App::new();
     app.add_plugins((

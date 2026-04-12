@@ -310,7 +310,7 @@ pub fn build_csg_mesh(
         return;
     }
 
-    let result = csg::perform_csg_pipeline(union_meshes, subtract_meshes, clip_meshes);
+    let (result, _csg_stats) = csg::perform_csg_pipeline(union_meshes, subtract_meshes, clip_meshes);
     if result.positions.is_empty() {
         return;
     }

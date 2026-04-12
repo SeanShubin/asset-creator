@@ -21,13 +21,13 @@ RON is similar to Rust literal syntax:
     health: 100,
 
     // Tuples
-    position: (1.0, 2.0, 3.0),
+    position: (1, 2, 3),
 
     // Enums (no parameters)
     shape: Box,
 
-    // Bounding box (two corners)
-    bounds: (-0.25, -0.15, -0.2, 0.25, 0.15, 0.2),
+    // Bounding box (two corners, integer coordinates)
+    bounds: (-2, -1, -2, 2, 1, 2),
 
     // Options
     color: Some((0.8, 0.2, 0.1)),
