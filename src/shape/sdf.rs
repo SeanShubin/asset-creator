@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use fidget::context::Tree;
 use super::definition::{Bounds, PrimitiveShape};
-use super::traversal::ShapeEvent;
+use super::traversal::{ShapeEvent, combine_transforms};
 
 /// Build an SDF Tree from shape events. The tree represents the combined
 /// geometry of all Geometry events, positioned in world space.
@@ -26,8 +26,7 @@ pub fn collect_sdf_from_events(events: &[ShapeEvent]) -> Option<Tree> {
                 let world_mesh_tf = combine_transforms(&parent_world, mesh_tf);
 
                 if let Some(shape) = node.shape {
-                    let bounds = node.bounds.unwrap_or(Bounds(-1, -1, -1, 1, 1, 1));
-                    let sdf = primitive_sdf(shape, &bounds, &world_mesh_tf);
+                    let sdf = primitive_sdf(shape, &world_mesh_tf);
                     // Union with any existing SDF at this level
                     let current = sdf_stack.last_mut().unwrap();
                     *current = Some(match current.take() {
@@ -54,7 +53,7 @@ pub fn collect_sdf_from_events(events: &[ShapeEvent]) -> Option<Tree> {
 }
 
 /// Build an SDF for a single primitive shape at its world transform.
-fn primitive_sdf(shape: PrimitiveShape, _bounds: &Bounds, world_tf: &Transform) -> Tree {
+fn primitive_sdf(shape: PrimitiveShape, world_tf: &Transform) -> Tree {
     // The world transform maps the unit mesh (-0.5..0.5) to world position.
     // For the SDF, we need the inverse: map world (x,y,z) to local coordinates,
     // then evaluate the unit SDF.
@@ -147,12 +146,6 @@ fn sdf_corner(x: Tree, y: Tree, z: Tree) -> Tree {
     // Diagonal plane: x + y + z <= -0.5 → the cut face
     let diag = (x + y + z + 0.5) * (1.0 / 3.0_f32.sqrt());
     bottom.max(back).max(left).max(diag)
-}
-
-fn combine_transforms(parent: &Transform, child: &Transform) -> Transform {
-    let parent_mat = parent.compute_matrix();
-    let child_mat = child.compute_matrix();
-    Transform::from_matrix(parent_mat * child_mat)
 }
 
 /// Mesh an SDF tree using fidget's octree, returning positions and indices.
