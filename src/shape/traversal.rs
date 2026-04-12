@@ -69,7 +69,6 @@ pub fn apply_color_remapping(
 // Transform computation
 // =====================================================================
 
-const DEFAULT_BOUNDS: Bounds = Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5);
 
 /// Compute the local transform for a node (bounds center + rotate).
 /// This is the transform of the ShapePart entity relative to its parent.
@@ -143,7 +142,8 @@ pub fn combine_transforms(parent: &Transform, child: &Transform) -> Transform {
 
 fn reify_bounds(node: &mut ShapeNode) {
     if node.bounds.is_none() && node.shape.is_some() {
-        node.bounds = Some(DEFAULT_BOUNDS);
+        warn!("Shape '{}' has no bounds — every shape must specify bounds",
+            node.name.as_deref().unwrap_or("unnamed"));
     }
 }
 
@@ -270,7 +270,15 @@ fn walk_node(
             });
 
             if let Some(shape) = node.shape {
-                let bounds = node.bounds.unwrap_or(DEFAULT_BOUNDS);
+                let Some(bounds) = node.bounds else {
+                    warn!("Shape '{}' has no bounds — skipping geometry",
+                        node.name.as_deref().unwrap_or("unnamed"));
+                    for child in &node.children {
+                        walk_node(events, child, &colors, registry);
+                    }
+                    events.push(ShapeEvent::ExitNode);
+                    return;
+                };
                 let mesh_tf = compute_mesh_transform(shape, &bounds, &node.orient);
                 events.push(ShapeEvent::Geometry {
                     node: node.clone(),
@@ -356,8 +364,10 @@ fn walk_import(
         }
     };
 
-    let native_aabb = imported.compute_aabb()
-        .unwrap_or(Bounds(-0.5, -0.5, -0.5, 0.5, 0.5, 0.5));
+    let Some(native_aabb) = imported.compute_aabb() else {
+        warn!("Import '{}' has no computable AABB — skipping", import_name);
+        return;
+    };
     let placement = node.bounds.unwrap_or(native_aabb);
 
     let mut remapped = imported;
