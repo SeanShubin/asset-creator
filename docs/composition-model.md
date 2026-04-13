@@ -61,4 +61,37 @@ The fixed-cell model would be the right choice if the primary use case were proc
 
 ## T-junctions
 
-T-junctions are the one structural advantage of the fixed-cell model that the stretchy-lego model does not get for free. They are the main known sharp edge of this format and warrant their own treatment, which will be added in a follow-up section.
+A T-junction in a polygon mesh is a vertex from one face that lands on the **interior of an edge** of another face, rather than at one of that edge's endpoints. The shape resembles the letter T: a short edge meeting a long edge at its middle. In 3D this happens wherever primitives of different sizes share a face — the smaller primitive's corner sits in the interior of the larger primitive's edge.
+
+T-junctions are geometrically valid but break invariants that rendering and mesh-processing pipelines rely on:
+
+- **Rendering cracks.** Floating-point rasterization of a long edge can place the surface a sub-pixel away from where the meeting short edges land, producing flickering one-pixel-wide gaps along the seam.
+- **Interpolation discontinuities.** Per-vertex normals, colors, and UVs interpolated along the long edge do not match the values computed along the meeting short edges, even though the geometric point is the same.
+- **Manifold violation.** The long edge is shared by one face on its outer side and two faces on its inner side, breaking the invariant that every edge has exactly two adjacent faces. Subdivision, remeshing, half-edge data structures, and clean CSG all assume this invariant.
+- **Boolean / CSG breakage.** Boundary points without a consistent local manifold structure cause boolean operations to either reject the input or produce self-intersecting output.
+
+A fixed-cell grid prevents T-junctions structurally because adjacent cells are always the same size and share entire faces. The stretchy-lego model permits T-junctions because variable per-axis stretching means adjacent primitives can have mismatched face dimensions. Three concrete ways they arise:
+
+1. **Mismatched stretch on adjacent boxes.** A `4×4×4` Box adjacent to two stacked `4×2×4` Boxes produces a T-junction at the midpoint of the big Box's shared edge.
+2. **Stretched Wedge against an unstretched Box.** A Wedge with a `1×3` rectangular face meeting a Box with a `1×1` face produces T-junctions where the smaller face's corners land on the longer face's edge.
+3. **Recursive composition with mismatched scales.** Two composites at different unit scales sharing a face have all their boundary vertices on a finer lattice than their neighbor, even when each composite is internally clean.
+
+## Resolution: integer-exact fusion at meshing time
+
+T-junctions are removed by a three-pass meshing step that operates on the raw mesh produced by concatenating primitive meshes. Because the source format keeps all coordinates in exact integer arithmetic and primitives meet at shared faces without overlapping interiors, all three passes stay in the integer domain:
+
+1. **Vertex weld.** Collect every primitive's mesh vertices and merge any two whose integer coordinates are bit-identical. "Coincident" means literal equality, not "within tolerance." After this pass, two primitives that share a face reference the same vertex objects on that face.
+2. **Internal face cancellation.** For every face, look for another face with the identical vertex set and opposite winding order. Such pairs are internal seams between two filled primitives. Delete both. After this pass, every surviving face is on the outer boundary of the union.
+3. **T-junction repair.** For every edge, look for any vertex whose integer coordinates lie on the interior of that edge (an exact integer collinearity test). Split the edge at the vertex and split any face using the edge into two faces sharing the new vertex. Repeat until no T-junctions remain.
+
+The result is a single watertight 2-manifold with all-integer vertex coordinates, no internal faces, no T-junctions, no duplicated vertices, and bit-exact correspondence to the source. The integer domain is never left.
+
+This reframes T-junctions as a meshing concern rather than a format concern. The `.shape.ron` source files stay simple, declarative, and integer-exact. Authors are free to compose primitives at any compatible scales without worrying about T-junctions. The render path, export path, and collision-mesh path all run the three-pass meshing step and consume only its output.
+
+### What this approach assumes and what it gives up
+
+The three-pass approach assumes **primitives meet but never overlap**. Two primitives whose bounds touch along a face are fine; two primitives whose bounds share interior volume are not — pass 2 will not cancel their faces (which are nested rather than coincident) and the output mesh will contain stray internal geometry. A load-time validator that refuses any composite with overlapping primitive interiors enforces this invariant cheaply.
+
+The other thing given up is **per-primitive identity in the meshed output**. After welding and face-cancellation, a triangle in the output cannot be traced back to a specific source primitive without explicit bookkeeping. If per-primitive colors or materials are needed, the meshing pass must tag each triangle with its source primitive before welding, and pass 2 must refuse to cancel face pairs that come from primitives with different materials — leaving those as visible internal seams. This is a small extension, not a redesign.
+
+For genuinely overlapping primitives (which the format does not currently produce, and which the load-time validator can forbid), full CSG would be required. The asset-creator does not need this case.
