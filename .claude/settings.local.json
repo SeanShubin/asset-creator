@@ -39,7 +39,11 @@
       "Bash(cargo fetch:*)",
       "Bash(find:*)",
       "Bash(grep -A5 '\\\\[features\\\\]' C:/Users/seans/.cargo/registry/src/index.crates.io-*/fidget-0.4.3/Cargo.toml)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(python:*)",
+      "Bash(ls /c/Python*)",
+      "Read(//c/Users/seans/AppData/Local/Programs/**)",
+      "Bash(node:*)"
     ]
   }
 }

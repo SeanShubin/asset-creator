@@ -223,6 +223,57 @@ fn mirror_combinations(axes: &[Axis]) -> Vec<(Vec<Axis>, String)> {
     result
 }
 
+/// Expand mirror and repeat combinators on a list of children, producing
+/// the same flat list that the walk generates as entities. Used so that
+/// CsgGroup stores post-expansion children matching the entity tree.
+pub fn expand_combinators(children: &[ShapeNode]) -> Vec<ShapeNode> {
+    let mut result = Vec::new();
+    for child in children {
+        match child.combinator() {
+            Combinator::Mirror(axes) => {
+                let mut base = child.clone();
+                base.mirror = Vec::new();
+                for (flipped_axes, suffix) in &mirror_combinations(axes) {
+                    let mut copy = base.clone();
+                    for &axis in flipped_axes {
+                        flip_node_bounds(&mut copy, axis);
+                    }
+                    for &axis in flipped_axes {
+                        reflect_orientation(&mut copy, axis);
+                    }
+                    if !suffix.is_empty() {
+                        if let Some(ref name) = copy.name {
+                            copy.name = Some(format!("{name}_{suffix}"));
+                        }
+                    }
+                    result.push(copy);
+                }
+            }
+            Combinator::Repeat(repeat) => {
+                let start = if repeat.center {
+                    -(repeat.count as f32 - 1.0) * repeat.spacing * 0.5
+                } else {
+                    0.0
+                };
+                for i in 0..repeat.count {
+                    let mut instance = child.clone();
+                    instance.repeat = None;
+                    reify_bounds(&mut instance);
+                    offset_bounds(&mut instance.bounds, repeat.along, start + i as f32 * repeat.spacing);
+                    if let Some(ref name) = instance.name {
+                        instance.name = Some(format!("{name}_{i}"));
+                    }
+                    result.push(instance);
+                }
+            }
+            _ => {
+                result.push(child.clone());
+            }
+        }
+    }
+    result
+}
+
 // =====================================================================
 // Shape events — intermediate representation from tree walk
 // =====================================================================

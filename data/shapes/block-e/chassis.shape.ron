@@ -1,0 +1,61 @@
+(
+    name: "chassis",
+    palette: {
+        "body": (1, 0, 0),
+        "hover": (0, 2, 0),
+        "sensor": (0, 0, 2),
+        "blade": (3, 0, 0),
+        "bay": (0, 0, 0),
+    },
+    children: [
+        (
+            name: "body",
+            shape: Box,
+            bounds: (-4, -1, -4, 4, 0, 4),
+            color: "body",
+        ),
+        (
+            name: "top_center",
+            shape: Box,
+            bounds: (-2, 0, -2, 2, 1, 2),
+            color: "body",
+        ),
+        (
+            name: "top_edge_z",
+            shape: Wedge,
+            bounds: (-2, 0, 2, 2, 1, 4),
+            color: "body",
+            mirror: [Z],
+        ),
+        (
+            name: "top_edge_x",
+            shape: Wedge,
+            bounds: (2, 0, -2, 4, 1, 2),
+            color: "body",
+            orient: (Right, NoMirror, NoRotation),
+            mirror: [X],
+        ),
+        (
+            name: "top_corner",
+            shape: Corner,
+            bounds: (2, 0, 2, 4, 1, 4),
+            color: "body",
+            mirror: [X, Z],
+        ),
+        (
+            name: "weapon_bay",
+            shape: Box,
+            bounds: (2, -1, -2, 3, 0, 4),
+            color: "bay",
+            combine: Subtract,
+            mirror: [X],
+        ),
+        (
+            name: "sensor_bay",
+            shape: Box,
+            bounds: (-1, 0, -1, 1, 1, 1),
+            color: "bay",
+            combine: Subtract,
+        ),
+    ],
+)

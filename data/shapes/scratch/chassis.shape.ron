@@ -1,0 +1,54 @@
+(
+    name: "chassis",
+    palette: {
+        "a": (3, 0, 0),
+        "b": (3, 3, 0),
+        "c": (0, 3, 0),
+        "d": (0, 3, 3),
+        "e": (0, 0, 3)
+    },
+    children: [
+        (
+            name: "bodyA",
+            shape: Box,
+            bounds: (-4, -1, 0, -3, 0, -2),
+            color: "a",
+            mirror: [X, Z]
+        ),
+        (
+            name: "bodyB",
+            shape: Box,
+            bounds: (0, -1, 0, -2, 0, -2),
+            color: "b",
+            mirror: [X, Z]
+        ),
+        (
+            name: "bodyC",
+            shape: Box,
+            bounds: (0, -1, -4, -2, 0, -2),
+            color: "c",
+            mirror: [X, Z]
+        ),
+        (
+            name: "bodyD",
+            shape: Wedge,
+            bounds: (-4, -1, -4, -2, 0, -2),
+            color: "d",
+            mirror: [X],
+            orient: (Back, Mirror, RotateCounter)
+        ),
+        (
+            name: "bodyE",
+            shape: Wedge,
+            bounds: (-4, 0, 4, -2, 1, 2),
+            color: "e",
+            mirror: [],
+            orient: (Front, NoMirror, RotateHalf)
+        ),
+    ],
+)
+/*
+
+
+*/
+

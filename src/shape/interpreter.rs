@@ -7,7 +7,7 @@ use super::csg;
 use super::definition::{CombineMode, PrimitiveShape, ShapeNode};
 use super::traversal::{
     ColorMap, ShapeEvent,
-    bounds_center, resolve_color, walk_shape_tree,
+    bounds_center, expand_combinators, resolve_color, walk_shape_tree,
 };
 
 // =====================================================================
@@ -268,17 +268,18 @@ fn spawn_part_entity(
     }
 
     let csg_frame = if node.has_csg_children() {
-        let all_active = vec![true; node.children.len()];
+        let expanded = expand_combinators(&node.children);
+        let all_active = vec![true; expanded.len()];
         commands.entity(entity).insert((
             CsgGroup {
-                children: node.children.clone(),
+                children: expanded.clone(),
                 colors: colors.clone(),
                 scale,
             },
             CsgChildState { active: all_active },
         ));
         Some(CsgFrame {
-            children: node.children.clone(),
+            children: expanded,
             colors: colors.clone(),
             scale,
         })
@@ -553,7 +554,10 @@ pub fn rebuild_csg_on_toggle(
             .map(|(node, _)| node.clone())
             .collect();
 
-        if active_children.is_empty() || !active_children.iter().any(|c| c.combine != CombineMode::Union) {
+        if active_children.is_empty()
+            || !active_children.iter().any(|c| c.combine != CombineMode::Union)
+            || !active_children.iter().any(|c| c.combine == CombineMode::Union)
+        {
             continue;
         }
 
