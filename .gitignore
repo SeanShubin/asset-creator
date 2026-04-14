@@ -3,3 +3,4 @@ Cargo.lock
 crash.log
 .idea/
 /generated/
+/.claude/
