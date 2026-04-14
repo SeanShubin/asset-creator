@@ -50,7 +50,7 @@
             name: "topA",
             shape:Corner,
             bounds:(-4,0,-4,-2,1,-2),
-            color:"a",
+            color:"body",
             orient:(Back, NoMirror, NoRotation),
             mirror: [X,Z]
         ),
@@ -58,7 +58,7 @@
             name: "topB",
             shape:Wedge,
             bounds:(-4,0,-2,-2,1,2),
-            color:"b",
+            color:"body",
             orient:(Left, NoMirror, NoRotation),
             mirror: [X]
         ),
@@ -66,7 +66,7 @@
             name: "topC",
             shape:Wedge,
             bounds:(-2,0,4,2,1,2),
-            color:"c",
+            color:"body",
             orient:(Front, NoMirror, NoRotation),
             mirror: [Z]
         )
