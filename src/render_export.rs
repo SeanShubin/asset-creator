@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::editor::compute_camera_pose;
 use crate::registry::AssetRegistry;
-use crate::shape::spawn_shape_with_layers;
+use crate::shape::{collect_occupancy, spawn_shape_with_layers};
 
 const EXPORT_RENDER_LAYER: usize = 1;
 const RENDER_SIZE: u32 = 1024;
@@ -186,6 +186,25 @@ fn process_render_queue(
     // Start the next job
     let Some(job) = queue.pending.pop() else { return };
     let Some(shape) = registry.get_shape_by_path(&job.shape_path) else { return };
+
+    // Refuse to export a shape with cell collisions. The editor stays
+    // permissive (HUD stat only) but batch pipelines won't produce
+    // output from a broken spec.
+    let occupancy = collect_occupancy(shape, &registry);
+    if occupancy.collision_count() > 0 {
+        error!(
+            "render export: refusing to render '{}' ({} cell collision(s))",
+            job.shape_path.display(),
+            occupancy.collision_count()
+        );
+        for c in occupancy.collisions().iter().take(10) {
+            error!(
+                "  at {:?}: '{}' vs '{}'",
+                c.cell, c.first_path, c.second_path
+            );
+        }
+        return;
+    }
 
     let image_handle = create_render_target(&mut images);
     let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);

@@ -5,8 +5,8 @@ use std::io::Write;
 
 use crate::registry::AssetRegistry;
 use crate::shape::{
-    collect_raw_mesh, compile, ColorMap, CombineMode, CsgStats,
-    RenderEvent, SpecNode, perform_csg_uncached,
+    collect_occupancy, collect_raw_mesh, compile, ColorMap, CombineMode,
+    CsgStats, RenderEvent, SpecNode, perform_csg_uncached,
 };
 
 const OUTPUT_DIR: &str = "generated/stress-test";
@@ -27,6 +27,7 @@ pub fn run(registry: &AssetRegistry) {
     writeln!(log, "Shapes found: {}\n", entries.len()).unwrap();
 
     let mut any_warning = false;
+    let mut collision_failures: Vec<String> = Vec::new();
 
     for (name, path) in &entries {
         let Some(shape) = registry.get_shape_by_path(path) else {
@@ -35,6 +36,39 @@ pub fn run(registry: &AssetRegistry) {
         };
 
         writeln!(log, "--- {name} ---").unwrap();
+
+        // Cell-level collision check. Non-interactive pipelines refuse
+        // to produce output from a shape that violates cell uniqueness.
+        // The editor remains permissive (HUD stat only) but batch tools
+        // are strict by design — a broken shape should never ship.
+        let occupancy = collect_occupancy(shape, registry);
+        if occupancy.collision_count() > 0 {
+            writeln!(
+                log,
+                "  FAIL: {} cell-level collision(s)",
+                occupancy.collision_count()
+            )
+            .unwrap();
+            for c in occupancy.collisions().iter().take(10) {
+                writeln!(
+                    log,
+                    "    at {:?}: '{}' vs '{}'",
+                    c.cell, c.first_path, c.second_path
+                )
+                .unwrap();
+            }
+            if occupancy.collisions().len() > 10 {
+                writeln!(
+                    log,
+                    "    ... and {} more",
+                    occupancy.collisions().len() - 10
+                )
+                .unwrap();
+            }
+            collision_failures.push(name.clone());
+            writeln!(log).unwrap();
+            continue;
+        }
 
         // Walk the shape tree and collect events
         let colors: ColorMap = shape.palette.clone();
@@ -82,6 +116,24 @@ pub fn run(registry: &AssetRegistry) {
         writeln!(log, "WARNINGS: see above for shapes with high BSP depth or polygon count").unwrap();
     } else {
         writeln!(log, "All shapes within normal parameters").unwrap();
+    }
+
+    if !collision_failures.is_empty() {
+        writeln!(log).unwrap();
+        writeln!(
+            log,
+            "COLLISION FAILURES ({}): these shapes were skipped",
+            collision_failures.len()
+        )
+        .unwrap();
+        for name in &collision_failures {
+            writeln!(log, "  {name}").unwrap();
+        }
+        println!(
+            "Stress test FAILED: {} shape(s) had cell collisions. See {LOG_FILE}",
+            collision_failures.len()
+        );
+        std::process::exit(1);
     }
 
     println!("Stress test complete. Results in {LOG_FILE}");

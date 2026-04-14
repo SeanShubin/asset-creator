@@ -15,7 +15,10 @@ pub use interpreter::{
     spawn_shape_with_layers, suppress_csg_member_meshes, ShapePart, ShapeRoot,
 };
 pub use render::{collect_raw_mesh, compile, ColorMap, RenderEvent};
-pub use spec::{Bounds, CombineMode, SpecNode};
+#[allow(unused_imports)]
+pub use spec::{
+    collect_occupancy, Bounds, Collision, CombineMode, Occupancy, SpecNode,
+};
 
 /// Plugin that maintains shape system invariants.
 /// Register this once; it ensures CSG member meshes are always suppressed

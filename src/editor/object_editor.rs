@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::browser::ActiveEditor;
 use crate::registry::AssetRegistry;
 use crate::shape::{
-    animate_shapes, rebuild_csg_on_toggle,
+    animate_shapes, collect_occupancy, rebuild_csg_on_toggle,
     ShapeAnimator, ShapePart, ShapeRoot,
     despawn_shape, spawn_shape, spawn_shape_as_sdf,
 };
@@ -111,6 +111,11 @@ struct SceneStats {
     parts: usize,
     triangles: usize,
     draw_calls: usize,
+    /// Number of cell-level collisions detected in the current shape.
+    /// Zero is the clean state; non-zero means two or more primitives
+    /// claim the same integer cell. In the editor this is informational;
+    /// non-interactive tools treat it as a hard error.
+    collisions: usize,
 }
 
 /// Scene AABB and derived values for grid sizing and zoom.
@@ -259,11 +264,36 @@ fn reload_shape(
 
     preview.shape_has_csg = shape_file.has_csg_children();
 
-    if let Some(aabb) = shape_file.compute_aabb() {
+    // Compute the cell-level occupancy index once per reload. This is the
+    // single source of truth for scene AABB AND collision count.
+    // Subset-enumeration `compute_aabb` is kept alive for the CSG paths
+    // that still use `Bounds::enclosing`; those go away with CSG in
+    // step 6 of the architecture plan.
+    let occupancy = collect_occupancy(shape_file, &registry);
+
+    if let Some(aabb) = occupancy.aabb() {
         let min = aabb.min();
         let max = aabb.max();
         bounds.scene_min = Vec3::new(min.0 as f32, min.1 as f32, min.2 as f32);
         bounds.scene_max = Vec3::new(max.0 as f32, max.1 as f32, max.2 as f32);
+    }
+
+    stats.collisions = occupancy.collision_count();
+    if stats.collisions > 0 {
+        warn!(
+            "shape '{}' has {} cell-level collision(s)",
+            path.display(),
+            stats.collisions
+        );
+        for c in occupancy.collisions().iter().take(10) {
+            warn!(
+                "  collision at {:?}: '{}' vs '{}'",
+                c.cell, c.first_path, c.second_path
+            );
+        }
+        if occupancy.collisions().len() > 10 {
+            warn!("  ... and {} more", occupancy.collisions().len() - 10);
+        }
     }
 
     if preview.enabled && !preview.shape_has_csg {
@@ -655,8 +685,10 @@ fn camera_controls(
     });
 
     ui.separator();
-    ui.label(format!("Parts: {}  Tris: {}  Draws: {}",
-        stats.parts, stats.triangles, stats.draw_calls));
+    ui.label(format!(
+        "Parts: {}  Tris: {}  Draws: {}  Collisions: {}",
+        stats.parts, stats.triangles, stats.draw_calls, stats.collisions
+    ));
 }
 
 fn current_zoom_pct(

@@ -14,7 +14,9 @@
 use serde::Deserialize;
 use serde::de::{self, MapAccess, Visitor};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt;
+use crate::registry::AssetRegistry;
 use crate::util::Color3;
 
 // =====================================================================
@@ -302,7 +304,7 @@ pub enum PrimitiveShape {
 // Bounds
 // =====================================================================
 
-#[derive(Deserialize, Clone, Copy, Debug)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bounds(pub i32, pub i32, pub i32, pub i32, pub i32, pub i32);
 
 impl Bounds {
@@ -657,6 +659,264 @@ pub fn expand_mirror_children(children: &[SpecNode]) -> Vec<SpecNode> {
 }
 
 // =====================================================================
+// Cell occupancy — integer-space scene index
+// =====================================================================
+
+/// A unit cell in integer world space. Every primitive instance claims
+/// one or more of these.
+pub type CellPos = (i32, i32, i32);
+
+/// A single cell collision: two primitives (identified by their authored
+/// path from the root of the spec tree) both claim the same cell.
+#[derive(Debug, Clone)]
+pub struct Collision {
+    pub first_path: String,
+    pub second_path: String,
+    pub cell: CellPos,
+}
+
+/// Global cell-level index of a compiled shape. Every primitive instance
+/// (post-mirror-expansion, post-import-remapping) contributes its
+/// integer cells to the index. The resulting structure supports two
+/// queries in O(1) per cell:
+///
+/// 1. **AABB**: min and max over all claimed cells.
+/// 2. **Collision detection**: any cell that more than one primitive
+///    tried to claim is recorded as a `Collision`.
+///
+/// The cell model is the long-term source of truth for shape geometry
+/// and will eventually replace the subset-based AABB path. For now both
+/// coexist: `SpecNode::compute_aabb` still uses subset enumeration and
+/// is called on the unexpanded tree (no registry), while `Occupancy`
+/// handles the global scene and participates in validation.
+pub struct Occupancy {
+    cells: HashMap<CellPos, String>,
+    collisions: Vec<Collision>,
+}
+
+impl Occupancy {
+    fn new() -> Self {
+        Self {
+            cells: HashMap::new(),
+            collisions: Vec::new(),
+        }
+    }
+
+    /// Number of collisions detected. Zero means the spec satisfies the
+    /// cell-uniqueness invariant.
+    pub fn collision_count(&self) -> usize {
+        self.collisions.len()
+    }
+
+    /// Full list of cell collisions. Each entry names the two primitives
+    /// that both claimed the cell plus the cell coordinate.
+    pub fn collisions(&self) -> &[Collision] {
+        &self.collisions
+    }
+
+    /// AABB enclosing all occupied cells. Returns `None` if nothing was
+    /// placed. Each occupied cell `(x, y, z)` occupies the unit cube
+    /// `(x, y, z)` to `(x+1, y+1, z+1)`, so the result's max components
+    /// are one greater than the max cell coordinate.
+    pub fn aabb(&self) -> Option<Bounds> {
+        let mut iter = self.cells.keys();
+        let first = *iter.next()?;
+        let mut mn = first;
+        let mut mx = first;
+        for &(x, y, z) in iter {
+            if x < mn.0 {
+                mn.0 = x;
+            }
+            if y < mn.1 {
+                mn.1 = y;
+            }
+            if z < mn.2 {
+                mn.2 = z;
+            }
+            if x > mx.0 {
+                mx.0 = x;
+            }
+            if y > mx.1 {
+                mx.1 = y;
+            }
+            if z > mx.2 {
+                mx.2 = z;
+            }
+        }
+        Some(Bounds(mn.0, mn.1, mn.2, mx.0 + 1, mx.1 + 1, mx.2 + 1))
+    }
+
+    fn claim(&mut self, cell: CellPos, path: &str) {
+        match self.cells.entry(cell) {
+            Entry::Vacant(e) => {
+                e.insert(path.to_string());
+            }
+            Entry::Occupied(e) => {
+                self.collisions.push(Collision {
+                    first_path: e.get().clone(),
+                    second_path: path.to_string(),
+                    cell,
+                });
+            }
+        }
+    }
+}
+
+/// Walk a `SpecNode` tree, expanding mirror combinators and imports,
+/// and build an `Occupancy` index of every cell claimed by every
+/// primitive instance.
+///
+/// Runs in integer arithmetic only. Cell positions are world cells —
+/// for shapes containing imports, the per-import scale is tracked and
+/// scaled integer bounds are divided down to world cells at each leaf.
+/// The `remap_bounds` invariant (scaled values are always exact multiples
+/// of the scale factor) guarantees the division is lossless.
+pub fn collect_occupancy(spec: &SpecNode, registry: &AssetRegistry) -> Occupancy {
+    let mut occ = Occupancy::new();
+    walk_for_occupancy(&mut occ, spec, "", (1, 1, 1), registry);
+    occ
+}
+
+fn walk_for_occupancy(
+    occ: &mut Occupancy,
+    node: &SpecNode,
+    parent_path: &str,
+    scale: (i32, i32, i32),
+    registry: &AssetRegistry,
+) {
+    let base_path = append_path(parent_path, node.name.as_deref());
+
+    match node.combinator() {
+        Combinator::Mirror(axes) => {
+            let mut base = node.clone();
+            base.mirror = Vec::new();
+            for (flipped, suffix) in &mirror_combinations(axes) {
+                let mut copy = base.clone();
+                for &axis in flipped {
+                    flip_bounds(&mut copy, axis);
+                }
+                for &axis in flipped {
+                    push_reflection(&mut copy, axis);
+                }
+                let copy_path = if suffix.is_empty() {
+                    base_path.clone()
+                } else {
+                    format!("{base_path}_{suffix}")
+                };
+                walk_for_occupancy(occ, &copy, &copy_path, scale, registry);
+            }
+        }
+        Combinator::Import(import_name) => {
+            let Some(imported) = registry.get_shape(import_name) else {
+                // Missing imports are reported elsewhere (render path);
+                // occupancy silently skips them so the HUD doesn't
+                // report phantom collisions for a broken import.
+                return;
+            };
+            let Some(native_aabb) = imported.compute_aabb() else {
+                return;
+            };
+            let placement = node.bounds.unwrap_or(native_aabb);
+
+            let remap_scale = Bounds::remap_scale(&native_aabb);
+            let new_scale = (
+                scale.0 * remap_scale.0,
+                scale.1 * remap_scale.1,
+                scale.2 * remap_scale.2,
+            );
+
+            let mut remapped = imported.clone();
+            remapped.remap_bounds(&native_aabb, &placement);
+            walk_for_occupancy(occ, &remapped, &base_path, new_scale, registry);
+        }
+        Combinator::None => {
+            if let (Some(_), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
+                claim_cells(occ, bounds, scale, &base_path);
+            }
+            for child in &node.children {
+                walk_for_occupancy(occ, child, &base_path, scale, registry);
+            }
+        }
+    }
+}
+
+fn claim_cells(
+    occ: &mut Occupancy,
+    bounds: &Bounds,
+    scale: (i32, i32, i32),
+    path: &str,
+) {
+    let mn = bounds.min();
+    let mx = bounds.max();
+    // Divide scaled integer bounds down to world cells. When the primitive
+    // is cell-aligned (no fractional position), floor_div and ceil_div
+    // both return the exact cell. When the primitive sits at sub-cell
+    // positions — which happens inside imports whose placement-to-native
+    // size ratio is not an integer — we round outward: floor for min,
+    // ceil for max. That conservatively over-claims the smallest integer
+    // cell box containing the primitive. This may produce false-positive
+    // collisions at cell boundaries between two non-aligned imports, but
+    // never false negatives, which is the right tradeoff for the
+    // informational HUD stat. The long-term cell-level architecture will
+    // disallow non-integer scaling imports entirely.
+    let wmin = (
+        floor_div(mn.0, scale.0),
+        floor_div(mn.1, scale.1),
+        floor_div(mn.2, scale.2),
+    );
+    let wmax = (
+        ceil_div(mx.0, scale.0),
+        ceil_div(mx.1, scale.1),
+        ceil_div(mx.2, scale.2),
+    );
+
+    for z in wmin.2..wmax.2 {
+        for y in wmin.1..wmax.1 {
+            for x in wmin.0..wmax.0 {
+                occ.claim((x, y, z), path);
+            }
+        }
+    }
+}
+
+/// Floor division for a signed dividend and a strictly positive divisor.
+/// Unlike Rust's `/`, this rounds toward negative infinity, which is what
+/// we want when computing the minimum cell an integer position belongs to.
+fn floor_div(a: i32, b: i32) -> i32 {
+    debug_assert!(b > 0, "scale must be positive");
+    let q = a / b;
+    let r = a % b;
+    if r < 0 {
+        q - 1
+    } else {
+        q
+    }
+}
+
+/// Ceiling division for a signed dividend and a strictly positive divisor.
+/// Rounds toward positive infinity, used when computing the exclusive
+/// upper cell bound.
+fn ceil_div(a: i32, b: i32) -> i32 {
+    debug_assert!(b > 0, "scale must be positive");
+    let q = a / b;
+    let r = a % b;
+    if r > 0 {
+        q + 1
+    } else {
+        q
+    }
+}
+
+fn append_path(parent: &str, name: Option<&str>) -> String {
+    match (parent.is_empty(), name) {
+        (true, Some(n)) => n.to_string(),
+        (true, None) => String::new(),
+        (false, Some(n)) => format!("{parent}/{n}"),
+        (false, None) => parent.to_string(),
+    }
+}
+
+// =====================================================================
 // Serde helpers
 // =====================================================================
 
@@ -748,6 +1008,140 @@ mod tests {
         let aabb = spec.compute_aabb().expect("should produce an aabb");
         assert_eq!(aabb.min(), (-3, -3, -3));
         assert_eq!(aabb.max(), (3, 3, 3));
+    }
+
+    /// A lone cell-aligned box with no mirror claims exactly its
+    /// integer cells and reports no collisions.
+    #[test]
+    fn occupancy_lone_box_has_no_collisions() {
+        let spec = leaf_spec(Bounds(0, 0, 0, 2, 2, 2), vec![]);
+        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        assert_eq!(occ.collision_count(), 0);
+        assert_eq!(
+            occ.aabb(),
+            Some(Bounds(0, 0, 0, 2, 2, 2)),
+            "aabb should wrap exactly the claimed cells"
+        );
+    }
+
+    /// Two boxes that share no cells produce no collisions, and the
+    /// AABB spans the union.
+    #[test]
+    fn occupancy_two_disjoint_boxes() {
+        let child_a = leaf_spec(Bounds(0, 0, 0, 2, 2, 2), vec![]);
+        let mut child_b = leaf_spec(Bounds(3, 0, 0, 5, 2, 2), vec![]);
+        child_b.name = Some("b".into());
+        let mut parent = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), vec![]);
+        parent.shape = None;
+        parent.bounds = None;
+        parent.name = Some("parent".into());
+        parent.children = vec![child_a, child_b];
+
+        let occ = collect_occupancy(&parent, &AssetRegistry::default());
+        assert_eq!(occ.collision_count(), 0);
+        assert_eq!(occ.aabb(), Some(Bounds(0, 0, 0, 5, 2, 2)));
+    }
+
+    /// Two boxes whose bounds overlap trigger a collision with both
+    /// paths recorded.
+    #[test]
+    fn occupancy_overlapping_boxes_collide() {
+        let mut child_a = leaf_spec(Bounds(0, 0, 0, 3, 2, 2), vec![]);
+        child_a.name = Some("a".into());
+        let mut child_b = leaf_spec(Bounds(2, 0, 0, 5, 2, 2), vec![]);
+        child_b.name = Some("b".into());
+        let mut parent = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), vec![]);
+        parent.shape = None;
+        parent.bounds = None;
+        parent.name = Some("parent".into());
+        parent.children = vec![child_a, child_b];
+
+        let occ = collect_occupancy(&parent, &AssetRegistry::default());
+        // Overlap region is (2..3, 0..2, 0..2) = 4 cells, each a collision.
+        assert_eq!(occ.collision_count(), 4);
+        let c = &occ.collisions()[0];
+        assert!(c.first_path.ends_with("/a") || c.first_path == "a");
+        assert!(c.second_path.ends_with("/b") || c.second_path == "b");
+    }
+
+    /// A centered box with mirror [X] produces two overlapping copies
+    /// (each one gets the whole AABB), so every cell is a collision.
+    /// This is the motivating "centered sphere mirrored across X" case.
+    #[test]
+    fn occupancy_centered_mirror_collides_with_itself() {
+        let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), vec![MirrorAxis::X]);
+        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        // Both copies land on the same 8 cells.
+        assert_eq!(occ.collision_count(), 8);
+    }
+
+    /// An off-origin box with mirror [X] produces two copies on
+    /// opposite sides with no overlap.
+    #[test]
+    fn occupancy_off_origin_mirror_does_not_collide() {
+        let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), vec![MirrorAxis::X]);
+        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        assert_eq!(occ.collision_count(), 0);
+        assert_eq!(occ.aabb(), Some(Bounds(-3, 0, 0, 3, 1, 1)));
+    }
+
+    /// The D_4 diagonal mirror test shape produces 8 unique copies;
+    /// with asymmetric bounds they should all be disjoint and cell
+    /// occupancy should report zero collisions.
+    #[test]
+    fn occupancy_d4_diagonal_mirror_no_collision() {
+        let spec = leaf_spec(
+            Bounds(1, 3, 0, 2, 5, 1),
+            vec![MirrorAxis::X, MirrorAxis::Y, MirrorAxis::XY],
+        );
+        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        assert_eq!(occ.collision_count(), 0);
+        // 8 copies × 2 cells each (the 1×2×1 box).
+        let aabb = occ.aabb().expect("should have cells");
+        // AABB spans ±5 on x and y, 0..1 on z.
+        assert_eq!(aabb.min(), (-5, -5, 0));
+        assert_eq!(aabb.max(), (5, 5, 1));
+    }
+
+    /// Non-integer scaling during import remap (e.g. a native-size-16 axis
+    /// placed in a size-9 slot) used to trip a divisibility assertion in
+    /// `claim_cells`. Regression check: the same configuration must be
+    /// handled without panicking and must over-claim conservatively.
+    #[test]
+    fn claim_cells_handles_non_integer_scale() {
+        // Scale=(4, 4, 16); bounds=(8, -4, -48, 12, 0, 24) mirrors the
+        // remapped block-e/melee body. 24/16 = 1.5 — sub-cell position
+        // in z, which must not panic.
+        let mut occ = Occupancy::new();
+        let scale = (4, 4, 16);
+        let bounds = Bounds(8, -4, -48, 12, 0, 24);
+        claim_cells(&mut occ, &bounds, scale, "leaf");
+        // z: floor(-48/16)=-3, ceil(24/16)=2 → cells z=-3..2 (5 cells)
+        // x: floor(8/4)=2, ceil(12/4)=3 → cells x=2..3 (1 cell)
+        // y: floor(-4/4)=-1, ceil(0/4)=0 → cells y=-1..0 (1 cell)
+        // Total: 1 * 1 * 5 = 5 cells
+        assert_eq!(occ.collision_count(), 0);
+        let aabb = occ.aabb().unwrap();
+        assert_eq!(aabb.min(), (2, -1, -3));
+        assert_eq!(aabb.max(), (3, 0, 2));
+    }
+
+    #[test]
+    fn floor_div_handles_signs() {
+        assert_eq!(floor_div(10, 3), 3);
+        assert_eq!(floor_div(-10, 3), -4);
+        assert_eq!(floor_div(0, 3), 0);
+        assert_eq!(floor_div(9, 3), 3);
+        assert_eq!(floor_div(-9, 3), -3);
+    }
+
+    #[test]
+    fn ceil_div_handles_signs() {
+        assert_eq!(ceil_div(10, 3), 4);
+        assert_eq!(ceil_div(-10, 3), -3);
+        assert_eq!(ceil_div(0, 3), 0);
+        assert_eq!(ceil_div(9, 3), 3);
+        assert_eq!(ceil_div(-9, 3), -3);
     }
 
     /// The original `[X, Y, Z]` should still work and produce 8 copies
