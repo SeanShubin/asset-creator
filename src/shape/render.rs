@@ -4,15 +4,17 @@
 //! floating-point rendering pipeline. Everything downstream (`interpreter`,
 //! `csg`, `sdf`) consumes `RenderEvent`s; none of them can reach back into
 //! `SpecNode` fields. The only type from `super::spec` that appears here is
-//! `SpecNode` itself, and only in the signatures of the compile functions.
+//! `SpecNode` itself (plus `Placement`, which is integer-only spec data),
+//! and only in the signatures of the compile functions.
 
 use bevy::prelude::*;
 use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::meshes::{RawMesh, create_raw_mesh};
 use super::spec::{
-    self, Bounds, CombineMode, Combinator, Facing, MirrorAxis, Mirroring,
-    Orientation, PrimitiveShape, Rotation, SpecNode,
+    self, apply_placement_to_bounds, compose_placements, identity_placement,
+    placements, Bounds, CombineMode, Combinator, Facing, Mirroring, Orientation,
+    Placement, PrimitiveShape, Rotation, SignedAxis, SpecNode, Symmetry,
 };
 
 // =====================================================================
@@ -90,15 +92,15 @@ fn apply_color_remapping(
 // RenderEvent — what the render pipeline consumes
 // =====================================================================
 
-/// A flat, ordered stream representing one rendered shape. Every field is
-/// pre-computed during `compile`.
+/// A flat, ordered stream representing one rendered shape. Every float
+/// field is pre-computed during `compile`.
 ///
 /// Most variants carry only pre-baked float data. The one exception is
-/// `AttachCsgGroup`, which deliberately forwards a slice of the spec tree
-/// to the render entity so the interpreter can store it on a `CsgGroup`
-/// component for later rebuilds when CSG children are toggled. This is
-/// the single, documented leak of `SpecNode` into the render layer — all
-/// other variants are spec-free.
+/// `AttachCsgGroup`, which deliberately forwards pre-transformed spec
+/// children (along with their accumulated placement) so the interpreter
+/// can store them on a `CsgGroup` component for later rebuilds when CSG
+/// children are toggled. Placement is integer-only spec data, not render
+/// data, so this is still a clean separation at the float boundary.
 #[derive(Clone)]
 pub enum RenderEvent {
     /// Entering a non-combinator node. Children follow until the matching ExitNode.
@@ -107,10 +109,11 @@ pub enum RenderEvent {
         local_tf: Transform,
     },
     /// Attach a CsgGroup component to the entity from the most recent
-    /// EnterNode. Holds the pre-expanded spec children so the group can
-    /// re-run CSG when a child is toggled.
+    /// EnterNode. Holds the pre-expanded spec children (each paired with
+    /// its accumulated placement) so the group can re-run CSG when a
+    /// child is toggled.
     AttachCsgGroup {
-        children: Vec<SpecNode>,
+        children: Vec<(SpecNode, Placement)>,
         colors: ColorMap,
         scale: (i32, i32, i32),
     },
@@ -137,14 +140,15 @@ pub enum RenderEvent {
 // Orientation → Mat3 conversion (the one place this happens)
 // =====================================================================
 
-/// Convert a discrete `Orientation` tuple and a list of axis reflections
-/// accumulated through mirror expansion into the world→mesh matrix.
-pub fn orientation_to_mat3(orient: &Orientation, reflected_axes: &[MirrorAxis]) -> Mat3 {
-    let mut mat = base_orientation_matrix(orient);
-    for &axis in reflected_axes {
-        reflect_mat3(&mut mat, axis);
-    }
-    mat
+/// Convert a discrete `Orientation` tuple plus an accumulated placement
+/// from symmetry expansion into the final world→mesh matrix. The
+/// placement is applied AFTER the orientation (pre-multiplied onto the
+/// Mat3 derived from the orientation), so the authored orientation is
+/// interpreted in the source frame and then the whole thing is
+/// transformed by the symmetry placement.
+pub fn orientation_to_mat3(orient: &Orientation, placement: Placement) -> Mat3 {
+    let base = base_orientation_matrix(orient);
+    apply_placement_to_mat3(placement, base)
 }
 
 fn base_orientation_matrix(orient: &Orientation) -> Mat3 {
@@ -179,41 +183,35 @@ fn rotation_matrix(rotation: Rotation) -> Mat3 {
     }
 }
 
-fn reflect_mat3(orient: &mut Mat3, axis: MirrorAxis) {
-    match axis {
-        MirrorAxis::X => {
-            orient.x_axis.x = -orient.x_axis.x;
-            orient.y_axis.x = -orient.y_axis.x;
-            orient.z_axis.x = -orient.z_axis.x;
-        }
-        MirrorAxis::Y => {
-            orient.x_axis.y = -orient.x_axis.y;
-            orient.y_axis.y = -orient.y_axis.y;
-            orient.z_axis.y = -orient.z_axis.y;
-        }
-        MirrorAxis::Z => {
-            orient.x_axis.z = -orient.x_axis.z;
-            orient.y_axis.z = -orient.y_axis.z;
-            orient.z_axis.z = -orient.z_axis.z;
-        }
-        // Diagonal reflections: pre-multiply by a row-swap matrix,
-        // which is equivalent to swapping the corresponding components
-        // of every column in the stored column-major matrix.
-        MirrorAxis::XY => {
-            std::mem::swap(&mut orient.x_axis.x, &mut orient.x_axis.y);
-            std::mem::swap(&mut orient.y_axis.x, &mut orient.y_axis.y);
-            std::mem::swap(&mut orient.z_axis.x, &mut orient.z_axis.y);
-        }
-        MirrorAxis::XZ => {
-            std::mem::swap(&mut orient.x_axis.x, &mut orient.x_axis.z);
-            std::mem::swap(&mut orient.y_axis.x, &mut orient.y_axis.z);
-            std::mem::swap(&mut orient.z_axis.x, &mut orient.z_axis.z);
-        }
-        MirrorAxis::YZ => {
-            std::mem::swap(&mut orient.x_axis.y, &mut orient.x_axis.z);
-            std::mem::swap(&mut orient.y_axis.y, &mut orient.y_axis.z);
-            std::mem::swap(&mut orient.z_axis.y, &mut orient.z_axis.z);
-        }
+/// Pre-multiply a `Mat3` by the signed-permutation matrix represented
+/// by the given `Placement`. Each row of the result is the row of the
+/// original matrix indexed by the placement's source axis, optionally
+/// negated if the placement component is negative.
+fn apply_placement_to_mat3(placement: Placement, m: Mat3) -> Mat3 {
+    let apply_to_col = |col: Vec3| -> Vec3 {
+        Vec3::new(
+            signed_axis_project(placement.0, col),
+            signed_axis_project(placement.1, col),
+            signed_axis_project(placement.2, col),
+        )
+    };
+    Mat3::from_cols(
+        apply_to_col(m.x_axis),
+        apply_to_col(m.y_axis),
+        apply_to_col(m.z_axis),
+    )
+}
+
+fn signed_axis_project(sa: SignedAxis, v: Vec3) -> f32 {
+    let component = match sa {
+        SignedAxis::PosX | SignedAxis::NegX => v.x,
+        SignedAxis::PosY | SignedAxis::NegY => v.y,
+        SignedAxis::PosZ | SignedAxis::NegZ => v.z,
+    };
+    if matches!(sa, SignedAxis::PosX | SignedAxis::PosY | SignedAxis::PosZ) {
+        component
+    } else {
+        -component
     }
 }
 
@@ -317,13 +315,30 @@ pub fn compile_scaled(
     scale: (i32, i32, i32),
 ) -> Vec<RenderEvent> {
     let mut events = Vec::new();
-    walk_node(&mut events, spec, colors, registry, scale);
+    walk_node(&mut events, spec, identity_placement(), colors, registry, scale);
+    events
+}
+
+/// Compile a subtree with a pre-supplied accumulated placement. Used by
+/// CSG rebuild, where each child in a CsgGroup was captured with its own
+/// placement at spawn time and must be re-rendered with that placement
+/// when a toggle happens.
+pub fn compile_with_placement(
+    spec: &SpecNode,
+    placement: Placement,
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+    scale: (i32, i32, i32),
+) -> Vec<RenderEvent> {
+    let mut events = Vec::new();
+    walk_node(&mut events, spec, placement, colors, registry, scale);
     events
 }
 
 fn walk_node(
     events: &mut Vec<RenderEvent>,
     node: &SpecNode,
+    inherited: Placement,
     colors: &ColorMap,
     registry: &AssetRegistry,
     scale: (i32, i32, i32),
@@ -335,119 +350,127 @@ fn walk_node(
     };
 
     match node.combinator() {
-        Combinator::Mirror(axes) => {
-            walk_mirror(events, node, axes, &colors, registry, scale);
+        Combinator::Symmetry(sym) => {
+            walk_symmetry(events, node, sym, inherited, &colors, registry, scale);
         }
         Combinator::Import(import_name) => {
-            walk_import(events, node, import_name, &colors, registry, scale);
+            walk_import(events, node, import_name, inherited, &colors, registry, scale);
         }
         Combinator::None => {
-            let bounds_for_tf = if node.is_combinator() {
-                None
-            } else {
-                node.bounds.as_ref()
-            };
-            let local_tf = compute_local_transform(bounds_for_tf, scale);
-            events.push(RenderEvent::EnterNode {
-                name: node.name.clone(),
-                local_tf,
-            });
-
-            if node.has_csg_children() {
-                events.push(RenderEvent::AttachCsgGroup {
-                    children: spec::expand_mirror_children(&node.children),
-                    colors: colors.clone(),
-                    scale,
-                });
-            }
-
-            if let Some(bounds) = &node.bounds {
-                let size = bounds.size();
-                if size.0 == 0 || size.1 == 0 || size.2 == 0 {
-                    error!(
-                        "'{}' has zero-size bounds ({},{},{}) — skipping",
-                        node.name.as_deref().unwrap_or("unnamed"),
-                        size.0,
-                        size.1,
-                        size.2
-                    );
-                    events.push(RenderEvent::ExitNode);
-                    return;
-                }
-            }
-
-            if let Some(shape) = node.shape {
-                let Some(bounds) = node.bounds else {
-                    warn!(
-                        "Shape '{}' has no bounds — skipping geometry",
-                        node.name.as_deref().unwrap_or("unnamed")
-                    );
-                    for child in &node.children {
-                        walk_node(events, child, &colors, registry, scale);
-                    }
-                    events.push(RenderEvent::ExitNode);
-                    return;
-                };
-                let orient_mat = orientation_to_mat3(&node.orient, &node.reflected_axes);
-                let mesh_tf = compute_mesh_transform(shape, &bounds, &orient_mat, scale);
-                let is_mirrored = orient_mat.determinant() < 0.0;
-                let color = node
-                    .color
-                    .as_ref()
-                    .map(|name| resolve_color(name, &colors))
-                    .unwrap_or_else(|| {
-                        warn!(
-                            "Shape '{}' has no color specified",
-                            node.name.as_deref().unwrap_or("unnamed")
-                        );
-                        Color3(1, 1, 1)
-                    });
-                events.push(RenderEvent::Geometry {
-                    name: node.name.clone(),
-                    has_children: !node.children.is_empty(),
-                    shape,
-                    mesh_tf,
-                    is_mirrored,
-                    color,
-                    emissive: node.emissive,
-                });
-            }
-
-            for child in &node.children {
-                walk_node(events, child, &colors, registry, scale);
-            }
-
-            events.push(RenderEvent::ExitNode);
+            walk_single(events, node, inherited, &colors, registry, scale);
         }
     }
 }
 
-fn walk_mirror(
+fn walk_single(
     events: &mut Vec<RenderEvent>,
     node: &SpecNode,
-    axes: &[MirrorAxis],
+    inherited: Placement,
+    colors: &ColorMap,
+    registry: &AssetRegistry,
+    scale: (i32, i32, i32),
+) {
+    // Transform this node's own bounds by the inherited placement before
+    // computing the local transform and mesh transform.
+    let transformed_bounds = node
+        .bounds
+        .as_ref()
+        .map(|b| apply_placement_to_bounds(inherited, *b));
+
+    let local_tf = compute_local_transform(transformed_bounds.as_ref(), scale);
+    events.push(RenderEvent::EnterNode {
+        name: node.name.clone(),
+        local_tf,
+    });
+
+    if node.has_csg_children() {
+        events.push(RenderEvent::AttachCsgGroup {
+            children: spec::expand_symmetry_children(&node.children),
+            colors: colors.clone(),
+            scale,
+        });
+    }
+
+    if let Some(ref b) = transformed_bounds {
+        let size = b.size();
+        if size.0 == 0 || size.1 == 0 || size.2 == 0 {
+            error!(
+                "'{}' has zero-size bounds ({},{},{}) — skipping",
+                node.name.as_deref().unwrap_or("unnamed"),
+                size.0,
+                size.1,
+                size.2
+            );
+            events.push(RenderEvent::ExitNode);
+            return;
+        }
+    }
+
+    if let Some(shape) = node.shape {
+        let Some(bounds) = transformed_bounds else {
+            warn!(
+                "Shape '{}' has no bounds — skipping geometry",
+                node.name.as_deref().unwrap_or("unnamed")
+            );
+            for child in &node.children {
+                walk_node(events, child, inherited, colors, registry, scale);
+            }
+            events.push(RenderEvent::ExitNode);
+            return;
+        };
+        let orient_mat = orientation_to_mat3(&node.orient, inherited);
+        let mesh_tf = compute_mesh_transform(shape, &bounds, &orient_mat, scale);
+        let is_mirrored = orient_mat.determinant() < 0.0;
+        let color = node
+            .color
+            .as_ref()
+            .map(|name| resolve_color(name, colors))
+            .unwrap_or_else(|| {
+                warn!(
+                    "Shape '{}' has no color specified",
+                    node.name.as_deref().unwrap_or("unnamed")
+                );
+                Color3(1, 1, 1)
+            });
+        events.push(RenderEvent::Geometry {
+            name: node.name.clone(),
+            has_children: !node.children.is_empty(),
+            shape,
+            mesh_tf,
+            is_mirrored,
+            color,
+            emissive: node.emissive,
+        });
+    }
+
+    for child in &node.children {
+        walk_node(events, child, inherited, colors, registry, scale);
+    }
+
+    events.push(RenderEvent::ExitNode);
+}
+
+fn walk_symmetry(
+    events: &mut Vec<RenderEvent>,
+    node: &SpecNode,
+    sym: Symmetry,
+    inherited: Placement,
     colors: &ColorMap,
     registry: &AssetRegistry,
     scale: (i32, i32, i32),
 ) {
     let mut base = node.clone();
-    base.mirror = Vec::new();
+    base.symmetry = Symmetry::Single;
 
-    let combinations = spec::mirror_combinations(axes);
-    for (flipped_axes, suffix) in &combinations {
+    for (local, suffix) in placements(sym) {
+        let combined = compose_placements(inherited, *local);
         let mut copy = base.clone();
-        for &axis in flipped_axes {
-            spec::flip_bounds(&mut copy, axis);
-        }
-        for &axis in flipped_axes {
-            spec::push_reflection(&mut copy, axis);
-        }
         if !suffix.is_empty() {
             if let Some(ref name) = copy.name {
-                copy.name = Some(format!("{name}_{suffix}"));
+                copy.name = Some(format!("{name}{suffix}"));
             }
         }
-        walk_node(events, &copy, colors, registry, scale);
+        walk_node(events, &copy, combined, colors, registry, scale);
     }
 }
 
@@ -455,6 +478,7 @@ fn walk_import(
     events: &mut Vec<RenderEvent>,
     node: &SpecNode,
     import_name: &str,
+    inherited: Placement,
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_scale: (i32, i32, i32),
@@ -471,7 +495,7 @@ fn walk_import(
         warn!("Import '{}' has no computable AABB — skipping", import_name);
         return;
     };
-    let placement = node.bounds.unwrap_or(native_aabb);
+    let placement_bounds = node.bounds.unwrap_or(native_aabb);
 
     let remap_scale = Bounds::remap_scale(&native_aabb);
     let new_scale = (
@@ -481,14 +505,14 @@ fn walk_import(
     );
 
     let mut remapped = imported;
-    remapped.remap_bounds(&native_aabb, &placement);
+    remapped.remap_bounds(&native_aabb, &placement_bounds);
 
     let import_colors = apply_color_remapping(node, &remapped.palette, colors);
 
     if remapped.has_csg_children() {
-        walk_import_with_csg(events, &remapped, &import_colors, registry, new_scale);
+        walk_import_with_csg(events, &remapped, inherited, &import_colors, registry, new_scale);
     } else {
-        walk_node(events, &remapped, &import_colors, registry, new_scale);
+        walk_node(events, &remapped, inherited, &import_colors, registry, new_scale);
     }
 }
 
@@ -498,6 +522,7 @@ fn walk_import(
 fn walk_import_with_csg(
     events: &mut Vec<RenderEvent>,
     remapped: &SpecNode,
+    _inherited: Placement,
     colors: &ColorMap,
     registry: &AssetRegistry,
     scale: (i32, i32, i32),
@@ -510,8 +535,17 @@ fn walk_import_with_csg(
 
     let aabb = Bounds::enclosing(&remapped.children).unwrap_or(Bounds(-1, -1, -1, 1, 1, 1));
 
+    // Pair each child with the identity placement: imports don't carry
+    // their own symmetry expansion at this level. (Symmetry expansion
+    // inside the imported subtree would happen recursively in
+    // expand_symmetry_children when entering the subtree proper.)
+    let paired: Vec<(SpecNode, Placement)> = remapped
+        .children
+        .iter()
+        .map(|c| (c.clone(), identity_placement()))
+        .collect();
     let (mesh, _stats) =
-        super::csg::perform_csg_from_children(&remapped.children, &merged_colors, registry, &aabb, scale);
+        super::csg::perform_csg_from_children(&paired, &merged_colors, registry, &aabb, scale);
 
     let color = remapped
         .children

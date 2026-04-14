@@ -28,7 +28,7 @@
             shape: Box,
             bounds: (2, -3, 2, 6, -2, 6),
             color: "hover",
-            mirror: [X, Z],
+            symmetry: QuadXZ,
         ),
     ],
 )

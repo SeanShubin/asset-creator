@@ -153,7 +153,12 @@ fn run_csg_for_shape(shape: &SpecNode, colors: &ColorMap, registry: &AssetRegist
         writeln!(log, "    child '{}': combine={}", name, combine).unwrap();
     }
 
-    let (_result, stats) = perform_csg_uncached(&shape.children, colors, registry, &aabb, (1, 1, 1));
+    let paired: Vec<(SpecNode, crate::shape::Placement)> = shape
+        .children
+        .iter()
+        .map(|c| (c.clone(), crate::shape::identity_placement()))
+        .collect();
+    let (_result, stats) = perform_csg_uncached(&paired, colors, registry, &aabb, (1, 1, 1));
     stats
 }
 

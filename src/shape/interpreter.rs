@@ -5,7 +5,9 @@ use crate::util::Color3;
 use super::animation::ShapeAnimator;
 use super::csg;
 use super::render::{ColorMap, RenderEvent, compile, resolve_color};
-use super::spec::{Bounds, CombineMode, PrimitiveShape, SpecNode};
+use super::spec::{
+    apply_placement_to_bounds, Bounds, CombineMode, Placement, PrimitiveShape, SpecNode,
+};
 
 // =====================================================================
 // Components
@@ -22,13 +24,14 @@ pub struct BaseTransform(pub Transform);
 #[derive(Component)]
 pub struct ShapeRoot;
 
-/// CSG parent group. Holds the post-mirror-expansion spec children so the
-/// group can rebuild the CSG mesh when children are toggled. This is the
-/// ONE component that holds `SpecNode` data in the render world; it never
-/// reads individual fields — it only passes the list back to `compile`.
+/// CSG parent group. Holds the post-symmetry-expansion spec children —
+/// each paired with its accumulated placement — so the group can rebuild
+/// the CSG mesh when children are toggled. This is the ONE component
+/// that holds `SpecNode` data in the render world; it never reads
+/// individual fields, only forwards the list back to the CSG pipeline.
 #[derive(Component, Clone)]
 pub struct CsgGroup {
-    pub children: Vec<SpecNode>,
+    pub children: Vec<(SpecNode, Placement)>,
     pub colors: ColorMap,
     pub scale: (i32, i32, i32),
 }
@@ -187,7 +190,7 @@ pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
 
 struct CsgPendingBuild {
     parent: Entity,
-    children: Vec<SpecNode>,
+    children: Vec<(SpecNode, Placement)>,
     colors: ColorMap,
     scale: (i32, i32, i32),
 }
@@ -416,13 +419,37 @@ pub fn build_csg_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
-    children: &[SpecNode],
+    children: &[(SpecNode, Placement)],
     colors: &ColorMap,
     registry: &AssetRegistry,
     render_layers: &Option<RenderLayers>,
     scale: (i32, i32, i32),
 ) {
-    let aabb = Bounds::enclosing(children).unwrap_or(Bounds(-1, -1, -1, 1, 1, 1));
+    // Compute the enclosing AABB by transforming each child's bounds by
+    // its accumulated placement, so the SDF meshing region covers every
+    // rendered copy.
+    let mut mn = (i32::MAX, i32::MAX, i32::MAX);
+    let mut mx = (i32::MIN, i32::MIN, i32::MIN);
+    let mut found = false;
+    for (child, placement) in children {
+        if let Some(ref b) = child.bounds {
+            let transformed = apply_placement_to_bounds(*placement, *b);
+            let t_min = transformed.min();
+            let t_max = transformed.max();
+            if !found {
+                mn = t_min; mx = t_max;
+                found = true;
+            } else {
+                mn.0 = mn.0.min(t_min.0); mn.1 = mn.1.min(t_min.1); mn.2 = mn.2.min(t_min.2);
+                mx.0 = mx.0.max(t_max.0); mx.1 = mx.1.max(t_max.1); mx.2 = mx.2.max(t_max.2);
+            }
+        }
+    }
+    let aabb = if found {
+        Bounds(mn.0, mn.1, mn.2, mx.0, mx.1, mx.2)
+    } else {
+        Bounds(-1, -1, -1, 1, 1, 1)
+    };
 
     let (result, stats) = csg::perform_csg_from_children(children, colors, registry, &aabb, scale);
     info!("CSG: {} tris in {:.0}ms", stats.output_tris, stats.mesh_time_ms);
@@ -432,8 +459,8 @@ pub fn build_csg_mesh(
 
     let color = children
         .iter()
-        .find(|c| c.combine == CombineMode::Union)
-        .and_then(|c| c.color.as_ref())
+        .find(|(c, _)| c.combine == CombineMode::Union)
+        .and_then(|(c, _)| c.color.as_ref())
         .map(|name| resolve_color(name, colors))
         .unwrap_or(Color3(1, 1, 1));
 
@@ -595,17 +622,17 @@ pub fn rebuild_csg_on_toggle(
             }
         }
 
-        let active_children: Vec<SpecNode> = group
+        let active_children: Vec<(SpecNode, Placement)> = group
             .children
             .iter()
             .zip(current_active.iter())
             .filter(|(_, active)| **active)
-            .map(|(node, _)| node.clone())
+            .map(|(pair, _)| pair.clone())
             .collect();
 
         if active_children.is_empty()
-            || !active_children.iter().any(|c| c.combine != CombineMode::Union)
-            || !active_children.iter().any(|c| c.combine == CombineMode::Union)
+            || !active_children.iter().any(|(c, _)| c.combine != CombineMode::Union)
+            || !active_children.iter().any(|(c, _)| c.combine == CombineMode::Union)
         {
             continue;
         }

@@ -22,14 +22,14 @@
             name: "melee",
             import: "frz-b/melee",
             bounds: (4, -2, -4, 6, 0, 12),
-            mirror: [X]
+            symmetry: PairX,
         ),
         (
             name: "hover",
             shape: Cylinder,
             bounds: (2, -3, 2, 6, -2, 6),
             color: "hover",
-            mirror: [X, Z]
+            symmetry: QuadXZ,
         ),
     ],
 )

@@ -25,7 +25,7 @@
             shape: Wedge,
             bounds: (-2, 0, 2, 2, 1, 4),
             color: "body",
-            mirror: [Z],
+            symmetry: PairZ,
         ),
         (
             name: "top_edge_x",
@@ -33,14 +33,14 @@
             bounds: (2, 0, -2, 4, 1, 2),
             color: "body",
             orient: (Right, NoMirror, NoRotation),
-            mirror: [X],
+            symmetry: PairX,
         ),
         (
             name: "top_corner",
             shape: Corner,
             bounds: (2, 0, 2, 4, 1, 4),
             color: "body",
-            mirror: [X, Z],
+            symmetry: QuadXZ,
         ),
         (
             name: "weapon_bay",
@@ -48,7 +48,7 @@
             bounds: (2, -1, -2, 3, 0, 4),
             color: "bay",
             combine: Subtract,
-            mirror: [X],
+            symmetry: PairX,
         ),
         (
             name: "sensor_bay",

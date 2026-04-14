@@ -5,5 +5,5 @@
     // bounds: (3, 3, 3, 4, 4, 4),
     bounds: (-3, -3, -3, -4, -4, -4),
     color: "body",
-    mirror: [X, Y, Z]
+    symmetry: Octants,
 )

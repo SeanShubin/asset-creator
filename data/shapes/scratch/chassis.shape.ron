@@ -14,28 +14,28 @@
             shape: Box,
             bounds: (-4, -1, 0, -3, 0, -2),
             color: "body",
-            mirror: [X, Z]
+            symmetry: QuadXZ,
         ),
         (
             name: "bodyB",
             shape: Box,
             bounds: (0, -1, 0, -2, 0, -2),
             color: "body",
-            mirror: [X, Z]
+            symmetry: QuadXZ,
         ),
         (
             name: "bodyC",
             shape: Box,
             bounds: (0, -1, -4, -2, 0, -2),
             color: "body",
-            mirror: [X, Z]
+            symmetry: QuadXZ,
         ),
         (
             name: "bodyD",
             shape: Wedge,
             bounds: (-4, -1, -4, -2, 0, -2),
             color: "body",
-            mirror: [X],
+            symmetry: PairX,
             orient: (Back, Mirror, RotateCounter)
         ),
         (
@@ -43,7 +43,7 @@
             shape: Wedge,
             bounds: (-4, -1, 2, -3, 0, 3),
             color: "body",
-            mirror: [X],
+            symmetry: PairX,
             orient: (Front, NoMirror, RotateCounter)
         ),
         (
@@ -52,7 +52,7 @@
             bounds:(-4,0,-4,-2,1,-2),
             color:"body",
             orient:(Back, NoMirror, NoRotation),
-            mirror: [X,Z]
+            symmetry: QuadXZ,
         ),
         (
             name: "topB",
@@ -60,7 +60,7 @@
             bounds:(-4,0,-2,-2,1,2),
             color:"body",
             orient:(Left, NoMirror, NoRotation),
-            mirror: [X]
+            symmetry: PairX,
         ),
         (
             name: "topC",
@@ -68,7 +68,7 @@
             bounds:(-2,0,4,2,1,2),
             color:"body",
             orient:(Front, NoMirror, NoRotation),
-            mirror: [Z]
+            symmetry: PairZ,
         )
     ],
 )

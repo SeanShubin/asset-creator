@@ -48,26 +48,25 @@ pub struct SpecNode {
     pub colors: Vec<String>,
     #[serde(default)]
     pub children: Vec<SpecNode>,
+    /// Named symmetry pattern. `Single` means "render once, no copies".
+    /// All other variants produce multiple copies via a hand-curated
+    /// placement table (see `placements`). There is no generator-list
+    /// composition: each variant's placement set is validated by
+    /// construction to contain no duplicates.
     #[serde(default)]
-    pub mirror: Vec<MirrorAxis>,
+    pub symmetry: Symmetry,
     #[serde(default)]
     pub combine: CombineMode,
     #[serde(default)]
     pub animations: Vec<AnimState>,
-    /// Mirror axes this node has been reflected along via mirror expansion.
-    /// Never read from the file — populated only during
-    /// `expand_mirror_children` and consumed by the render layer when
-    /// composing the final orientation matrix.
-    #[serde(skip)]
-    pub reflected_axes: Vec<MirrorAxis>,
 }
 
 impl SpecNode {
     /// Determine what kind of combinator this node is.
-    /// A node is at most one combinator type; priority: mirror > import.
+    /// A node is at most one combinator type; priority: symmetry > import.
     pub fn combinator(&self) -> Combinator<'_> {
-        if !self.mirror.is_empty() {
-            Combinator::Mirror(&self.mirror)
+        if self.symmetry != Symmetry::Single {
+            Combinator::Symmetry(self.symmetry)
         } else if let Some(ref import) = self.import {
             Combinator::Import(import)
         } else {
@@ -80,20 +79,16 @@ impl SpecNode {
         self.children.iter().any(|c| c.combine != CombineMode::Union)
     }
 
-    /// Whether this node is a combinator (mirror or import).
-    /// Combinators are pass-through containers — they don't have their own position.
-    pub fn is_combinator(&self) -> bool {
-        !matches!(self.combinator(), Combinator::None)
-    }
-
     /// Compute the AABB enclosing this node and all descendants.
-    /// Integer arithmetic throughout.
+    /// Integer arithmetic throughout. Symmetry expansion is handled by
+    /// applying each placement to the node's bounds and including the
+    /// result in the running min/max.
     pub fn compute_aabb(&self) -> Option<Bounds> {
         let mut min = (i32::MAX, i32::MAX, i32::MAX);
         let mut max = (i32::MIN, i32::MIN, i32::MIN);
         let mut found = false;
 
-        self.collect_bounds(&mut min, &mut max, &mut found);
+        self.collect_bounds(identity_placement(), &mut min, &mut max, &mut found);
 
         if found {
             Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
@@ -104,33 +99,35 @@ impl SpecNode {
 
     pub(super) fn collect_bounds(
         &self,
+        inherited: Placement,
+        min: &mut (i32, i32, i32),
+        max: &mut (i32, i32, i32),
+        found: &mut bool,
+    ) {
+        // For each placement this node's symmetry produces, compose with the
+        // inherited placement and walk the resulting transformed subtree.
+        for (local, _) in placements(self.symmetry) {
+            let combined = compose_placements(inherited, *local);
+            self.collect_bounds_single(combined, min, max, found);
+        }
+    }
+
+    fn collect_bounds_single(
+        &self,
+        placement: Placement,
         min: &mut (i32, i32, i32),
         max: &mut (i32, i32, i32),
         found: &mut bool,
     ) {
         if let Some(b) = &self.bounds {
-            let b_min = b.min();
-            let b_max = b.max();
-
-            // Enumerate every subset of the mirror list and apply its
-            // composition in list order. For orthogonal axes
-            // (`X`/`Y`/`Z`) individual reflections would suffice — they
-            // commute and each subset's AABB is just the convex hull of
-            // single-axis reflections. But the diagonal axes
-            // (`XY`/`XZ`/`YZ`) don't commute with the orthogonal ones, so
-            // cross-term copies like `{X, XY}` visit quadrants no single
-            // reflection reaches. We enumerate all 2^n subsets to cover
-            // every copy, and since `mirror.len()` is bounded at 6 the
-            // cost is at most 64 transforms per node.
-            let combos = mirror_combinations(&self.mirror);
-            for (subset, _) in &combos {
-                let (sub_min, sub_max) = compose_mirror_sequence(b_min, b_max, subset);
-                include_point(min, max, sub_min, found);
-                include_point(min, max, sub_max, found);
-            }
+            let transformed = apply_placement_to_bounds(placement, *b);
+            let tmin = transformed.min();
+            let tmax = transformed.max();
+            include_point(min, max, tmin, found);
+            include_point(min, max, tmax, found);
         }
         for child in &self.children {
-            child.collect_bounds(min, max, found);
+            child.collect_bounds(placement, min, max, found);
         }
     }
 
@@ -146,122 +143,6 @@ impl SpecNode {
         for child in &mut self.children {
             child.remap_bounds(from, to);
         }
-    }
-
-    /// Validate static invariants of this spec tree. Returns a description
-    /// of the first violation found, or `Ok(())` if the tree is clean.
-    /// Currently checks: mirror lists cannot contain all three diagonal
-    /// planes (XY, XZ, YZ), because that combination produces duplicate
-    /// transforms due to the group relation in S_3.
-    pub fn validate(&self) -> Result<(), SpecValidationError> {
-        self.validate_impl("")
-    }
-
-    fn validate_impl(&self, path: &str) -> Result<(), SpecValidationError> {
-        let node_path = match &self.name {
-            Some(name) => {
-                if path.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{path}/{name}")
-                }
-            }
-            None => path.to_string(),
-        };
-
-        let has_xy = self.mirror.contains(&MirrorAxis::XY);
-        let has_xz = self.mirror.contains(&MirrorAxis::XZ);
-        let has_yz = self.mirror.contains(&MirrorAxis::YZ);
-        if has_xy && has_xz && has_yz {
-            return Err(SpecValidationError::AllThreeDiagonals {
-                path: node_path,
-            });
-        }
-
-        for child in &self.children {
-            child.validate_impl(&node_path)?;
-        }
-        Ok(())
-    }
-}
-
-/// Errors produced by `SpecNode::validate`.
-#[derive(Debug, Clone)]
-pub enum SpecValidationError {
-    /// A mirror list contains all three diagonal planes (XY, XZ, YZ).
-    /// This always produces duplicate transforms: the three transpositions
-    /// of S_3 have a non-trivial relation (any two generate the same group
-    /// as all three), so 2^3 = 8 subsets can only map to 6 distinct
-    /// permutations, leaving two pairs of coincident copies.
-    AllThreeDiagonals { path: String },
-}
-
-impl std::fmt::Display for SpecValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SpecValidationError::AllThreeDiagonals { path } => {
-                write!(
-                    f,
-                    "node '{path}' has mirror list containing all three diagonal planes (XY, XZ, YZ); \
-                     this combination produces duplicate mirror copies and is never valid"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for SpecValidationError {}
-
-fn include_point(
-    min: &mut (i32, i32, i32),
-    max: &mut (i32, i32, i32),
-    p: (i32, i32, i32),
-    found: &mut bool,
-) {
-    min.0 = min.0.min(p.0);
-    min.1 = min.1.min(p.1);
-    min.2 = min.2.min(p.2);
-    max.0 = max.0.max(p.0);
-    max.1 = max.1.max(p.1);
-    max.2 = max.2.max(p.2);
-    *found = true;
-}
-
-/// Compose a sequence of mirror transformations onto an AABB, applying
-/// each axis in order. Used by `collect_bounds` to compute the full
-/// enclosing AABB across every mirror subset. Each individual
-/// `reflect_mirror_extents` call preserves ordering (min ≤ max), so the
-/// chained result is still a valid canonicalized AABB.
-pub(super) fn compose_mirror_sequence(
-    b_min: (i32, i32, i32),
-    b_max: (i32, i32, i32),
-    axes: &[MirrorAxis],
-) -> ((i32, i32, i32), (i32, i32, i32)) {
-    let mut cur_min = b_min;
-    let mut cur_max = b_max;
-    for &axis in axes {
-        let (new_min, new_max) = reflect_mirror_extents(cur_min, cur_max, axis);
-        cur_min = new_min;
-        cur_max = new_max;
-    }
-    (cur_min, cur_max)
-}
-
-/// Compute the AABB of a mirror copy for the given mirror axis. X/Y/Z flip
-/// the corresponding coordinate; XY/XZ/YZ swap the corresponding coordinate
-/// pair (reflection across the diagonal plane y=x, z=x, z=y respectively).
-pub(super) fn reflect_mirror_extents(
-    b_min: (i32, i32, i32),
-    b_max: (i32, i32, i32),
-    axis: MirrorAxis,
-) -> ((i32, i32, i32), (i32, i32, i32)) {
-    match axis {
-        MirrorAxis::X => ((-b_max.0, b_min.1, b_min.2), (-b_min.0, b_max.1, b_max.2)),
-        MirrorAxis::Y => ((b_min.0, -b_max.1, b_min.2), (b_max.0, -b_min.1, b_max.2)),
-        MirrorAxis::Z => ((b_min.0, b_min.1, -b_max.2), (b_max.0, b_max.1, -b_min.2)),
-        MirrorAxis::XY => ((b_min.1, b_min.0, b_min.2), (b_max.1, b_max.0, b_max.2)),
-        MirrorAxis::XZ => ((b_min.2, b_min.1, b_min.0), (b_max.2, b_max.1, b_max.0)),
-        MirrorAxis::YZ => ((b_min.0, b_min.2, b_min.1), (b_max.0, b_max.2, b_max.1)),
     }
 }
 
@@ -279,7 +160,7 @@ pub enum CombineMode {
 
 /// What kind of combinator this node is, if any.
 pub enum Combinator<'a> {
-    Mirror(&'a [MirrorAxis]),
+    Symmetry(Symmetry),
     Import(&'a str),
     None,
 }
@@ -314,7 +195,7 @@ impl Bounds {
         let mut max = (i32::MIN, i32::MIN, i32::MIN);
         let mut found = false;
         for node in nodes {
-            node.collect_bounds(&mut min, &mut max, &mut found);
+            node.collect_bounds(identity_placement(), &mut min, &mut max, &mut found);
         }
         if found {
             Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
@@ -386,13 +267,28 @@ impl Bounds {
     }
 }
 
+fn include_point(
+    min: &mut (i32, i32, i32),
+    max: &mut (i32, i32, i32),
+    p: (i32, i32, i32),
+    found: &mut bool,
+) {
+    min.0 = min.0.min(p.0);
+    min.1 = min.1.min(p.1);
+    min.2 = min.2.min(p.2);
+    max.0 = max.0.max(p.0);
+    max.1 = max.1.max(p.1);
+    max.2 = max.2.max(p.2);
+    *found = true;
+}
+
 // =====================================================================
 // Axes
 // =====================================================================
 
 /// Coordinate axis, used for things like animation channels. This is
-/// distinct from `MirrorAxis` — a coordinate axis is a direction, a mirror
-/// axis is a reflection plane (including diagonal planes).
+/// distinct from `SignedAxis` — a coordinate axis is a direction label,
+/// a signed axis carries direction AND sign.
 #[derive(Deserialize, Clone, Copy, Debug)]
 pub enum Axis {
     X,
@@ -400,24 +296,41 @@ pub enum Axis {
     Z,
 }
 
-/// Reflection plane used by the mirror combinator.
-///
-/// - `X` / `Y` / `Z` reflect across the plane perpendicular to that
-///   coordinate axis (i.e. the `x = 0`, `y = 0`, or `z = 0` plane).
-/// - `XY` / `XZ` / `YZ` reflect across the diagonal plane that swaps the
-///   corresponding coordinate pair (i.e. `y = x`, `z = x`, or `z = y`).
-///
-/// The three diagonal variants have a non-trivial group relation: any
-/// mirror list containing all three produces duplicate copies. The spec
-/// validator rejects such lists.
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MirrorAxis {
-    X,
-    Y,
-    Z,
-    XY,
-    XZ,
-    YZ,
+/// A coordinate axis with a sign. Used as the components of a
+/// `Placement`, which describes where each output axis draws from.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SignedAxis {
+    PosX,
+    NegX,
+    PosY,
+    NegY,
+    PosZ,
+    NegZ,
+}
+
+impl SignedAxis {
+    fn axis_index(self) -> usize {
+        match self {
+            SignedAxis::PosX | SignedAxis::NegX => 0,
+            SignedAxis::PosY | SignedAxis::NegY => 1,
+            SignedAxis::PosZ | SignedAxis::NegZ => 2,
+        }
+    }
+
+    fn is_positive(self) -> bool {
+        matches!(self, SignedAxis::PosX | SignedAxis::PosY | SignedAxis::PosZ)
+    }
+
+    fn negate(self) -> SignedAxis {
+        match self {
+            SignedAxis::PosX => SignedAxis::NegX,
+            SignedAxis::NegX => SignedAxis::PosX,
+            SignedAxis::PosY => SignedAxis::NegY,
+            SignedAxis::NegY => SignedAxis::PosY,
+            SignedAxis::PosZ => SignedAxis::NegZ,
+            SignedAxis::NegZ => SignedAxis::PosZ,
+        }
+    }
 }
 
 // =====================================================================
@@ -516,146 +429,195 @@ pub struct AnimState {
 }
 
 // =====================================================================
-// Combinator expansion helpers — pure integer
+// Symmetry and Placements
 // =====================================================================
 
-/// Enumerate all 2^n subsets of the given mirror axes, returning each
-/// subset paired with a suffix string for name tagging.
-pub(super) fn mirror_combinations(
-    axes: &[MirrorAxis],
-) -> Vec<(Vec<MirrorAxis>, String)> {
-    let n = axes.len();
-    let count = 1 << n;
-    let mut result = Vec::with_capacity(count);
-    for bits in 0..count {
-        let mut flipped = Vec::new();
-        let mut suffix = String::new();
-        for (i, &axis) in axes.iter().enumerate() {
-            if bits & (1 << i) != 0 {
-                flipped.push(axis);
-                suffix.push_str(mirror_axis_suffix(axis));
-            }
-        }
-        let suffix = if suffix.is_empty() {
-            String::new()
-        } else {
-            format!("m{suffix}")
-        };
-        result.push((flipped, suffix));
-    }
-    result
-}
-
-fn mirror_axis_suffix(axis: MirrorAxis) -> &'static str {
-    match axis {
-        MirrorAxis::X => "x",
-        MirrorAxis::Y => "y",
-        MirrorAxis::Z => "z",
-        MirrorAxis::XY => "xy",
-        MirrorAxis::XZ => "xz",
-        MirrorAxis::YZ => "yz",
-    }
-}
-
-/// Recursively apply a mirror-axis bounds transformation to the node and
-/// its entire subtree. For `X`/`Y`/`Z` this negates the corresponding pair
-/// of integer coordinates; for `XY`/`XZ`/`YZ` it swaps the corresponding
-/// pair of coordinates (reflection across the diagonal plane).
-pub(super) fn flip_bounds(node: &mut SpecNode, axis: MirrorAxis) {
-    warn_if_missing_bounds(node);
-    if let Some(ref mut b) = node.bounds {
-        match axis {
-            MirrorAxis::X => {
-                let tmp = -b.0;
-                b.0 = -b.3;
-                b.3 = tmp;
-            }
-            MirrorAxis::Y => {
-                let tmp = -b.1;
-                b.1 = -b.4;
-                b.4 = tmp;
-            }
-            MirrorAxis::Z => {
-                let tmp = -b.2;
-                b.2 = -b.5;
-                b.5 = tmp;
-            }
-            MirrorAxis::XY => {
-                std::mem::swap(&mut b.0, &mut b.1);
-                std::mem::swap(&mut b.3, &mut b.4);
-            }
-            MirrorAxis::XZ => {
-                std::mem::swap(&mut b.0, &mut b.2);
-                std::mem::swap(&mut b.3, &mut b.5);
-            }
-            MirrorAxis::YZ => {
-                std::mem::swap(&mut b.1, &mut b.2);
-                std::mem::swap(&mut b.4, &mut b.5);
-            }
-        }
-    }
-    for child in &mut node.children {
-        flip_bounds(child, axis);
-    }
-}
-
-/// Recursively push an extra reflection axis onto every node in the subtree
-/// that has a shape. The render layer consumes `reflected_axes` when it
-/// computes the final orientation matrix for each geometry node.
-pub(super) fn push_reflection(node: &mut SpecNode, axis: MirrorAxis) {
-    if node.shape.is_some() {
-        node.reflected_axes.push(axis);
-    }
-    for child in &mut node.children {
-        push_reflection(child, axis);
-    }
-}
-
-fn warn_if_missing_bounds(node: &SpecNode) {
-    if node.bounds.is_none() && node.shape.is_some() {
-        bevy::prelude::warn!(
-            "Shape '{}' has no bounds — every shape must specify bounds",
-            node.name.as_deref().unwrap_or("unnamed")
-        );
-    }
-}
-
-/// Expand mirror combinators on a list of children into a flat list of
-/// pre-mirrored `SpecNode`s. Each copy has its integer bounds flipped and
-/// its `reflected_axes` populated so that the render layer can derive the
-/// correct orientation matrix.
+/// Named symmetry pattern. Each variant expands to a curated list of
+/// placements that produces distinct copies with no duplicates. The user
+/// picks a pattern by name; there is no generator composition.
 ///
-/// This is used by CSG rebuild to flatten children into the same sequence
-/// the render walker would produce, without running the render walker itself.
-pub fn expand_mirror_children(children: &[SpecNode]) -> Vec<SpecNode> {
-    let mut result = Vec::new();
-    for child in children {
-        match child.combinator() {
-            Combinator::Mirror(axes) => {
-                let mut base = child.clone();
-                base.mirror = Vec::new();
-                for (flipped_axes, suffix) in &mirror_combinations(axes) {
-                    let mut copy = base.clone();
-                    for &axis in flipped_axes {
-                        flip_bounds(&mut copy, axis);
-                    }
-                    for &axis in flipped_axes {
-                        push_reflection(&mut copy, axis);
-                    }
-                    if !suffix.is_empty() {
-                        if let Some(ref name) = copy.name {
-                            copy.name = Some(format!("{name}_{suffix}"));
-                        }
-                    }
-                    result.push(copy);
-                }
-            }
-            _ => {
-                result.push(child.clone());
-            }
-        }
+/// All copies are signed permutations of the coordinate axes — elements
+/// of the cube symmetry group B₃ (order 48). The variants here are the
+/// most commonly useful subsets for cell-grid authoring.
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Symmetry {
+    /// Identity only: 1 copy.
+    #[default]
+    Single,
+    /// Mirror across the x=0 plane: 2 copies (±X).
+    PairX,
+    /// Mirror across the y=0 plane: 2 copies (±Y).
+    PairY,
+    /// Mirror across the z=0 plane: 2 copies (±Z).
+    PairZ,
+    /// Mirror across x=0 and y=0: 4 copies in the XY plane.
+    QuadXY,
+    /// Mirror across x=0 and z=0: 4 copies in the XZ plane.
+    QuadXZ,
+    /// Mirror across y=0 and z=0: 4 copies in the YZ plane.
+    QuadYZ,
+    /// Mirror across all three axis planes: 8 copies (all octants).
+    Octants,
+    /// The 6 face cells of a cube — one copy on each of ±X, ±Y, ±Z faces.
+    Faces,
+    /// The 12 edge cells of a cube — 4 edges parallel to each axis.
+    Edges,
+}
+
+/// A signed permutation of the coordinate axes. `Placement(a, b, c)`
+/// means: the new copy's world X axis comes from the source's `a`,
+/// world Y from `b`, world Z from `c`. The `a`, `b`, `c` values are
+/// `SignedAxis` variants that carry both axis and sign.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Placement(pub SignedAxis, pub SignedAxis, pub SignedAxis);
+
+/// Identity placement: no change to the primitive.
+pub const fn identity_placement() -> Placement {
+    Placement(SignedAxis::PosX, SignedAxis::PosY, SignedAxis::PosZ)
+}
+
+/// Return the hand-curated list of `(placement, name_suffix)` pairs for
+/// a given symmetry. Each placement produces one rendered copy. The
+/// suffix is appended to the node's name to distinguish copies in the
+/// entity tree for animation-channel lookup.
+pub fn placements(symmetry: Symmetry) -> &'static [(Placement, &'static str)] {
+    use SignedAxis::*;
+    match symmetry {
+        Symmetry::Single => &[(Placement(PosX, PosY, PosZ), "")],
+        Symmetry::PairX => &[
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(NegX, PosY, PosZ), "_mx"),
+        ],
+        Symmetry::PairY => &[
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(PosX, NegY, PosZ), "_my"),
+        ],
+        Symmetry::PairZ => &[
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(PosX, PosY, NegZ), "_mz"),
+        ],
+        Symmetry::QuadXY => &[
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(NegX, PosY, PosZ), "_mx"),
+            (Placement(PosX, NegY, PosZ), "_my"),
+            (Placement(NegX, NegY, PosZ), "_mxy"),
+        ],
+        Symmetry::QuadXZ => &[
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(NegX, PosY, PosZ), "_mx"),
+            (Placement(PosX, PosY, NegZ), "_mz"),
+            (Placement(NegX, PosY, NegZ), "_mxz"),
+        ],
+        Symmetry::QuadYZ => &[
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(PosX, NegY, PosZ), "_my"),
+            (Placement(PosX, PosY, NegZ), "_mz"),
+            (Placement(PosX, NegY, NegZ), "_myz"),
+        ],
+        Symmetry::Octants => &[
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(NegX, PosY, PosZ), "_mx"),
+            (Placement(PosX, NegY, PosZ), "_my"),
+            (Placement(NegX, NegY, PosZ), "_mxy"),
+            (Placement(PosX, PosY, NegZ), "_mz"),
+            (Placement(NegX, PosY, NegZ), "_mxz"),
+            (Placement(PosX, NegY, NegZ), "_myz"),
+            (Placement(NegX, NegY, NegZ), "_mxyz"),
+        ],
+        Symmetry::Faces => &[
+            // Six face cells. Designed for a source box sitting on the
+            // +X face of a symmetric cube: y-range and z-range of the
+            // source are symmetric around origin. To move the +X face
+            // to the ∓Y or ∓Z face, the source's offset (nonsymmetric)
+            // X axis is routed to the target's offset slot with the
+            // correct sign; the other two slots are filled by the
+            // source's symmetric axes.
+            (Placement(PosX, PosY, PosZ), "_px"),
+            (Placement(NegX, PosY, PosZ), "_nx"),
+            (Placement(PosY, PosX, PosZ), "_py"),
+            (Placement(PosY, NegX, PosZ), "_ny"),
+            (Placement(PosY, PosZ, PosX), "_pz"),
+            (Placement(PosY, PosZ, NegX), "_nz"),
+        ],
+        Symmetry::Edges => &[
+            // Twelve edge cells. Designed for a source wedge running
+            // parallel to the source's X axis, with its outer corner
+            // in the +Y+Z quadrant. Source's X range is symmetric
+            // (the edge's long axis); source's Y and Z are offset.
+            //
+            // For X-parallel edges, negate source Y/Z to walk the 4
+            // (±Y, ±Z) positions. For Y-parallel, route source X (the
+            // symmetric axis) to the world Y slot and fill the other
+            // two slots with source Y/Z. For Z-parallel, likewise.
+            //
+            // 4 X-parallel edges:
+            (Placement(PosX, PosY, PosZ), "_x_py_pz"),
+            (Placement(PosX, NegY, PosZ), "_x_ny_pz"),
+            (Placement(PosX, PosY, NegZ), "_x_py_nz"),
+            (Placement(PosX, NegY, NegZ), "_x_ny_nz"),
+            // 4 Y-parallel edges (source x → world y; source y/z → world x/z):
+            (Placement(PosY, PosX, PosZ), "_y_px_pz"),
+            (Placement(NegY, PosX, PosZ), "_y_nx_pz"),
+            (Placement(PosY, PosX, NegZ), "_y_px_nz"),
+            (Placement(NegY, PosX, NegZ), "_y_nx_nz"),
+            // 4 Z-parallel edges (source x → world z; source y/z → world x/y):
+            (Placement(PosY, PosZ, PosX), "_z_px_py"),
+            (Placement(NegY, PosZ, PosX), "_z_nx_py"),
+            (Placement(PosY, NegZ, PosX), "_z_px_ny"),
+            (Placement(NegY, NegZ, PosX), "_z_nx_ny"),
+        ],
     }
-    result
+}
+
+/// Apply a placement to an integer `Bounds`. Each world axis range is
+/// drawn from the source axis (and sign) named by the corresponding
+/// placement component. Result is canonicalized (`min ≤ max` per axis).
+pub(super) fn apply_placement_to_bounds(placement: Placement, b: Bounds) -> Bounds {
+    let (mn_x, mx_x) = resolve_axis_range(placement.0, &b);
+    let (mn_y, mx_y) = resolve_axis_range(placement.1, &b);
+    let (mn_z, mx_z) = resolve_axis_range(placement.2, &b);
+    Bounds(mn_x, mn_y, mn_z, mx_x, mx_y, mx_z)
+}
+
+fn resolve_axis_range(sa: SignedAxis, b: &Bounds) -> (i32, i32) {
+    let mn = b.min();
+    let mx = b.max();
+    let (lo, hi) = match sa.axis_index() {
+        0 => (mn.0, mx.0),
+        1 => (mn.1, mx.1),
+        _ => (mn.2, mx.2),
+    };
+    if sa.is_positive() {
+        (lo, hi)
+    } else {
+        (-hi, -lo)
+    }
+}
+
+/// Compose two placements: `outer ∘ inner`. The resulting placement
+/// applied to a value produces the same result as applying `inner` first
+/// and then `outer`.
+pub(super) fn compose_placements(outer: Placement, inner: Placement) -> Placement {
+    Placement(
+        compose_axis(outer.0, inner),
+        compose_axis(outer.1, inner),
+        compose_axis(outer.2, inner),
+    )
+}
+
+fn compose_axis(outer: SignedAxis, inner: Placement) -> SignedAxis {
+    // The outer signed axis picks one of inner's components (by axis index)
+    // and composes signs (negating if outer is negative).
+    let picked = match outer.axis_index() {
+        0 => inner.0,
+        1 => inner.1,
+        _ => inner.2,
+    };
+    if outer.is_positive() {
+        picked
+    } else {
+        picked.negate()
+    }
 }
 
 // =====================================================================
@@ -676,19 +638,8 @@ pub struct Collision {
 }
 
 /// Global cell-level index of a compiled shape. Every primitive instance
-/// (post-mirror-expansion, post-import-remapping) contributes its
-/// integer cells to the index. The resulting structure supports two
-/// queries in O(1) per cell:
-///
-/// 1. **AABB**: min and max over all claimed cells.
-/// 2. **Collision detection**: any cell that more than one primitive
-///    tried to claim is recorded as a `Collision`.
-///
-/// The cell model is the long-term source of truth for shape geometry
-/// and will eventually replace the subset-based AABB path. For now both
-/// coexist: `SpecNode::compute_aabb` still uses subset enumeration and
-/// is called on the unexpanded tree (no registry), while `Occupancy`
-/// handles the global scene and participates in validation.
+/// (post-symmetry-expansion, post-import-remapping) contributes its
+/// integer cells to the index.
 pub struct Occupancy {
     cells: HashMap<CellPos, String>,
     collisions: Vec<Collision>,
@@ -702,46 +653,26 @@ impl Occupancy {
         }
     }
 
-    /// Number of collisions detected. Zero means the spec satisfies the
-    /// cell-uniqueness invariant.
     pub fn collision_count(&self) -> usize {
         self.collisions.len()
     }
 
-    /// Full list of cell collisions. Each entry names the two primitives
-    /// that both claimed the cell plus the cell coordinate.
     pub fn collisions(&self) -> &[Collision] {
         &self.collisions
     }
 
-    /// AABB enclosing all occupied cells. Returns `None` if nothing was
-    /// placed. Each occupied cell `(x, y, z)` occupies the unit cube
-    /// `(x, y, z)` to `(x+1, y+1, z+1)`, so the result's max components
-    /// are one greater than the max cell coordinate.
     pub fn aabb(&self) -> Option<Bounds> {
         let mut iter = self.cells.keys();
         let first = *iter.next()?;
         let mut mn = first;
         let mut mx = first;
         for &(x, y, z) in iter {
-            if x < mn.0 {
-                mn.0 = x;
-            }
-            if y < mn.1 {
-                mn.1 = y;
-            }
-            if z < mn.2 {
-                mn.2 = z;
-            }
-            if x > mx.0 {
-                mx.0 = x;
-            }
-            if y > mx.1 {
-                mx.1 = y;
-            }
-            if z > mx.2 {
-                mx.2 = z;
-            }
+            if x < mn.0 { mn.0 = x; }
+            if y < mn.1 { mn.1 = y; }
+            if z < mn.2 { mn.2 = z; }
+            if x > mx.0 { mx.0 = x; }
+            if y > mx.1 { mx.1 = y; }
+            if z > mx.2 { mx.2 = z; }
         }
         Some(Bounds(mn.0, mn.1, mn.2, mx.0 + 1, mx.1 + 1, mx.2 + 1))
     }
@@ -762,18 +693,11 @@ impl Occupancy {
     }
 }
 
-/// Walk a `SpecNode` tree, expanding mirror combinators and imports,
-/// and build an `Occupancy` index of every cell claimed by every
-/// primitive instance.
-///
-/// Runs in integer arithmetic only. Cell positions are world cells —
-/// for shapes containing imports, the per-import scale is tracked and
-/// scaled integer bounds are divided down to world cells at each leaf.
-/// The `remap_bounds` invariant (scaled values are always exact multiples
-/// of the scale factor) guarantees the division is lossless.
+/// Walk a `SpecNode` tree, expanding symmetry and imports, and build
+/// an `Occupancy` index of every cell claimed by every primitive instance.
 pub fn collect_occupancy(spec: &SpecNode, registry: &AssetRegistry) -> Occupancy {
     let mut occ = Occupancy::new();
-    walk_for_occupancy(&mut occ, spec, "", (1, 1, 1), registry);
+    walk_for_occupancy(&mut occ, spec, "", identity_placement(), (1, 1, 1), registry);
     occ
 }
 
@@ -781,42 +705,28 @@ fn walk_for_occupancy(
     occ: &mut Occupancy,
     node: &SpecNode,
     parent_path: &str,
+    inherited: Placement,
     scale: (i32, i32, i32),
     registry: &AssetRegistry,
 ) {
     let base_path = append_path(parent_path, node.name.as_deref());
 
     match node.combinator() {
-        Combinator::Mirror(axes) => {
-            let mut base = node.clone();
-            base.mirror = Vec::new();
-            for (flipped, suffix) in &mirror_combinations(axes) {
-                let mut copy = base.clone();
-                for &axis in flipped {
-                    flip_bounds(&mut copy, axis);
-                }
-                for &axis in flipped {
-                    push_reflection(&mut copy, axis);
-                }
-                let copy_path = if suffix.is_empty() {
+        Combinator::Symmetry(sym) => {
+            for (local, suffix) in placements(sym) {
+                let combined = compose_placements(inherited, *local);
+                let path = if suffix.is_empty() {
                     base_path.clone()
                 } else {
-                    format!("{base_path}_{suffix}")
+                    format!("{base_path}{suffix}")
                 };
-                walk_for_occupancy(occ, &copy, &copy_path, scale, registry);
+                walk_single_for_occupancy(occ, node, &path, combined, scale, registry);
             }
         }
         Combinator::Import(import_name) => {
-            let Some(imported) = registry.get_shape(import_name) else {
-                // Missing imports are reported elsewhere (render path);
-                // occupancy silently skips them so the HUD doesn't
-                // report phantom collisions for a broken import.
-                return;
-            };
-            let Some(native_aabb) = imported.compute_aabb() else {
-                return;
-            };
-            let placement = node.bounds.unwrap_or(native_aabb);
+            let Some(imported) = registry.get_shape(import_name) else { return };
+            let Some(native_aabb) = imported.compute_aabb() else { return };
+            let placement_bounds = node.bounds.unwrap_or(native_aabb);
 
             let remap_scale = Bounds::remap_scale(&native_aabb);
             let new_scale = (
@@ -826,17 +736,29 @@ fn walk_for_occupancy(
             );
 
             let mut remapped = imported.clone();
-            remapped.remap_bounds(&native_aabb, &placement);
-            walk_for_occupancy(occ, &remapped, &base_path, new_scale, registry);
+            remapped.remap_bounds(&native_aabb, &placement_bounds);
+            walk_for_occupancy(occ, &remapped, &base_path, inherited, new_scale, registry);
         }
         Combinator::None => {
-            if let (Some(_), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
-                claim_cells(occ, bounds, scale, &base_path);
-            }
-            for child in &node.children {
-                walk_for_occupancy(occ, child, &base_path, scale, registry);
-            }
+            walk_single_for_occupancy(occ, node, &base_path, inherited, scale, registry);
         }
+    }
+}
+
+fn walk_single_for_occupancy(
+    occ: &mut Occupancy,
+    node: &SpecNode,
+    path: &str,
+    placement: Placement,
+    scale: (i32, i32, i32),
+    registry: &AssetRegistry,
+) {
+    if let (Some(_), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
+        let transformed = apply_placement_to_bounds(placement, *bounds);
+        claim_cells(occ, &transformed, scale, path);
+    }
+    for child in &node.children {
+        walk_for_occupancy(occ, child, path, placement, scale, registry);
     }
 }
 
@@ -848,17 +770,14 @@ fn claim_cells(
 ) {
     let mn = bounds.min();
     let mx = bounds.max();
-    // Divide scaled integer bounds down to world cells. When the primitive
-    // is cell-aligned (no fractional position), floor_div and ceil_div
-    // both return the exact cell. When the primitive sits at sub-cell
-    // positions — which happens inside imports whose placement-to-native
-    // size ratio is not an integer — we round outward: floor for min,
-    // ceil for max. That conservatively over-claims the smallest integer
-    // cell box containing the primitive. This may produce false-positive
-    // collisions at cell boundaries between two non-aligned imports, but
-    // never false negatives, which is the right tradeoff for the
-    // informational HUD stat. The long-term cell-level architecture will
-    // disallow non-integer scaling imports entirely.
+    // Integer floor/ceil division to world cells. When a primitive sits
+    // at sub-cell positions (possible inside imports with non-integer
+    // scaling ratios) we round outward: floor for min, ceil for max.
+    // That over-claims the smallest integer cell box containing the
+    // primitive. For the cell-level architecture target, non-aligned
+    // imports will eventually be disallowed, but the round-outward
+    // behavior prevents false negatives (missed collisions) in the
+    // meantime.
     let wmin = (
         floor_div(mn.0, scale.0),
         floor_div(mn.1, scale.1),
@@ -880,31 +799,19 @@ fn claim_cells(
 }
 
 /// Floor division for a signed dividend and a strictly positive divisor.
-/// Unlike Rust's `/`, this rounds toward negative infinity, which is what
-/// we want when computing the minimum cell an integer position belongs to.
 fn floor_div(a: i32, b: i32) -> i32 {
     debug_assert!(b > 0, "scale must be positive");
     let q = a / b;
     let r = a % b;
-    if r < 0 {
-        q - 1
-    } else {
-        q
-    }
+    if r < 0 { q - 1 } else { q }
 }
 
 /// Ceiling division for a signed dividend and a strictly positive divisor.
-/// Rounds toward positive infinity, used when computing the exclusive
-/// upper cell bound.
 fn ceil_div(a: i32, b: i32) -> i32 {
     debug_assert!(b > 0, "scale must be positive");
     let q = a / b;
     let r = a % b;
-    if r > 0 {
-        q + 1
-    } else {
-        q
-    }
+    if r > 0 { q + 1 } else { q }
 }
 
 fn append_path(parent: &str, name: Option<&str>) -> String {
@@ -917,6 +824,39 @@ fn append_path(parent: &str, name: Option<&str>) -> String {
 }
 
 // =====================================================================
+// Expand symmetry for CSG rebuild
+// =====================================================================
+
+/// Flatten symmetry combinators on a list of children into a flat list
+/// of pre-transformed `(SpecNode, Placement)` pairs. Used by CSG rebuild
+/// to produce the same sequence the render walker would.
+///
+/// Each output pair represents one rendered copy with its accumulated
+/// placement. The caller applies the placement to bounds / orient at
+/// the appropriate moment.
+pub fn expand_symmetry_children(children: &[SpecNode]) -> Vec<(SpecNode, Placement)> {
+    let mut result = Vec::new();
+    for child in children {
+        if child.symmetry != Symmetry::Single {
+            let mut base = child.clone();
+            base.symmetry = Symmetry::Single;
+            for (placement, suffix) in placements(child.symmetry) {
+                let mut copy = base.clone();
+                if !suffix.is_empty() {
+                    if let Some(ref name) = copy.name {
+                        copy.name = Some(format!("{name}{suffix}"));
+                    }
+                }
+                result.push((copy, *placement));
+            }
+        } else {
+            result.push((child.clone(), identity_placement()));
+        }
+    }
+    result
+}
+
+// =====================================================================
 // Serde helpers
 // =====================================================================
 
@@ -924,7 +864,7 @@ fn append_path(parent: &str, name: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    fn leaf_spec(bounds: Bounds, mirror: Vec<MirrorAxis>) -> SpecNode {
+    fn leaf_spec(bounds: Bounds, symmetry: Symmetry) -> SpecNode {
         SpecNode {
             name: Some("leaf".into()),
             shape: Some(PrimitiveShape::Box),
@@ -937,193 +877,136 @@ mod tests {
             color_map: HashMap::new(),
             colors: vec![],
             children: vec![],
-            mirror,
+            symmetry,
             combine: CombineMode::Union,
             animations: vec![],
-            reflected_axes: vec![],
         }
     }
 
-    /// `[X, Y, XY]` should produce 8 copies with 8 distinct AABBs,
-    /// forming the D_4 symmetry group of a square in the XY plane.
     #[test]
-    fn d4_mirror_produces_eight_unique_copies() {
-        let mut seen = std::collections::HashSet::new();
-        let combos =
-            mirror_combinations(&[MirrorAxis::X, MirrorAxis::Y, MirrorAxis::XY]);
-        assert_eq!(combos.len(), 8);
-        for (flipped, _suffix) in &combos {
-            let mut node = leaf_spec(Bounds(1, 3, 0, 2, 5, 1), vec![]);
-            for &axis in flipped {
-                flip_bounds(&mut node, axis);
-            }
-            let b = node.bounds.unwrap();
-            assert!(
-                seen.insert((b.min(), b.max())),
-                "duplicate AABB for mirror subset {:?}",
-                flipped
-            );
-        }
-        assert_eq!(seen.len(), 8);
+    fn identity_placement_is_no_op_on_bounds() {
+        let b = Bounds(1, 2, 3, 4, 5, 6);
+        assert_eq!(apply_placement_to_bounds(identity_placement(), b), b);
     }
 
-    /// `[XY, XZ, YZ]` collides: 8 subsets → 6 unique permutations.
     #[test]
-    fn three_diagonals_rejected_by_validate() {
-        let spec = leaf_spec(
-            Bounds(1, 3, 0, 2, 5, 1),
-            vec![MirrorAxis::XY, MirrorAxis::XZ, MirrorAxis::YZ],
-        );
-        let err = spec.validate().expect_err("should reject three diagonals");
-        assert!(matches!(
-            err,
-            SpecValidationError::AllThreeDiagonals { .. }
-        ));
+    fn flip_x_placement_negates_x_range() {
+        let b = Bounds(1, 2, 3, 4, 5, 6);
+        let p = Placement(SignedAxis::NegX, SignedAxis::PosY, SignedAxis::PosZ);
+        let result = apply_placement_to_bounds(p, b);
+        assert_eq!(result.min(), (-4, 2, 3));
+        assert_eq!(result.max(), (-1, 5, 6));
     }
 
-    /// Any 2-diagonal subset should be accepted.
     #[test]
-    fn two_diagonals_accepted() {
-        for combo in &[
-            vec![MirrorAxis::XY, MirrorAxis::XZ],
-            vec![MirrorAxis::XY, MirrorAxis::YZ],
-            vec![MirrorAxis::XZ, MirrorAxis::YZ],
+    fn swap_xy_placement_swaps_ranges() {
+        let b = Bounds(1, 3, 0, 2, 5, 1);
+        let p = Placement(SignedAxis::PosY, SignedAxis::PosX, SignedAxis::PosZ);
+        let result = apply_placement_to_bounds(p, b);
+        assert_eq!(result.min(), (3, 1, 0));
+        assert_eq!(result.max(), (5, 2, 1));
+    }
+
+    #[test]
+    fn compose_identity_is_identity() {
+        let p = Placement(SignedAxis::NegX, SignedAxis::PosZ, SignedAxis::NegY);
+        assert_eq!(compose_placements(identity_placement(), p), p);
+        assert_eq!(compose_placements(p, identity_placement()), p);
+    }
+
+    #[test]
+    fn compose_is_associative_on_sample() {
+        // Two flips then a swap should equal the same in any grouping.
+        let a = Placement(SignedAxis::NegX, SignedAxis::PosY, SignedAxis::PosZ);
+        let b = Placement(SignedAxis::PosX, SignedAxis::NegY, SignedAxis::PosZ);
+        let c = Placement(SignedAxis::PosY, SignedAxis::PosX, SignedAxis::PosZ);
+
+        let ab_then_c = compose_placements(c, compose_placements(b, a));
+        let a_then_bc = compose_placements(compose_placements(c, b), a);
+        assert_eq!(ab_then_c, a_then_bc);
+    }
+
+    #[test]
+    fn symmetry_placements_are_distinct_and_correct_count() {
+        // Every variant's placement table must have unique entries.
+        for sym in [
+            Symmetry::Single,
+            Symmetry::PairX,
+            Symmetry::PairY,
+            Symmetry::PairZ,
+            Symmetry::QuadXY,
+            Symmetry::QuadXZ,
+            Symmetry::QuadYZ,
+            Symmetry::Octants,
+            Symmetry::Faces,
+            Symmetry::Edges,
         ] {
-            let spec = leaf_spec(Bounds(1, 3, 0, 2, 5, 1), combo.clone());
-            assert!(spec.validate().is_ok(), "rejected valid combo {:?}", combo);
+            let ps = placements(sym);
+            let mut seen = std::collections::HashSet::new();
+            for (p, _) in ps {
+                assert!(
+                    seen.insert(*p),
+                    "symmetry {:?} has duplicate placement {:?}",
+                    sym,
+                    p
+                );
+            }
         }
+        assert_eq!(placements(Symmetry::Single).len(), 1);
+        assert_eq!(placements(Symmetry::PairX).len(), 2);
+        assert_eq!(placements(Symmetry::Octants).len(), 8);
+        assert_eq!(placements(Symmetry::Faces).len(), 6);
+        assert_eq!(placements(Symmetry::Edges).len(), 12);
     }
 
-    /// `collect_bounds` must enumerate all 2^n mirror subsets when the
-    /// list contains diagonals. Single-axis union is wrong because
-    /// cross-term copies like `{X, XY}` visit quadrants no individual
-    /// reflection reaches. Regression for the "blue grid two cells too
-    /// close" bug in cornered_cube.shape.ron.
     #[test]
-    fn mixed_axis_and_diagonal_mirror_aabb_covers_cross_terms() {
-        let spec = leaf_spec(
-            Bounds(1, -1, -1, 3, 1, 1),
-            vec![MirrorAxis::X, MirrorAxis::XY, MirrorAxis::XZ],
-        );
-        let aabb = spec.compute_aabb().expect("should produce an aabb");
+    fn faces_symmetry_produces_six_distinct_world_cells() {
+        // Source: a box that covers +X face of a 3×3×3 grid.
+        let spec = leaf_spec(Bounds(1, -1, -1, 3, 1, 1), Symmetry::Faces);
+        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        assert_eq!(occ.collision_count(), 0);
+        // AABB should span ±3 on all three axes (cell range).
+        let aabb = occ.aabb().unwrap();
         assert_eq!(aabb.min(), (-3, -3, -3));
         assert_eq!(aabb.max(), (3, 3, 3));
     }
 
-    /// A lone cell-aligned box with no mirror claims exactly its
-    /// integer cells and reports no collisions.
     #[test]
-    fn occupancy_lone_box_has_no_collisions() {
-        let spec = leaf_spec(Bounds(0, 0, 0, 2, 2, 2), vec![]);
+    fn edges_symmetry_produces_twelve_distinct_world_cells() {
+        // Source: a +X-parallel edge cell at +Y+Z in the 3×3×3 grid.
+        let spec = leaf_spec(Bounds(-1, 1, 1, 1, 3, 3), Symmetry::Edges);
         let occ = collect_occupancy(&spec, &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
-        assert_eq!(
-            occ.aabb(),
-            Some(Bounds(0, 0, 0, 2, 2, 2)),
-            "aabb should wrap exactly the claimed cells"
-        );
+        let aabb = occ.aabb().unwrap();
+        assert_eq!(aabb.min(), (-3, -3, -3));
+        assert_eq!(aabb.max(), (3, 3, 3));
     }
 
-    /// Two boxes that share no cells produce no collisions, and the
-    /// AABB spans the union.
     #[test]
-    fn occupancy_two_disjoint_boxes() {
-        let child_a = leaf_spec(Bounds(0, 0, 0, 2, 2, 2), vec![]);
-        let mut child_b = leaf_spec(Bounds(3, 0, 0, 5, 2, 2), vec![]);
-        child_b.name = Some("b".into());
-        let mut parent = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), vec![]);
-        parent.shape = None;
-        parent.bounds = None;
-        parent.name = Some("parent".into());
-        parent.children = vec![child_a, child_b];
-
-        let occ = collect_occupancy(&parent, &AssetRegistry::default());
-        assert_eq!(occ.collision_count(), 0);
-        assert_eq!(occ.aabb(), Some(Bounds(0, 0, 0, 5, 2, 2)));
-    }
-
-    /// Two boxes whose bounds overlap trigger a collision with both
-    /// paths recorded.
-    #[test]
-    fn occupancy_overlapping_boxes_collide() {
-        let mut child_a = leaf_spec(Bounds(0, 0, 0, 3, 2, 2), vec![]);
-        child_a.name = Some("a".into());
-        let mut child_b = leaf_spec(Bounds(2, 0, 0, 5, 2, 2), vec![]);
-        child_b.name = Some("b".into());
-        let mut parent = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), vec![]);
-        parent.shape = None;
-        parent.bounds = None;
-        parent.name = Some("parent".into());
-        parent.children = vec![child_a, child_b];
-
-        let occ = collect_occupancy(&parent, &AssetRegistry::default());
-        // Overlap region is (2..3, 0..2, 0..2) = 4 cells, each a collision.
-        assert_eq!(occ.collision_count(), 4);
-        let c = &occ.collisions()[0];
-        assert!(c.first_path.ends_with("/a") || c.first_path == "a");
-        assert!(c.second_path.ends_with("/b") || c.second_path == "b");
-    }
-
-    /// A centered box with mirror [X] produces two overlapping copies
-    /// (each one gets the whole AABB), so every cell is a collision.
-    /// This is the motivating "centered sphere mirrored across X" case.
-    #[test]
-    fn occupancy_centered_mirror_collides_with_itself() {
-        let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), vec![MirrorAxis::X]);
+    fn octants_symmetry_produces_eight_corners() {
+        let spec = leaf_spec(Bounds(1, 1, 1, 3, 3, 3), Symmetry::Octants);
         let occ = collect_occupancy(&spec, &AssetRegistry::default());
-        // Both copies land on the same 8 cells.
+        assert_eq!(occ.collision_count(), 0);
+        let aabb = occ.aabb().unwrap();
+        assert_eq!(aabb.min(), (-3, -3, -3));
+        assert_eq!(aabb.max(), (3, 3, 3));
+    }
+
+    #[test]
+    fn centered_pair_x_collides_with_itself() {
+        // The motivating "sphere at origin mirrored across X" case:
+        // both copies land on the same cells, so every cell is a collision.
+        let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), Symmetry::PairX);
+        let occ = collect_occupancy(&spec, &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 8);
     }
 
-    /// An off-origin box with mirror [X] produces two copies on
-    /// opposite sides with no overlap.
     #[test]
-    fn occupancy_off_origin_mirror_does_not_collide() {
-        let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), vec![MirrorAxis::X]);
+    fn off_origin_pair_x_does_not_collide() {
+        let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), Symmetry::PairX);
         let occ = collect_occupancy(&spec, &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         assert_eq!(occ.aabb(), Some(Bounds(-3, 0, 0, 3, 1, 1)));
-    }
-
-    /// The D_4 diagonal mirror test shape produces 8 unique copies;
-    /// with asymmetric bounds they should all be disjoint and cell
-    /// occupancy should report zero collisions.
-    #[test]
-    fn occupancy_d4_diagonal_mirror_no_collision() {
-        let spec = leaf_spec(
-            Bounds(1, 3, 0, 2, 5, 1),
-            vec![MirrorAxis::X, MirrorAxis::Y, MirrorAxis::XY],
-        );
-        let occ = collect_occupancy(&spec, &AssetRegistry::default());
-        assert_eq!(occ.collision_count(), 0);
-        // 8 copies × 2 cells each (the 1×2×1 box).
-        let aabb = occ.aabb().expect("should have cells");
-        // AABB spans ±5 on x and y, 0..1 on z.
-        assert_eq!(aabb.min(), (-5, -5, 0));
-        assert_eq!(aabb.max(), (5, 5, 1));
-    }
-
-    /// Non-integer scaling during import remap (e.g. a native-size-16 axis
-    /// placed in a size-9 slot) used to trip a divisibility assertion in
-    /// `claim_cells`. Regression check: the same configuration must be
-    /// handled without panicking and must over-claim conservatively.
-    #[test]
-    fn claim_cells_handles_non_integer_scale() {
-        // Scale=(4, 4, 16); bounds=(8, -4, -48, 12, 0, 24) mirrors the
-        // remapped block-e/melee body. 24/16 = 1.5 — sub-cell position
-        // in z, which must not panic.
-        let mut occ = Occupancy::new();
-        let scale = (4, 4, 16);
-        let bounds = Bounds(8, -4, -48, 12, 0, 24);
-        claim_cells(&mut occ, &bounds, scale, "leaf");
-        // z: floor(-48/16)=-3, ceil(24/16)=2 → cells z=-3..2 (5 cells)
-        // x: floor(8/4)=2, ceil(12/4)=3 → cells x=2..3 (1 cell)
-        // y: floor(-4/4)=-1, ceil(0/4)=0 → cells y=-1..0 (1 cell)
-        // Total: 1 * 1 * 5 = 5 cells
-        assert_eq!(occ.collision_count(), 0);
-        let aabb = occ.aabb().unwrap();
-        assert_eq!(aabb.min(), (2, -1, -3));
-        assert_eq!(aabb.max(), (3, 0, 2));
     }
 
     #[test]
@@ -1144,23 +1027,16 @@ mod tests {
         assert_eq!(ceil_div(-9, 3), -3);
     }
 
-    /// The original `[X, Y, Z]` should still work and produce 8 copies
-    /// at the 8 octants (regression check).
     #[test]
-    fn orthogonal_mirror_still_works() {
-        let mut seen = std::collections::HashSet::new();
-        let combos =
-            mirror_combinations(&[MirrorAxis::X, MirrorAxis::Y, MirrorAxis::Z]);
-        assert_eq!(combos.len(), 8);
-        for (flipped, _) in &combos {
-            let mut node = leaf_spec(Bounds(3, 3, 3, 4, 4, 4), vec![]);
-            for &axis in flipped {
-                flip_bounds(&mut node, axis);
-            }
-            let b = node.bounds.unwrap();
-            assert!(seen.insert((b.min(), b.max())));
-        }
-        assert_eq!(seen.len(), 8);
+    fn claim_cells_handles_non_integer_scale() {
+        let mut occ = Occupancy::new();
+        let scale = (4, 4, 16);
+        let bounds = Bounds(8, -4, -48, 12, 0, 24);
+        claim_cells(&mut occ, &bounds, scale, "leaf");
+        assert_eq!(occ.collision_count(), 0);
+        let aabb = occ.aabb().unwrap();
+        assert_eq!(aabb.min(), (2, -1, -3));
+        assert_eq!(aabb.max(), (3, 0, 2));
     }
 }
 

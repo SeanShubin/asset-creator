@@ -7,9 +7,9 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use fidget::context::Tree;
 use super::meshes::RawMesh;
-use super::render::{compile_scaled, ColorMap, RenderEvent};
+use super::render::{compile_with_placement, ColorMap, RenderEvent};
 use super::sdf::{collect_sdf_from_events, mesh_sdf};
-use super::spec::{Bounds, CombineMode, SpecNode};
+use super::spec::{Bounds, CombineMode, Placement, SpecNode};
 use crate::registry::AssetRegistry;
 
 const CACHE_DIR: &str = "generated/csg-cache";
@@ -32,8 +32,10 @@ pub struct CsgStats {
 // =====================================================================
 
 /// Perform CSG on spec children using SDF evaluation, with disk caching.
+/// Children are passed with their accumulated placements (from symmetry
+/// expansion) so each child is compiled in the correct pose.
 pub fn perform_csg_from_children(
-    children: &[SpecNode],
+    children: &[(SpecNode, Placement)],
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_aabb: &Bounds,
@@ -44,7 +46,7 @@ pub fn perform_csg_from_children(
 
 /// Perform CSG without caching (for stress tests).
 pub fn perform_csg_uncached(
-    children: &[SpecNode],
+    children: &[(SpecNode, Placement)],
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_aabb: &Bounds,
@@ -65,7 +67,7 @@ pub fn mesh_sdf_from_events(events: &[RenderEvent], aabb: &Bounds) -> RawMesh {
 }
 
 fn perform_csg_impl(
-    children: &[SpecNode],
+    children: &[(SpecNode, Placement)],
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_aabb: &Bounds,
@@ -88,8 +90,8 @@ fn perform_csg_impl(
     let mut subtract_sdfs: Vec<Tree> = Vec::new();
     let mut clip_sdfs: Vec<Tree> = Vec::new();
 
-    for child in children {
-        let events = compile_scaled(child, colors, registry, scale);
+    for (child, placement) in children {
+        let events = compile_with_placement(child, *placement, colors, registry, scale);
         let Some(sdf) = collect_sdf_from_events(&events) else { continue };
 
         match child.combine {
@@ -196,7 +198,7 @@ fn build_raw_mesh_with_normals(sdf: &Tree, shared_pos: Vec<[f32; 3]>, shared_idx
 /// Invalidates all cached CSG meshes.
 const CACHE_VERSION: u32 = 3;
 
-fn compute_cache_key(children: &[SpecNode], aabb: &Bounds, scale: (i32, i32, i32)) -> PathBuf {
+fn compute_cache_key(children: &[(SpecNode, Placement)], aabb: &Bounds, scale: (i32, i32, i32)) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     CACHE_VERSION.hash(&mut hasher);
     format!("{children:?}{aabb:?}{scale:?}").hash(&mut hasher);

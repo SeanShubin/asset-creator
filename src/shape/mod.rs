@@ -17,7 +17,8 @@ pub use interpreter::{
 pub use render::{collect_raw_mesh, compile, ColorMap, RenderEvent};
 #[allow(unused_imports)]
 pub use spec::{
-    collect_occupancy, Bounds, Collision, CombineMode, Occupancy, SpecNode,
+    collect_occupancy, identity_placement, Bounds, Collision, CombineMode,
+    Occupancy, Placement, SpecNode, Symmetry,
 };
 
 /// Plugin that maintains shape system invariants.
