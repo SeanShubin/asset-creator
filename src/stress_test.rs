@@ -5,8 +5,8 @@ use std::io::Write;
 
 use crate::registry::AssetRegistry;
 use crate::shape::{
-    ShapeNode, walk_shape_tree, collect_mesh_from_events,
-    ColorMap, CsgStats, CombineMode, ShapeEvent, perform_csg_uncached,
+    collect_raw_mesh, compile, ColorMap, CombineMode, CsgStats,
+    RenderEvent, SpecNode, perform_csg_uncached,
 };
 
 const OUTPUT_DIR: &str = "generated/stress-test";
@@ -39,14 +39,14 @@ pub fn run(registry: &AssetRegistry) {
         // Walk the shape tree and collect events
         let colors: ColorMap = shape.palette.clone();
         let t0 = std::time::Instant::now();
-        let events = walk_shape_tree(shape, &colors, registry);
+        let events = compile(shape, &colors, registry);
 
-        let enter_count = events.iter().filter(|e| matches!(e, ShapeEvent::EnterNode { .. })).count();
-        let geometry_count = events.iter().filter(|e| matches!(e, ShapeEvent::Geometry { .. })).count();
+        let enter_count = events.iter().filter(|e| matches!(e, RenderEvent::EnterNode { .. })).count();
+        let geometry_count = events.iter().filter(|e| matches!(e, RenderEvent::Geometry { .. })).count();
         writeln!(log, "  events: {} total, {} nodes, {} geometry", events.len(), enter_count, geometry_count).unwrap();
 
         // Collect mesh
-        let mesh = collect_mesh_from_events(&events);
+        let mesh = collect_raw_mesh(&events);
         let mesh_ms = t0.elapsed().as_secs_f64() * 1000.0;
         writeln!(log, "  mesh: {} tris, {} verts ({:.1}ms)", mesh.indices.len() / 3, mesh.positions.len(), mesh_ms).unwrap();
 
@@ -87,7 +87,7 @@ pub fn run(registry: &AssetRegistry) {
     println!("Stress test complete. Results in {LOG_FILE}");
 }
 
-fn run_csg_for_shape(shape: &ShapeNode, colors: &ColorMap, registry: &AssetRegistry, log: &mut std::fs::File) -> CsgStats {
+fn run_csg_for_shape(shape: &SpecNode, colors: &ColorMap, registry: &AssetRegistry, log: &mut std::fs::File) -> CsgStats {
     let aabb = shape.compute_aabb()
         .unwrap_or(crate::shape::Bounds(-1, -1, -1, 1, 1, 1));
 
@@ -106,7 +106,7 @@ fn run_csg_for_shape(shape: &ShapeNode, colors: &ColorMap, registry: &AssetRegis
 }
 
 
-fn find_and_run_csg(node: &ShapeNode, colors: &ColorMap, registry: &AssetRegistry, log: &mut std::fs::File) -> Vec<(String, CsgStats)> {
+fn find_and_run_csg(node: &SpecNode, colors: &ColorMap, registry: &AssetRegistry, log: &mut std::fs::File) -> Vec<(String, CsgStats)> {
     let mut results = Vec::new();
     for child in &node.children {
         if child.has_csg_children() {

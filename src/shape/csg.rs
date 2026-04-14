@@ -6,10 +6,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use fidget::context::Tree;
-use super::definition::{Bounds, CombineMode};
 use super::meshes::RawMesh;
+use super::render::{compile_scaled, ColorMap, RenderEvent};
 use super::sdf::{collect_sdf_from_events, mesh_sdf};
-use super::traversal::{walk_shape_tree_scaled, ColorMap, ShapeEvent};
+use super::spec::{Bounds, CombineMode, SpecNode};
 use crate::registry::AssetRegistry;
 
 const CACHE_DIR: &str = "generated/csg-cache";
@@ -31,9 +31,9 @@ pub struct CsgStats {
 // Public API
 // =====================================================================
 
-/// Perform CSG on shape children using SDF evaluation, with disk caching.
+/// Perform CSG on spec children using SDF evaluation, with disk caching.
 pub fn perform_csg_from_children(
-    children: &[super::definition::ShapeNode],
+    children: &[SpecNode],
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_aabb: &Bounds,
@@ -44,7 +44,7 @@ pub fn perform_csg_from_children(
 
 /// Perform CSG without caching (for stress tests).
 pub fn perform_csg_uncached(
-    children: &[super::definition::ShapeNode],
+    children: &[SpecNode],
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_aabb: &Bounds,
@@ -53,9 +53,9 @@ pub fn perform_csg_uncached(
     perform_csg_impl(children, colors, registry, parent_aabb, scale, false)
 }
 
-/// Build an SDF from shape events, mesh it, and return a RawMesh with normals.
+/// Build an SDF from render events, mesh it, and return a RawMesh with normals.
 /// Used for the "Preview CSG mesh" toggle.
-pub fn mesh_sdf_from_events(events: &[ShapeEvent], aabb: &Bounds) -> RawMesh {
+pub fn mesh_sdf_from_events(events: &[RenderEvent], aabb: &Bounds) -> RawMesh {
     let Some(sdf) = collect_sdf_from_events(events) else {
         return RawMesh { positions: vec![], normals: vec![], uvs: vec![], indices: vec![] };
     };
@@ -65,7 +65,7 @@ pub fn mesh_sdf_from_events(events: &[ShapeEvent], aabb: &Bounds) -> RawMesh {
 }
 
 fn perform_csg_impl(
-    children: &[super::definition::ShapeNode],
+    children: &[SpecNode],
     colors: &ColorMap,
     registry: &AssetRegistry,
     parent_aabb: &Bounds,
@@ -89,7 +89,7 @@ fn perform_csg_impl(
     let mut clip_sdfs: Vec<Tree> = Vec::new();
 
     for child in children {
-        let events = walk_shape_tree_scaled(child, colors, registry, scale);
+        let events = compile_scaled(child, colors, registry, scale);
         let Some(sdf) = collect_sdf_from_events(&events) else { continue };
 
         match child.combine {
@@ -196,7 +196,7 @@ fn build_raw_mesh_with_normals(sdf: &Tree, shared_pos: Vec<[f32; 3]>, shared_idx
 /// Invalidates all cached CSG meshes.
 const CACHE_VERSION: u32 = 3;
 
-fn compute_cache_key(children: &[super::definition::ShapeNode], aabb: &Bounds, scale: (i32, i32, i32)) -> PathBuf {
+fn compute_cache_key(children: &[SpecNode], aabb: &Bounds, scale: (i32, i32, i32)) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     CACHE_VERSION.hash(&mut hasher);
     format!("{children:?}{aabb:?}{scale:?}").hash(&mut hasher);

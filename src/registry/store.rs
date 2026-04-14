@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::shape::ShapeNode;
+use crate::shape::SpecNode;
 use crate::surface::SurfaceDef;
 use super::watcher::FileWatcher;
 
@@ -19,7 +19,7 @@ struct RegisteredAsset<T> {
 #[derive(Resource, Default)]
 pub struct AssetRegistry {
     surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
-    shapes: HashMap<String, RegisteredAsset<ShapeNode>>,
+    shapes: HashMap<String, RegisteredAsset<SpecNode>>,
     generation: u64,
     shape_generation: u64,
     errors: Vec<AssetError>,
@@ -66,7 +66,7 @@ impl AssetRegistry {
 
     // --- Shape accessors ---
 
-    pub fn get_shape(&self, name: &str) -> Option<&ShapeNode> {
+    pub fn get_shape(&self, name: &str) -> Option<&SpecNode> {
         if let Some(r) = self.shapes.get(name) {
             return Some(&r.data);
         }
@@ -84,7 +84,7 @@ impl AssetRegistry {
         None
     }
 
-    pub fn get_shape_by_path(&self, path: &std::path::Path) -> Option<&ShapeNode> {
+    pub fn get_shape_by_path(&self, path: &std::path::Path) -> Option<&SpecNode> {
         self.shapes.values()
             .find(|r| r.path == path)
             .map(|r| &r.data)
@@ -285,7 +285,7 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
         }
     };
 
-    let shape: ShapeNode = match crate::util::parse_ron(&contents) {
+    let shape: SpecNode = match crate::util::parse_ron(&contents) {
         Ok(s) => s,
         Err(e) => {
             registry.set_error(path_str, format!("{e}"));

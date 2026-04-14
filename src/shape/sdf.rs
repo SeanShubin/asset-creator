@@ -4,43 +4,43 @@
 
 use bevy::prelude::*;
 use fidget::context::Tree;
-use super::definition::{Bounds, PrimitiveShape};
-use super::traversal::{ShapeEvent, combine_transforms};
+use super::render::{RenderEvent, combine_transforms};
+use super::spec::{Bounds, PrimitiveShape};
 
-/// Build an SDF Tree from shape events. The tree represents the combined
+/// Build an SDF Tree from render events. The tree represents the combined
 /// geometry of all Geometry events, positioned in world space.
-pub fn collect_sdf_from_events(events: &[ShapeEvent]) -> Option<Tree> {
+pub fn collect_sdf_from_events(events: &[RenderEvent]) -> Option<Tree> {
     let mut sdf_stack: Vec<Option<Tree>> = vec![None];
     let mut tf_stack: Vec<Transform> = vec![Transform::IDENTITY];
 
     for event in events {
         match event {
-            ShapeEvent::EnterNode { local_tf, .. } => {
+            RenderEvent::EnterNode { local_tf, .. } => {
                 let parent_world = *tf_stack.last().unwrap();
                 let world = combine_transforms(&parent_world, local_tf);
                 tf_stack.push(world);
                 sdf_stack.push(None);
             }
-            ShapeEvent::Geometry { node, mesh_tf, .. } => {
+            RenderEvent::AttachCsgGroup { .. } => {
+                // Group metadata only; no SDF contribution.
+            }
+            RenderEvent::Geometry { shape, mesh_tf, .. } => {
                 let parent_world = *tf_stack.last().unwrap();
                 let world_mesh_tf = combine_transforms(&parent_world, mesh_tf);
 
-                if let Some(shape) = node.shape {
-                    let sdf = primitive_sdf(shape, &world_mesh_tf);
-                    // Union with any existing SDF at this level
-                    let current = sdf_stack.last_mut().unwrap();
-                    *current = Some(match current.take() {
-                        Some(existing) => existing.min(sdf),
-                        None => sdf,
-                    });
-                }
+                let sdf = primitive_sdf(*shape, &world_mesh_tf);
+                let current = sdf_stack.last_mut().unwrap();
+                *current = Some(match current.take() {
+                    Some(existing) => existing.min(sdf),
+                    None => sdf,
+                });
             }
-            ShapeEvent::PrecomputedMesh { .. } => {
+            RenderEvent::PrecomputedMesh { .. } => {
                 // Pre-computed meshes can't be converted back to SDF.
                 // This case doesn't arise in practice: CSG walks individual
                 // children, which don't contain pre-computed mesh events.
             }
-            ShapeEvent::ExitNode => {
+            RenderEvent::ExitNode => {
                 tf_stack.pop();
                 let child_sdf = sdf_stack.pop().unwrap();
                 if let Some(child) = child_sdf {

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
-use super::definition::PrimitiveShape;
+use super::spec::PrimitiveShape;
 
 // =====================================================================
 // RawMesh — intermediate mesh representation for CSG and conversion

@@ -1,18 +1,21 @@
 mod animation;
 mod csg;
-mod definition;
 mod interpreter;
 mod meshes;
+mod render;
 mod sdf;
-mod traversal;
+mod spec;
 
 use bevy::prelude::*;
 
 pub use animation::{animate_shapes, ShapeAnimator};
 pub use csg::{CsgStats, perform_csg_uncached};
-pub use definition::{Bounds, CombineMode, ShapeNode};
-pub use interpreter::{despawn_shape, spawn_shape, spawn_shape_as_sdf, spawn_shape_with_layers, rebuild_csg_on_toggle, suppress_csg_member_meshes, ShapePart, ShapeRoot};
-pub use traversal::{walk_shape_tree, collect_mesh_from_events, ColorMap, ShapeEvent};
+pub use interpreter::{
+    despawn_shape, rebuild_csg_on_toggle, spawn_shape, spawn_shape_as_sdf,
+    spawn_shape_with_layers, suppress_csg_member_meshes, ShapePart, ShapeRoot,
+};
+pub use render::{collect_raw_mesh, compile, ColorMap, RenderEvent};
+pub use spec::{Bounds, CombineMode, SpecNode};
 
 /// Plugin that maintains shape system invariants.
 /// Register this once; it ensures CSG member meshes are always suppressed

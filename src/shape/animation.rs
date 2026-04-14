@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use super::definition::{AnimProperty, AnimState, Axis, JointMotion};
+use super::spec::{AnimProperty, AnimState, Axis, JointMotion};
 use super::interpreter::{BaseTransform, ShapePart, ShapeRoot};
 
 // =====================================================================

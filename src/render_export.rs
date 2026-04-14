@@ -297,7 +297,7 @@ fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>)
     }
 }
 
-fn compute_fit_from_shape(shape: &crate::shape::ShapeNode) -> f32 {
+fn compute_fit_from_shape(shape: &crate::shape::SpecNode) -> f32 {
     let aabb = shape.compute_aabb();
     let Some(aabb) = aabb else { return 0.01 };
 

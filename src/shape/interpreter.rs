@@ -4,11 +4,8 @@ use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::animation::ShapeAnimator;
 use super::csg;
-use super::definition::{CombineMode, PrimitiveShape, ShapeNode};
-use super::traversal::{
-    ColorMap, ShapeEvent,
-    expand_combinators, resolve_color, walk_shape_tree,
-};
+use super::render::{ColorMap, RenderEvent, compile, resolve_color};
+use super::spec::{Bounds, CombineMode, PrimitiveShape, SpecNode};
 
 // =====================================================================
 // Components
@@ -25,9 +22,13 @@ pub struct BaseTransform(pub Transform);
 #[derive(Component)]
 pub struct ShapeRoot;
 
+/// CSG parent group. Holds the post-mirror-expansion spec children so the
+/// group can rebuild the CSG mesh when children are toggled. This is the
+/// ONE component that holds `SpecNode` data in the render world; it never
+/// reads individual fields — it only passes the list back to `compile`.
 #[derive(Component, Clone)]
 pub struct CsgGroup {
-    pub children: Vec<ShapeNode>,
+    pub children: Vec<SpecNode>,
     pub colors: ColorMap,
     pub scale: (i32, i32, i32),
 }
@@ -51,7 +52,7 @@ pub fn spawn_shape(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    shape: &ShapeNode,
+    shape: &SpecNode,
     registry: &AssetRegistry,
 ) -> Entity {
     spawn_shape_with_layers(commands, meshes, materials, shape, registry, None)
@@ -63,36 +64,38 @@ pub fn spawn_shape_as_sdf(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    shape: &ShapeNode,
+    shape: &SpecNode,
     registry: &AssetRegistry,
 ) -> Entity {
     let root_tf = Transform::IDENTITY;
-    let root = commands.spawn((
-        ShapeRoot,
-        ShapePart { name: shape.name.clone() },
-        BaseTransform(root_tf),
-        ShapeAnimator::new(shape.animations.clone()),
-        root_tf,
-        Visibility::default(),
-    )).id();
+    let root = commands
+        .spawn((
+            ShapeRoot,
+            ShapePart { name: shape.name.clone() },
+            BaseTransform(root_tf),
+            ShapeAnimator::new(shape.animations.clone()),
+            root_tf,
+            Visibility::default(),
+        ))
+        .id();
 
     let colors = shape.palette.clone();
-    let aabb = shape.compute_aabb()
-        .unwrap_or(super::definition::Bounds(-1, -1, -1, 1, 1, 1));
+    let aabb = shape.compute_aabb().unwrap_or(Bounds(-1, -1, -1, 1, 1, 1));
 
-    // Build SDF from the entire shape tree and mesh it
-    let events = walk_shape_tree(shape, &colors, registry);
+    let events = compile(shape, &colors, registry);
     let result = csg::mesh_sdf_from_events(&events, &aabb);
     info!("SDF preview: {} tris", result.indices.len() / 3);
 
     if !result.positions.is_empty() {
-        let color = shape.children.first()
+        let color = shape
+            .children
+            .first()
             .and_then(|c| c.color.as_ref())
             .map(|name| resolve_color(name, &colors))
             .unwrap_or(Color3(1, 1, 1));
 
         let (cr, cg, cb) = color.to_rgb();
-    let base_color = Color::srgb(cr, cg, cb);
+        let base_color = Color::srgb(cr, cg, cb);
         let material = materials.add(StandardMaterial {
             base_color,
             cull_mode: None,
@@ -115,7 +118,7 @@ pub fn spawn_shape_with_layers(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    shape: &ShapeNode,
+    shape: &SpecNode,
     registry: &AssetRegistry,
     render_layers: Option<RenderLayers>,
 ) -> Entity {
@@ -136,15 +139,19 @@ pub fn spawn_shape_with_layers(
     let root = root_cmd.id();
 
     let colors = shape.palette.clone();
-    let events = walk_shape_tree(shape, &colors, registry);
+    let events = compile(shape, &colors, registry);
     apply_events_as_entities(commands, meshes, materials, root, &events, registry, &render_layers);
     root
 }
 
-fn validate_names(node: &ShapeNode, path: &str) {
+fn validate_names(node: &SpecNode, path: &str) {
     let node_path = match &node.name {
         Some(name) => {
-            if path.is_empty() { name.clone() } else { format!("{path}/{name}") }
+            if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}/{name}")
+            }
         }
         None => {
             if node.shape.is_some() {
@@ -175,11 +182,12 @@ pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
 }
 
 // =====================================================================
-// Entity creation from shape events
+// Entity creation from render events
 // =====================================================================
 
-struct CsgFrame {
-    children: Vec<ShapeNode>,
+struct CsgPendingBuild {
+    parent: Entity,
+    children: Vec<SpecNode>,
     colors: ColorMap,
     scale: (i32, i32, i32),
 }
@@ -189,40 +197,110 @@ fn apply_events_as_entities(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     root: Entity,
-    events: &[ShapeEvent],
+    events: &[RenderEvent],
     registry: &AssetRegistry,
     render_layers: &Option<RenderLayers>,
 ) {
     let mut entity_stack: Vec<Entity> = vec![root];
-    let mut csg_stack: Vec<Option<CsgFrame>> = vec![None];
+    let mut pending_csg: Vec<Option<CsgPendingBuild>> = vec![None];
+    let mut parent_is_csg_stack: Vec<bool> = vec![false];
 
     for event in events {
         match event {
-            ShapeEvent::EnterNode { node, local_tf, colors, scale } => {
+            RenderEvent::EnterNode { name, local_tf } => {
                 let parent = *entity_stack.last().unwrap();
-                let parent_is_csg = csg_stack.last().unwrap().is_some();
-                let (entity, csg_frame) = spawn_part_entity(
-                    commands, parent, node, *local_tf, colors, parent_is_csg, render_layers, *scale,
-                );
+                let parent_is_csg = *parent_is_csg_stack.last().unwrap();
+                let entity = commands
+                    .spawn((
+                        ShapePart { name: name.clone() },
+                        BaseTransform(*local_tf),
+                        *local_tf,
+                        Visibility::default(),
+                    ))
+                    .id();
+                commands.entity(parent).add_child(entity);
+                tag_render_layer(commands, entity, render_layers);
+
+                if parent_is_csg {
+                    commands.entity(entity).insert(CsgMember);
+                }
+
                 entity_stack.push(entity);
-                csg_stack.push(csg_frame);
+                pending_csg.push(None);
+                parent_is_csg_stack.push(false);
             }
-            ShapeEvent::Geometry { node, mesh_tf, colors } => {
+            RenderEvent::AttachCsgGroup {
+                children,
+                colors,
+                scale,
+            } => {
+                let entity = *entity_stack.last().unwrap();
+                let all_active = vec![true; children.len()];
+                commands.entity(entity).insert((
+                    CsgGroup {
+                        children: children.clone(),
+                        colors: colors.clone(),
+                        scale: *scale,
+                    },
+                    CsgChildState { active: all_active },
+                ));
+                // Mark so children descending from this node get CsgMember
+                if let Some(slot) = parent_is_csg_stack.last_mut() {
+                    *slot = true;
+                }
+                // Remember we need to build the CSG mesh on ExitNode
+                if let Some(slot) = pending_csg.last_mut() {
+                    *slot = Some(CsgPendingBuild {
+                        parent: entity,
+                        children: children.clone(),
+                        colors: colors.clone(),
+                        scale: *scale,
+                    });
+                }
+            }
+            RenderEvent::Geometry {
+                name,
+                has_children,
+                shape,
+                mesh_tf,
+                is_mirrored,
+                color,
+                emissive,
+            } => {
                 let parent = *entity_stack.last().unwrap();
-                attach_mesh(commands, meshes, materials, parent, node, *mesh_tf, colors, render_layers);
+                attach_mesh(
+                    commands,
+                    meshes,
+                    materials,
+                    parent,
+                    name.as_deref(),
+                    *has_children,
+                    *shape,
+                    *mesh_tf,
+                    *is_mirrored,
+                    *color,
+                    *emissive,
+                    render_layers,
+                );
             }
-            ShapeEvent::PrecomputedMesh { mesh, color } => {
+            RenderEvent::PrecomputedMesh { mesh, color } => {
                 let parent = *entity_stack.last().unwrap();
                 attach_precomputed_mesh(commands, meshes, materials, parent, mesh, *color, render_layers);
             }
-            ShapeEvent::ExitNode => {
-                let entity = entity_stack.pop().unwrap();
-                let csg_frame = csg_stack.pop().unwrap();
-                if let Some(frame) = csg_frame {
+            RenderEvent::ExitNode => {
+                entity_stack.pop();
+                parent_is_csg_stack.pop();
+                if let Some(Some(build)) = pending_csg.pop() {
                     build_csg_mesh(
-                        commands, meshes, materials,
-                        entity, &frame.children, &frame.colors, registry, render_layers,
-                        frame.scale,
+                        commands,
+                        meshes,
+                        materials,
+                        build.parent,
+                        &build.children,
+                        &build.colors,
+                        registry,
+                        render_layers,
+                        build.scale,
                     );
                 }
             }
@@ -231,61 +309,13 @@ fn apply_events_as_entities(
 }
 
 // =====================================================================
-// CSG mesh building
+// Mesh attachment
 // =====================================================================
 
-/// Build CSG mesh and attach it to the parent entity.
-/// Called during initial spawn and during toggle rebuild.
 fn tag_render_layer(commands: &mut Commands, entity: Entity, render_layers: &Option<RenderLayers>) {
     if let Some(ref layers) = render_layers {
         commands.entity(entity).insert(layers.clone());
     }
-}
-
-fn spawn_part_entity(
-    commands: &mut Commands,
-    parent: Entity,
-    node: &ShapeNode,
-    local_tf: Transform,
-    colors: &ColorMap,
-    parent_is_csg: bool,
-    render_layers: &Option<RenderLayers>,
-    scale: (i32, i32, i32),
-) -> (Entity, Option<CsgFrame>) {
-    let entity = commands.spawn((
-        ShapePart { name: node.name.clone() },
-        BaseTransform(local_tf),
-        local_tf,
-        Visibility::default(),
-    )).id();
-    commands.entity(parent).add_child(entity);
-    tag_render_layer(commands, entity, render_layers);
-
-    if parent_is_csg {
-        commands.entity(entity).insert(CsgMember);
-    }
-
-    let csg_frame = if node.has_csg_children() {
-        let expanded = expand_combinators(&node.children);
-        let all_active = vec![true; expanded.len()];
-        commands.entity(entity).insert((
-            CsgGroup {
-                children: expanded.clone(),
-                colors: colors.clone(),
-                scale,
-            },
-            CsgChildState { active: all_active },
-        ));
-        Some(CsgFrame {
-            children: expanded,
-            colors: colors.clone(),
-            scale,
-        })
-    } else {
-        None
-    };
-
-    (entity, csg_frame)
 }
 
 fn attach_mesh(
@@ -293,53 +323,51 @@ fn attach_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
-    node: &ShapeNode,
+    node_name: Option<&str>,
+    has_children: bool,
+    shape: PrimitiveShape,
     mesh_tf: Transform,
-    colors: &ColorMap,
+    is_mirrored: bool,
+    color: Color3,
+    emissive: bool,
     render_layers: &Option<RenderLayers>,
 ) {
-    let Some(shape) = node.shape else { return };
-    let om = node.orient;
-    let is_mirrored = om.determinant() < 0.0;
+    let (mesh, material) = make_mesh(meshes, materials, shape, color, emissive, is_mirrored);
 
-    let color = node.color.as_ref()
-        .map(|name| resolve_color(name, colors))
-        .unwrap_or_else(|| {
-            warn!("Shape '{}' has no color specified",
-                node.name.as_deref().unwrap_or("unnamed"));
-            Color3(1, 1, 1)
-        });
-
-    let (mesh, material) = make_mesh(meshes, materials, shape, color, node.emissive, is_mirrored);
-
-    if node.children.is_empty() {
-        let mesh_entity = commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(material),
-            mesh_tf,
-            Visibility::default(),
-        )).id();
+    if !has_children {
+        let mesh_entity = commands
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                mesh_tf,
+                Visibility::default(),
+            ))
+            .id();
         commands.entity(parent).add_child(mesh_entity);
         tag_render_layer(commands, mesh_entity, render_layers);
     } else {
-        let shape_name = node.name.as_ref()
+        let shape_name = node_name
             .map(|n| format!("{n}_shape"))
             .unwrap_or_else(|| "shape".to_string());
-        let shape_entity = commands.spawn((
-            ShapePart { name: Some(shape_name) },
-            BaseTransform(Transform::default()),
-            Transform::default(),
-            Visibility::default(),
-        )).id();
+        let shape_entity = commands
+            .spawn((
+                ShapePart { name: Some(shape_name) },
+                BaseTransform(Transform::default()),
+                Transform::default(),
+                Visibility::default(),
+            ))
+            .id();
         commands.entity(parent).add_child(shape_entity);
         tag_render_layer(commands, shape_entity, render_layers);
 
-        let mesh_entity = commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(material),
-            mesh_tf,
-            Visibility::default(),
-        )).id();
+        let mesh_entity = commands
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                mesh_tf,
+                Visibility::default(),
+            ))
+            .id();
         commands.entity(shape_entity).add_child(mesh_entity);
         tag_render_layer(commands, mesh_entity, render_layers);
     }
@@ -354,7 +382,9 @@ fn attach_precomputed_mesh(
     color: Color3,
     render_layers: &Option<RenderLayers>,
 ) {
-    if mesh.positions.is_empty() { return; }
+    if mesh.positions.is_empty() {
+        return;
+    }
 
     let (cr, cg, cb) = color.to_rgb();
     let base_color = Color::srgb(cr, cg, cb);
@@ -365,30 +395,34 @@ fn attach_precomputed_mesh(
     });
 
     let mesh_handle = meshes.add(mesh.clone().to_bevy_mesh());
-    let mesh_entity = commands.spawn((
-        Mesh3d(mesh_handle),
-        MeshMaterial3d(material),
-        Transform::IDENTITY,
-        Visibility::default(),
-    )).id();
+    let mesh_entity = commands
+        .spawn((
+            Mesh3d(mesh_handle),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            Visibility::default(),
+        ))
+        .id();
     commands.entity(parent).add_child(mesh_entity);
     tag_render_layer(commands, mesh_entity, render_layers);
 }
+
+// =====================================================================
+// CSG mesh building
+// =====================================================================
 
 pub fn build_csg_mesh(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
     parent: Entity,
-    children: &[ShapeNode],
+    children: &[SpecNode],
     colors: &ColorMap,
     registry: &AssetRegistry,
     render_layers: &Option<RenderLayers>,
     scale: (i32, i32, i32),
 ) {
-    // Compute AABB enclosing all children to bound the SDF meshing region
-    let aabb = super::definition::Bounds::enclosing(children)
-        .unwrap_or(super::definition::Bounds(-1, -1, -1, 1, 1, 1));
+    let aabb = Bounds::enclosing(children).unwrap_or(Bounds(-1, -1, -1, 1, 1, 1));
 
     let (result, stats) = csg::perform_csg_from_children(children, colors, registry, &aabb, scale);
     info!("CSG: {} tris in {:.0}ms", stats.output_tris, stats.mesh_time_ms);
@@ -396,7 +430,8 @@ pub fn build_csg_mesh(
         return;
     }
 
-    let color = children.iter()
+    let color = children
+        .iter()
         .find(|c| c.combine == CombineMode::Union)
         .and_then(|c| c.color.as_ref())
         .map(|name| resolve_color(name, colors))
@@ -412,13 +447,15 @@ pub fn build_csg_mesh(
 
     let mesh_handle = meshes.add(result.to_bevy_mesh());
 
-    let csg_entity = commands.spawn((
-        CsgResult,
-        Mesh3d(mesh_handle),
-        MeshMaterial3d(material),
-        Transform::IDENTITY,
-        Visibility::default(),
-    )).id();
+    let csg_entity = commands
+        .spawn((
+            CsgResult,
+            Mesh3d(mesh_handle),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            Visibility::default(),
+        ))
+        .id();
     commands.entity(parent).add_child(csg_entity);
     if let Some(ref layers) = render_layers {
         commands.entity(csg_entity).insert(layers.clone());
@@ -450,7 +487,11 @@ fn make_mesh(
 
     let (cr, cg, cb) = color.to_rgb();
     let base_color = Color::srgb(cr, cg, cb);
-    let cull_mode = if is_mirrored { None } else { Some(bevy::render::render_resource::Face::Back) };
+    let cull_mode = if is_mirrored {
+        None
+    } else {
+        Some(bevy::render::render_resource::Face::Back)
+    };
     let material = if emissive {
         materials.add(StandardMaterial {
             base_color,
@@ -481,11 +522,16 @@ pub fn suppress_csg_member_meshes(
     csg_results: Query<&CsgResult>,
 ) {
     for (member, parent) in &members {
-        let has_csg_result = children_query.get(parent.get())
+        let has_csg_result = children_query
+            .get(parent.get())
             .map(|children| children.iter().any(|e| csg_results.get(*e).is_ok()))
             .unwrap_or(false);
 
-        let target_vis = if has_csg_result { Visibility::Hidden } else { Visibility::Inherited };
+        let target_vis = if has_csg_result {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
         set_descendant_mesh_visibility(&mut commands, member, &children_query, &mesh_entities, target_vis);
     }
 }
@@ -520,14 +566,17 @@ pub fn rebuild_csg_on_toggle(
     csg_results: Query<Entity, With<CsgResult>>,
 ) {
     for (parent, group, mut state, children) in &mut csg_groups {
-        let part_children: Vec<Entity> = children.iter()
+        let part_children: Vec<Entity> = children
+            .iter()
             .filter(|e| parts.get(**e).is_ok())
             .copied()
             .collect();
 
-        let current_active: Vec<bool> = part_children.iter()
+        let current_active: Vec<bool> = part_children
+            .iter()
             .map(|&e| {
-                visibility.get(e)
+                visibility
+                    .get(e)
                     .map(|v| *v != Visibility::Hidden)
                     .unwrap_or(true)
             })
@@ -546,7 +595,9 @@ pub fn rebuild_csg_on_toggle(
             }
         }
 
-        let active_children: Vec<ShapeNode> = group.children.iter()
+        let active_children: Vec<SpecNode> = group
+            .children
+            .iter()
             .zip(current_active.iter())
             .filter(|(_, active)| **active)
             .map(|(node, _)| node.clone())
@@ -560,9 +611,16 @@ pub fn rebuild_csg_on_toggle(
         }
 
         build_csg_mesh(
-            &mut commands, &mut meshes, &mut materials,
-            parent, &active_children, &group.colors, &registry, &None,
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            parent,
+            &active_children,
+            &group.colors,
+            &registry,
+            &None,
             group.scale,
         );
     }
 }
+
