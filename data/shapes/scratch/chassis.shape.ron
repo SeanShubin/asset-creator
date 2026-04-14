@@ -5,46 +5,63 @@
         "b": (3, 3, 0),
         "c": (0, 3, 0),
         "d": (0, 3, 3),
-        "e": (0, 0, 3)
+        "e": (0, 0, 3),
+        "body": (2,2,2)
     },
     children: [
         (
             name: "bodyA",
             shape: Box,
             bounds: (-4, -1, 0, -3, 0, -2),
-            color: "a",
+            color: "body",
             mirror: [X, Z]
         ),
         (
             name: "bodyB",
             shape: Box,
             bounds: (0, -1, 0, -2, 0, -2),
-            color: "b",
+            color: "body",
             mirror: [X, Z]
         ),
         (
             name: "bodyC",
             shape: Box,
             bounds: (0, -1, -4, -2, 0, -2),
-            color: "c",
+            color: "body",
             mirror: [X, Z]
         ),
         (
             name: "bodyD",
             shape: Wedge,
             bounds: (-4, -1, -4, -2, 0, -2),
-            color: "d",
+            color: "body",
             mirror: [X],
             orient: (Back, Mirror, RotateCounter)
         ),
         (
             name: "bodyE",
             shape: Wedge,
-            bounds: (-4, 0, 4, -2, 1, 2),
-            color: "e",
-            mirror: [],
-            orient: (Front, NoMirror, RotateHalf)
+            bounds: (-4, -1, 2, -3, 0, 3),
+            color: "body",
+            mirror: [X],
+            orient: (Front, NoMirror, RotateCounter)
         ),
+        (
+            name: "topA",
+            shape:Corner,
+            bounds:(-4,0,-4,-2,1,-2),
+            color:"a",
+            orient:(Back, NoMirror, NoRotation),
+            mirror: [X,Z]
+        ),
+        (
+            name: "topB",
+            shape:Wedge,
+            bounds:(-4,0,-2,-2,1,2),
+            color:"b",
+            orient:(Left, NoMirror, NoRotation),
+            mirror: [X]
+        )
     ],
 )
 /*

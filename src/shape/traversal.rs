@@ -141,17 +141,6 @@ fn pick_size_for_direction(dir: Vec3, size: (f32, f32, f32)) -> f32 {
     else { size.2 }
 }
 
-/// Bounds center as Vec3 (float — only for camera/render positioning).
-pub fn bounds_center(bounds: &Option<Bounds>) -> Vec3 {
-    match bounds {
-        Some(b) => {
-            let c = b.center_f32();
-            Vec3::new(c.0, c.1, c.2)
-        }
-        None => Vec3::ZERO,
-    }
-}
-
 pub fn combine_transforms(parent: &Transform, child: &Transform) -> Transform {
     let parent_mat = parent.compute_matrix();
     let child_mat = child.compute_matrix();

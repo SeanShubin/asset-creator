@@ -43,7 +43,10 @@
       "Bash(python:*)",
       "Bash(ls /c/Python*)",
       "Read(//c/Users/seans/AppData/Local/Programs/**)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(cargo test:*)",
+      "Bash(git log:*)",
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\"; head -10 {}')"
     ]
   }
 }

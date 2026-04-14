@@ -7,7 +7,7 @@ use super::csg;
 use super::definition::{CombineMode, PrimitiveShape, ShapeNode};
 use super::traversal::{
     ColorMap, ShapeEvent,
-    bounds_center, expand_combinators, resolve_color, walk_shape_tree,
+    expand_combinators, resolve_color, walk_shape_tree,
 };
 
 // =====================================================================
@@ -66,8 +66,7 @@ pub fn spawn_shape_as_sdf(
     shape: &ShapeNode,
     registry: &AssetRegistry,
 ) -> Entity {
-    let position = bounds_center(&shape.bounds);
-    let root_tf = Transform::from_translation(position);
+    let root_tf = Transform::IDENTITY;
     let root = commands.spawn((
         ShapeRoot,
         ShapePart { name: shape.name.clone() },
@@ -122,8 +121,7 @@ pub fn spawn_shape_with_layers(
 ) -> Entity {
     validate_names(shape, "");
 
-    let position = bounds_center(&shape.bounds);
-    let root_tf = Transform::from_translation(position);
+    let root_tf = Transform::IDENTITY;
     let mut root_cmd = commands.spawn((
         ShapeRoot,
         ShapePart { name: shape.name.clone() },
