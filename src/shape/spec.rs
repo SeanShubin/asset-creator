@@ -47,16 +47,17 @@ pub struct SpecNode {
     #[serde(default)]
     pub children: Vec<SpecNode>,
     #[serde(default)]
-    pub mirror: Vec<Axis>,
+    pub mirror: Vec<MirrorAxis>,
     #[serde(default)]
     pub combine: CombineMode,
     #[serde(default)]
     pub animations: Vec<AnimState>,
-    /// Axes this node has been reflected along via mirror expansion. Never
-    /// read from the file — populated only during `expand_mirror_children`
-    /// and consumed by the render layer when composing orientation.
+    /// Mirror axes this node has been reflected along via mirror expansion.
+    /// Never read from the file — populated only during
+    /// `expand_mirror_children` and consumed by the render layer when
+    /// composing the final orientation matrix.
     #[serde(skip)]
-    pub reflected_axes: Vec<Axis>,
+    pub reflected_axes: Vec<MirrorAxis>,
 }
 
 impl SpecNode {
@@ -113,7 +114,7 @@ impl SpecNode {
             include_point(min, max, b_max, found);
 
             for &axis in &self.mirror {
-                let (mir_min, mir_max) = reflect_extents(b_min, b_max, axis);
+                let (mir_min, mir_max) = reflect_mirror_extents(b_min, b_max, axis);
                 include_point(min, max, mir_min, found);
                 include_point(min, max, mir_max, found);
             }
@@ -136,7 +137,70 @@ impl SpecNode {
             child.remap_bounds(from, to);
         }
     }
+
+    /// Validate static invariants of this spec tree. Returns a description
+    /// of the first violation found, or `Ok(())` if the tree is clean.
+    /// Currently checks: mirror lists cannot contain all three diagonal
+    /// planes (XY, XZ, YZ), because that combination produces duplicate
+    /// transforms due to the group relation in S_3.
+    pub fn validate(&self) -> Result<(), SpecValidationError> {
+        self.validate_impl("")
+    }
+
+    fn validate_impl(&self, path: &str) -> Result<(), SpecValidationError> {
+        let node_path = match &self.name {
+            Some(name) => {
+                if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}/{name}")
+                }
+            }
+            None => path.to_string(),
+        };
+
+        let has_xy = self.mirror.contains(&MirrorAxis::XY);
+        let has_xz = self.mirror.contains(&MirrorAxis::XZ);
+        let has_yz = self.mirror.contains(&MirrorAxis::YZ);
+        if has_xy && has_xz && has_yz {
+            return Err(SpecValidationError::AllThreeDiagonals {
+                path: node_path,
+            });
+        }
+
+        for child in &self.children {
+            child.validate_impl(&node_path)?;
+        }
+        Ok(())
+    }
 }
+
+/// Errors produced by `SpecNode::validate`.
+#[derive(Debug, Clone)]
+pub enum SpecValidationError {
+    /// A mirror list contains all three diagonal planes (XY, XZ, YZ).
+    /// This always produces duplicate transforms: the three transpositions
+    /// of S_3 have a non-trivial relation (any two generate the same group
+    /// as all three), so 2^3 = 8 subsets can only map to 6 distinct
+    /// permutations, leaving two pairs of coincident copies.
+    AllThreeDiagonals { path: String },
+}
+
+impl std::fmt::Display for SpecValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpecValidationError::AllThreeDiagonals { path } => {
+                write!(
+                    f,
+                    "node '{path}' has mirror list containing all three diagonal planes (XY, XZ, YZ); \
+                     this combination produces duplicate mirror copies and is never valid"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SpecValidationError {}
 
 fn include_point(
     min: &mut (i32, i32, i32),
@@ -153,15 +217,21 @@ fn include_point(
     *found = true;
 }
 
-pub(super) fn reflect_extents(
+/// Compute the AABB of a mirror copy for the given mirror axis. X/Y/Z flip
+/// the corresponding coordinate; XY/XZ/YZ swap the corresponding coordinate
+/// pair (reflection across the diagonal plane y=x, z=x, z=y respectively).
+pub(super) fn reflect_mirror_extents(
     b_min: (i32, i32, i32),
     b_max: (i32, i32, i32),
-    axis: Axis,
+    axis: MirrorAxis,
 ) -> ((i32, i32, i32), (i32, i32, i32)) {
     match axis {
-        Axis::X => ((-b_max.0, b_min.1, b_min.2), (-b_min.0, b_max.1, b_max.2)),
-        Axis::Y => ((b_min.0, -b_max.1, b_min.2), (b_max.0, -b_min.1, b_max.2)),
-        Axis::Z => ((b_min.0, b_min.1, -b_max.2), (b_max.0, b_max.1, -b_min.2)),
+        MirrorAxis::X => ((-b_max.0, b_min.1, b_min.2), (-b_min.0, b_max.1, b_max.2)),
+        MirrorAxis::Y => ((b_min.0, -b_max.1, b_min.2), (b_max.0, -b_min.1, b_max.2)),
+        MirrorAxis::Z => ((b_min.0, b_min.1, -b_max.2), (b_max.0, b_max.1, -b_min.2)),
+        MirrorAxis::XY => ((b_min.1, b_min.0, b_min.2), (b_max.1, b_max.0, b_max.2)),
+        MirrorAxis::XZ => ((b_min.2, b_min.1, b_min.0), (b_max.2, b_max.1, b_max.0)),
+        MirrorAxis::YZ => ((b_min.0, b_min.2, b_min.1), (b_max.0, b_max.2, b_max.1)),
     }
 }
 
@@ -179,7 +249,7 @@ pub enum CombineMode {
 
 /// What kind of combinator this node is, if any.
 pub enum Combinator<'a> {
-    Mirror(&'a [Axis]),
+    Mirror(&'a [MirrorAxis]),
     Import(&'a str),
     None,
 }
@@ -290,11 +360,34 @@ impl Bounds {
 // Axes
 // =====================================================================
 
+/// Coordinate axis, used for things like animation channels. This is
+/// distinct from `MirrorAxis` — a coordinate axis is a direction, a mirror
+/// axis is a reflection plane (including diagonal planes).
 #[derive(Deserialize, Clone, Copy, Debug)]
 pub enum Axis {
     X,
     Y,
     Z,
+}
+
+/// Reflection plane used by the mirror combinator.
+///
+/// - `X` / `Y` / `Z` reflect across the plane perpendicular to that
+///   coordinate axis (i.e. the `x = 0`, `y = 0`, or `z = 0` plane).
+/// - `XY` / `XZ` / `YZ` reflect across the diagonal plane that swaps the
+///   corresponding coordinate pair (i.e. `y = x`, `z = x`, or `z = y`).
+///
+/// The three diagonal variants have a non-trivial group relation: any
+/// mirror list containing all three produces duplicate copies. The spec
+/// validator rejects such lists.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MirrorAxis {
+    X,
+    Y,
+    Z,
+    XY,
+    XZ,
+    YZ,
 }
 
 // =====================================================================
@@ -396,9 +489,11 @@ pub struct AnimState {
 // Combinator expansion helpers — pure integer
 // =====================================================================
 
-/// Enumerate all 2^n subsets of the given axes, returning each flipped-axes
-/// list paired with a suffix string for name tagging.
-pub(super) fn mirror_combinations(axes: &[Axis]) -> Vec<(Vec<Axis>, String)> {
+/// Enumerate all 2^n subsets of the given mirror axes, returning each
+/// subset paired with a suffix string for name tagging.
+pub(super) fn mirror_combinations(
+    axes: &[MirrorAxis],
+) -> Vec<(Vec<MirrorAxis>, String)> {
     let n = axes.len();
     let count = 1 << n;
     let mut result = Vec::with_capacity(count);
@@ -408,12 +503,7 @@ pub(super) fn mirror_combinations(axes: &[Axis]) -> Vec<(Vec<Axis>, String)> {
         for (i, &axis) in axes.iter().enumerate() {
             if bits & (1 << i) != 0 {
                 flipped.push(axis);
-                let letter = match axis {
-                    Axis::X => "x",
-                    Axis::Y => "y",
-                    Axis::Z => "z",
-                };
-                suffix.push_str(letter);
+                suffix.push_str(mirror_axis_suffix(axis));
             }
         }
         let suffix = if suffix.is_empty() {
@@ -426,26 +516,51 @@ pub(super) fn mirror_combinations(axes: &[Axis]) -> Vec<(Vec<Axis>, String)> {
     result
 }
 
-/// Recursively flip a node's integer bounds along the given axis.
-/// Operates on the entire subtree.
-pub(super) fn flip_bounds(node: &mut SpecNode, axis: Axis) {
+fn mirror_axis_suffix(axis: MirrorAxis) -> &'static str {
+    match axis {
+        MirrorAxis::X => "x",
+        MirrorAxis::Y => "y",
+        MirrorAxis::Z => "z",
+        MirrorAxis::XY => "xy",
+        MirrorAxis::XZ => "xz",
+        MirrorAxis::YZ => "yz",
+    }
+}
+
+/// Recursively apply a mirror-axis bounds transformation to the node and
+/// its entire subtree. For `X`/`Y`/`Z` this negates the corresponding pair
+/// of integer coordinates; for `XY`/`XZ`/`YZ` it swaps the corresponding
+/// pair of coordinates (reflection across the diagonal plane).
+pub(super) fn flip_bounds(node: &mut SpecNode, axis: MirrorAxis) {
     warn_if_missing_bounds(node);
     if let Some(ref mut b) = node.bounds {
         match axis {
-            Axis::X => {
+            MirrorAxis::X => {
                 let tmp = -b.0;
                 b.0 = -b.3;
                 b.3 = tmp;
             }
-            Axis::Y => {
+            MirrorAxis::Y => {
                 let tmp = -b.1;
                 b.1 = -b.4;
                 b.4 = tmp;
             }
-            Axis::Z => {
+            MirrorAxis::Z => {
                 let tmp = -b.2;
                 b.2 = -b.5;
                 b.5 = tmp;
+            }
+            MirrorAxis::XY => {
+                std::mem::swap(&mut b.0, &mut b.1);
+                std::mem::swap(&mut b.3, &mut b.4);
+            }
+            MirrorAxis::XZ => {
+                std::mem::swap(&mut b.0, &mut b.2);
+                std::mem::swap(&mut b.3, &mut b.5);
+            }
+            MirrorAxis::YZ => {
+                std::mem::swap(&mut b.1, &mut b.2);
+                std::mem::swap(&mut b.4, &mut b.5);
             }
         }
     }
@@ -457,7 +572,7 @@ pub(super) fn flip_bounds(node: &mut SpecNode, axis: Axis) {
 /// Recursively push an extra reflection axis onto every node in the subtree
 /// that has a shape. The render layer consumes `reflected_axes` when it
 /// computes the final orientation matrix for each geometry node.
-pub(super) fn push_reflection(node: &mut SpecNode, axis: Axis) {
+pub(super) fn push_reflection(node: &mut SpecNode, axis: MirrorAxis) {
     if node.shape.is_some() {
         node.reflected_axes.push(axis);
     }
@@ -516,6 +631,100 @@ pub fn expand_mirror_children(children: &[SpecNode]) -> Vec<SpecNode> {
 // =====================================================================
 // Serde helpers
 // =====================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf_spec(bounds: Bounds, mirror: Vec<MirrorAxis>) -> SpecNode {
+        SpecNode {
+            name: Some("leaf".into()),
+            shape: Some(PrimitiveShape::Box),
+            bounds: Some(bounds),
+            orient: Orientation::default(),
+            palette: vec![],
+            color: None,
+            emissive: false,
+            import: None,
+            color_map: HashMap::new(),
+            colors: vec![],
+            children: vec![],
+            mirror,
+            combine: CombineMode::Union,
+            animations: vec![],
+            reflected_axes: vec![],
+        }
+    }
+
+    /// `[X, Y, XY]` should produce 8 copies with 8 distinct AABBs,
+    /// forming the D_4 symmetry group of a square in the XY plane.
+    #[test]
+    fn d4_mirror_produces_eight_unique_copies() {
+        let mut seen = std::collections::HashSet::new();
+        let combos =
+            mirror_combinations(&[MirrorAxis::X, MirrorAxis::Y, MirrorAxis::XY]);
+        assert_eq!(combos.len(), 8);
+        for (flipped, _suffix) in &combos {
+            let mut node = leaf_spec(Bounds(1, 3, 0, 2, 5, 1), vec![]);
+            for &axis in flipped {
+                flip_bounds(&mut node, axis);
+            }
+            let b = node.bounds.unwrap();
+            assert!(
+                seen.insert((b.min(), b.max())),
+                "duplicate AABB for mirror subset {:?}",
+                flipped
+            );
+        }
+        assert_eq!(seen.len(), 8);
+    }
+
+    /// `[XY, XZ, YZ]` collides: 8 subsets → 6 unique permutations.
+    #[test]
+    fn three_diagonals_rejected_by_validate() {
+        let spec = leaf_spec(
+            Bounds(1, 3, 0, 2, 5, 1),
+            vec![MirrorAxis::XY, MirrorAxis::XZ, MirrorAxis::YZ],
+        );
+        let err = spec.validate().expect_err("should reject three diagonals");
+        assert!(matches!(
+            err,
+            SpecValidationError::AllThreeDiagonals { .. }
+        ));
+    }
+
+    /// Any 2-diagonal subset should be accepted.
+    #[test]
+    fn two_diagonals_accepted() {
+        for combo in &[
+            vec![MirrorAxis::XY, MirrorAxis::XZ],
+            vec![MirrorAxis::XY, MirrorAxis::YZ],
+            vec![MirrorAxis::XZ, MirrorAxis::YZ],
+        ] {
+            let spec = leaf_spec(Bounds(1, 3, 0, 2, 5, 1), combo.clone());
+            assert!(spec.validate().is_ok(), "rejected valid combo {:?}", combo);
+        }
+    }
+
+    /// The original `[X, Y, Z]` should still work and produce 8 copies
+    /// at the 8 octants (regression check).
+    #[test]
+    fn orthogonal_mirror_still_works() {
+        let mut seen = std::collections::HashSet::new();
+        let combos =
+            mirror_combinations(&[MirrorAxis::X, MirrorAxis::Y, MirrorAxis::Z]);
+        assert_eq!(combos.len(), 8);
+        for (flipped, _) in &combos {
+            let mut node = leaf_spec(Bounds(3, 3, 3, 4, 4, 4), vec![]);
+            for &axis in flipped {
+                flip_bounds(&mut node, axis);
+            }
+            let b = node.bounds.unwrap();
+            assert!(seen.insert((b.min(), b.max())));
+        }
+        assert_eq!(seen.len(), 8);
+    }
+}
 
 /// Deserialize a RON map into a Vec preserving insertion order.
 fn deserialize_ordered_map<'de, D: serde::Deserializer<'de>>(

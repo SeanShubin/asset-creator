@@ -1,0 +1,13 @@
+// Tests diagonal mirroring. The source box is asymmetric so the 8 copies
+// produced by `[X, Y, XY]` land in 8 distinct pinwheel positions around
+// the origin — full D_4 symmetry of a square in the XY plane. If the
+// diagonal mirror math is correct you should see 8 boxes arranged in a
+// windmill; if it's broken you'll see fewer copies or a lopsided layout.
+(
+    name: "diagonal_mirror_test",
+    palette: {"body": (2, 2, 2)},
+    shape: Box,
+    bounds: (1, 3, 0, 2, 5, 1),
+    color: "body",
+    mirror: [X, Y, XY]
+)

@@ -11,7 +11,7 @@ use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::meshes::{RawMesh, create_raw_mesh};
 use super::spec::{
-    self, Axis, Bounds, CombineMode, Combinator, Facing, Mirroring,
+    self, Bounds, CombineMode, Combinator, Facing, MirrorAxis, Mirroring,
     Orientation, PrimitiveShape, Rotation, SpecNode,
 };
 
@@ -139,7 +139,7 @@ pub enum RenderEvent {
 
 /// Convert a discrete `Orientation` tuple and a list of axis reflections
 /// accumulated through mirror expansion into the world→mesh matrix.
-pub fn orientation_to_mat3(orient: &Orientation, reflected_axes: &[Axis]) -> Mat3 {
+pub fn orientation_to_mat3(orient: &Orientation, reflected_axes: &[MirrorAxis]) -> Mat3 {
     let mut mat = base_orientation_matrix(orient);
     for &axis in reflected_axes {
         reflect_mat3(&mut mat, axis);
@@ -179,22 +179,40 @@ fn rotation_matrix(rotation: Rotation) -> Mat3 {
     }
 }
 
-fn reflect_mat3(orient: &mut Mat3, axis: Axis) {
+fn reflect_mat3(orient: &mut Mat3, axis: MirrorAxis) {
     match axis {
-        Axis::X => {
+        MirrorAxis::X => {
             orient.x_axis.x = -orient.x_axis.x;
             orient.y_axis.x = -orient.y_axis.x;
             orient.z_axis.x = -orient.z_axis.x;
         }
-        Axis::Y => {
+        MirrorAxis::Y => {
             orient.x_axis.y = -orient.x_axis.y;
             orient.y_axis.y = -orient.y_axis.y;
             orient.z_axis.y = -orient.z_axis.y;
         }
-        Axis::Z => {
+        MirrorAxis::Z => {
             orient.x_axis.z = -orient.x_axis.z;
             orient.y_axis.z = -orient.y_axis.z;
             orient.z_axis.z = -orient.z_axis.z;
+        }
+        // Diagonal reflections: pre-multiply by a row-swap matrix,
+        // which is equivalent to swapping the corresponding components
+        // of every column in the stored column-major matrix.
+        MirrorAxis::XY => {
+            std::mem::swap(&mut orient.x_axis.x, &mut orient.x_axis.y);
+            std::mem::swap(&mut orient.y_axis.x, &mut orient.y_axis.y);
+            std::mem::swap(&mut orient.z_axis.x, &mut orient.z_axis.y);
+        }
+        MirrorAxis::XZ => {
+            std::mem::swap(&mut orient.x_axis.x, &mut orient.x_axis.z);
+            std::mem::swap(&mut orient.y_axis.x, &mut orient.y_axis.z);
+            std::mem::swap(&mut orient.z_axis.x, &mut orient.z_axis.z);
+        }
+        MirrorAxis::YZ => {
+            std::mem::swap(&mut orient.x_axis.y, &mut orient.x_axis.z);
+            std::mem::swap(&mut orient.y_axis.y, &mut orient.y_axis.z);
+            std::mem::swap(&mut orient.z_axis.y, &mut orient.z_axis.z);
         }
     }
 }
@@ -407,7 +425,7 @@ fn walk_node(
 fn walk_mirror(
     events: &mut Vec<RenderEvent>,
     node: &SpecNode,
-    axes: &[Axis],
+    axes: &[MirrorAxis],
     colors: &ColorMap,
     registry: &AssetRegistry,
     scale: (i32, i32, i32),

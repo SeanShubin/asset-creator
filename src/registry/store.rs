@@ -293,6 +293,11 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
         }
     };
 
+    if let Err(e) = shape.validate() {
+        registry.set_error(path_str, format!("{e}"));
+        return;
+    }
+
     registry.clear_error_for(&path_str);
 
     let key = shape_key_from_path(path);
