@@ -667,11 +667,24 @@ impl Occupancy {
     }
 }
 
-/// Walk a `SpecNode` tree, expanding symmetry and imports, and build
-/// an `Occupancy` index of every cell claimed by every primitive instance.
-pub fn collect_occupancy(spec: &SpecNode, registry: &AssetRegistry) -> Occupancy {
+/// Walk a `SpecNode` tree and build an `Occupancy` index of every cell
+/// claimed by every primitive instance in this shape's own integer
+/// coordinate space.
+///
+/// **Per-shape, opaque imports.** This walker does NOT descend into
+/// imported subtrees. When it encounters an import combinator, it
+/// claims the import's placement bounds as a single opaque region
+/// attributed to the import's name, then stops. The imported shape's
+/// internal consistency is the responsibility of that shape's own
+/// collect_occupancy check (run separately against the registry entry).
+///
+/// This keeps every coordinate in the collision path integer, attributes
+/// authoring errors to the shape that actually caused them, and removes
+/// the need for scale tracking or rational comparison across import
+/// boundaries.
+pub fn collect_occupancy(spec: &SpecNode, _registry: &AssetRegistry) -> Occupancy {
     let mut occ = Occupancy::new();
-    walk_for_occupancy(&mut occ, spec, "", identity_placement(), (1, 1, 1), registry);
+    walk_for_occupancy(&mut occ, spec, "", identity_placement());
     occ
 }
 
@@ -680,8 +693,6 @@ fn walk_for_occupancy(
     node: &SpecNode,
     parent_path: &str,
     inherited: Placement,
-    scale: (i32, i32, i32),
-    registry: &AssetRegistry,
 ) {
     let base_path = append_path(parent_path, node.name.as_deref());
 
@@ -694,27 +705,21 @@ fn walk_for_occupancy(
                 } else {
                     format!("{base_path}{suffix}")
                 };
-                walk_single_for_occupancy(occ, node, &path, combined, scale, registry);
+                walk_single_for_occupancy(occ, node, &path, combined);
             }
         }
-        Combinator::Import(import_name) => {
-            let Some(imported) = registry.get_shape(import_name) else { return };
-            let Some(native_aabb) = imported.compute_aabb() else { return };
-            let placement_bounds = node.bounds.unwrap_or(native_aabb);
-
-            let remap_scale = Bounds::remap_scale(&native_aabb);
-            let new_scale = (
-                scale.0 * remap_scale.0,
-                scale.1 * remap_scale.1,
-                scale.2 * remap_scale.2,
-            );
-
-            let mut remapped = imported.clone();
-            remapped.remap_bounds(&native_aabb, &placement_bounds);
-            walk_for_occupancy(occ, &remapped, &base_path, inherited, new_scale, registry);
+        Combinator::Import(_import_name) => {
+            // Opaque import: claim the placement bounds as a single
+            // region in this shape's own coordinate space. Do NOT
+            // descend into the imported subtree — that shape's own
+            // collision check handles its internal cells.
+            if let Some(bounds) = node.bounds {
+                let transformed = apply_placement_to_bounds(inherited, bounds);
+                claim_cells(occ, &transformed, &base_path);
+            }
         }
         Combinator::None => {
-            walk_single_for_occupancy(occ, node, &base_path, inherited, scale, registry);
+            walk_single_for_occupancy(occ, node, &base_path, inherited);
         }
     }
 }
@@ -724,68 +729,30 @@ fn walk_single_for_occupancy(
     node: &SpecNode,
     path: &str,
     placement: Placement,
-    scale: (i32, i32, i32),
-    registry: &AssetRegistry,
 ) {
     if let (Some(_), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
         let transformed = apply_placement_to_bounds(placement, *bounds);
-        claim_cells(occ, &transformed, scale, path);
+        claim_cells(occ, &transformed, path);
     }
     for child in &node.children {
-        walk_for_occupancy(occ, child, path, placement, scale, registry);
+        walk_for_occupancy(occ, child, path, placement);
     }
 }
 
-fn claim_cells(
-    occ: &mut Occupancy,
-    bounds: &Bounds,
-    scale: (i32, i32, i32),
-    path: &str,
-) {
+/// Claim every integer cell inside the given bounds, attributing each
+/// to the given authoring path. Cells are unit-sized integer cubes;
+/// this is valid because per-shape checking never crosses an import
+/// boundary, so every coordinate is integer in the current shape's space.
+fn claim_cells(occ: &mut Occupancy, bounds: &Bounds, path: &str) {
     let mn = bounds.min();
     let mx = bounds.max();
-    // Integer floor/ceil division to world cells. When a primitive sits
-    // at sub-cell positions (possible inside imports with non-integer
-    // scaling ratios) we round outward: floor for min, ceil for max.
-    // That over-claims the smallest integer cell box containing the
-    // primitive. For the cell-level architecture target, non-aligned
-    // imports will eventually be disallowed, but the round-outward
-    // behavior prevents false negatives (missed collisions) in the
-    // meantime.
-    let wmin = (
-        floor_div(mn.0, scale.0),
-        floor_div(mn.1, scale.1),
-        floor_div(mn.2, scale.2),
-    );
-    let wmax = (
-        ceil_div(mx.0, scale.0),
-        ceil_div(mx.1, scale.1),
-        ceil_div(mx.2, scale.2),
-    );
-
-    for z in wmin.2..wmax.2 {
-        for y in wmin.1..wmax.1 {
-            for x in wmin.0..wmax.0 {
+    for z in mn.2..mx.2 {
+        for y in mn.1..mx.1 {
+            for x in mn.0..mx.0 {
                 occ.claim((x, y, z), path);
             }
         }
     }
-}
-
-/// Floor division for a signed dividend and a strictly positive divisor.
-fn floor_div(a: i32, b: i32) -> i32 {
-    debug_assert!(b > 0, "scale must be positive");
-    let q = a / b;
-    let r = a % b;
-    if r < 0 { q - 1 } else { q }
-}
-
-/// Ceiling division for a signed dividend and a strictly positive divisor.
-fn ceil_div(a: i32, b: i32) -> i32 {
-    debug_assert!(b > 0, "scale must be positive");
-    let q = a / b;
-    let r = a % b;
-    if r > 0 { q + 1 } else { q }
 }
 
 fn append_path(parent: &str, name: Option<&str>) -> String {
@@ -950,34 +917,63 @@ mod tests {
         assert_eq!(occ.aabb(), Some(Bounds(-3, 0, 0, 3, 1, 1)));
     }
 
+    /// Per-shape collision: imports are opaque. Placing two imports
+    /// whose placement AABBs overlap is reported as a collision
+    /// attributed to the current shape (not the imported shapes).
     #[test]
-    fn floor_div_handles_signs() {
-        assert_eq!(floor_div(10, 3), 3);
-        assert_eq!(floor_div(-10, 3), -4);
-        assert_eq!(floor_div(0, 3), 0);
-        assert_eq!(floor_div(9, 3), 3);
-        assert_eq!(floor_div(-9, 3), -3);
+    fn overlapping_import_placements_are_reported() {
+        // Shape root with two import children at overlapping placements.
+        let mut shape_a_import = leaf_spec(
+            Bounds(0, 0, 0, 3, 3, 3),
+            Symmetry::Single,
+        );
+        shape_a_import.name = Some("a".into());
+        shape_a_import.shape = None;
+        shape_a_import.import = Some("dummy_a".into());
+
+        let mut shape_b_import = leaf_spec(
+            Bounds(2, 0, 0, 5, 3, 3),
+            Symmetry::Single,
+        );
+        shape_b_import.name = Some("b".into());
+        shape_b_import.shape = None;
+        shape_b_import.import = Some("dummy_b".into());
+
+        let mut container = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), Symmetry::Single);
+        container.name = Some("parent".into());
+        container.shape = None;
+        container.bounds = None;
+        container.children = vec![shape_a_import, shape_b_import];
+
+        // No actual imports in the registry; the walker doesn't need
+        // to resolve them — it just claims their placement bounds.
+        let occ = collect_occupancy(&container, &AssetRegistry::default());
+        // Overlap region: x ∈ [2, 3], y ∈ [0, 3], z ∈ [0, 3] = 9 cells.
+        assert_eq!(occ.collision_count(), 9);
     }
 
+    /// Per-shape collision: an import placement that DOESN'T overlap a
+    /// sibling primitive in the current shape's own coords reports
+    /// no collision, even if the imported shape's internal contents
+    /// would (hypothetically) occupy other cells in world space.
     #[test]
-    fn ceil_div_handles_signs() {
-        assert_eq!(ceil_div(10, 3), 4);
-        assert_eq!(ceil_div(-10, 3), -3);
-        assert_eq!(ceil_div(0, 3), 0);
-        assert_eq!(ceil_div(9, 3), 3);
-        assert_eq!(ceil_div(-9, 3), -3);
-    }
+    fn non_overlapping_imports_pass() {
+        let mut import_a = leaf_spec(Bounds(0, 0, 0, 3, 3, 3), Symmetry::Single);
+        import_a.name = Some("a".into());
+        import_a.shape = None;
+        import_a.import = Some("dummy".into());
 
-    #[test]
-    fn claim_cells_handles_non_integer_scale() {
-        let mut occ = Occupancy::new();
-        let scale = (4, 4, 16);
-        let bounds = Bounds(8, -4, -48, 12, 0, 24);
-        claim_cells(&mut occ, &bounds, scale, "leaf");
+        let mut native = leaf_spec(Bounds(-5, 0, 0, -2, 3, 3), Symmetry::Single);
+        native.name = Some("native".into());
+
+        let mut container = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), Symmetry::Single);
+        container.name = Some("parent".into());
+        container.shape = None;
+        container.bounds = None;
+        container.children = vec![import_a, native];
+
+        let occ = collect_occupancy(&container, &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
-        let aabb = occ.aabb().unwrap();
-        assert_eq!(aabb.min(), (2, -1, -3));
-        assert_eq!(aabb.max(), (3, 0, 2));
     }
 }
 
