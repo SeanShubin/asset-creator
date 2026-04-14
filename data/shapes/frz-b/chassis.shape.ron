@@ -1,3 +1,8 @@
+// Polyhedral chassis. Previously used Cylinder + Dome with CSG Subtract
+// for weapon and sensor bays; the cell-level architecture requires no
+// AABB overlaps, so the CSG cuts are gone and the body is a solid block.
+// If cavities are wanted later they can be expressed by composing smaller
+// boxes around empty cells.
 (
     name: "chassis",
     palette: {
@@ -5,35 +10,20 @@
         "hover": (0, 2, 0),
         "sensor": (0, 0, 2),
         "blade": (3, 0, 0),
-        "bay":(0, 0, 0)
+        "bay": (0, 0, 0)
     },
     children: [
         (
             name: "body",
-            shape: Cylinder,
+            shape: Box,
             bounds: (-4, -1, -4, 4, 0, 4),
-            color: "body"
+            color: "body",
         ),
         (
             name: "top",
-            shape: Dome,
-            bounds: (-4, 0, -4, 4, 1, 4),
-            color: "body"
-        ),
-        (
-            name: "weapon_bay",
             shape: Box,
-            bounds: (2,-1,-2,3,0,4),
-            color: "bay",
-            combine: Subtract,
-            symmetry: PairX,
+            bounds: (-4, 0, -4, 4, 1, 4),
+            color: "body",
         ),
-        (
-        name: "sensor_bay",
-            shape:Cylinder,
-            bounds: (-1, 0, -1, 1, 1, 1),
-            color:"bay",
-            combine: Subtract
-        )
     ],
 )

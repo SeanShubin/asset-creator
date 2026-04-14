@@ -257,10 +257,8 @@ pub fn compute_mesh_transform(
     let local_y_size = pick_size_for_direction(om.y_axis, size);
     let local_z_size = pick_size_for_direction(om.z_axis, size);
 
-    let local_scale = match shape {
-        PrimitiveShape::Torus => Vec3::new(local_x_size, local_y_size / 0.3, local_z_size),
-        _ => Vec3::new(local_x_size, local_y_size, local_z_size),
-    };
+    let _ = shape; // no primitive-specific scale adjustment; all three use (x, y, z).
+    let local_scale = Vec3::new(local_x_size, local_y_size, local_z_size);
 
     let col_x = om.x_axis * local_scale.x;
     let col_y = om.y_axis * local_scale.y;

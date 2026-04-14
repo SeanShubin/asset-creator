@@ -503,12 +503,7 @@ fn make_mesh(
 ) -> (Handle<Mesh>, Handle<StandardMaterial>) {
     let mesh = match shape {
         PrimitiveShape::Box => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        PrimitiveShape::Sphere => meshes.add(Sphere::new(0.5).mesh().build()),
-        PrimitiveShape::Cylinder => meshes.add(Cylinder::new(0.5, 1.0).mesh().build()),
-        PrimitiveShape::Cone => meshes.add(super::meshes::create_cone_mesh(24, 32)),
-        PrimitiveShape::Dome => meshes.add(super::meshes::create_unit_dome(24, 32)),
         PrimitiveShape::Wedge => meshes.add(super::meshes::create_wedge_mesh()),
-        PrimitiveShape::Torus => meshes.add(super::meshes::create_torus_mesh(32, 16)),
         PrimitiveShape::Corner => meshes.add(super::meshes::create_unit_corner()),
     };
 

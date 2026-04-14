@@ -172,12 +172,7 @@ pub enum Combinator<'a> {
 #[derive(Deserialize, Clone, Copy, Debug)]
 pub enum PrimitiveShape {
     Box,
-    Sphere,
-    Cylinder,
-    Dome,
-    Cone,
     Wedge,
-    Torus,
     Corner,
 }
 

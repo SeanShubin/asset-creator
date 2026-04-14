@@ -5,20 +5,20 @@
         "hover": (0, 2, 0),
         "sensor": (0, 0, 2),
         "blade": (3, 0, 0),
-        "bay":(0, 0, 0)
+        "bay": (0, 0, 0)
     },
     children: [
         (
             name: "sensor_top",
-            shape:Dome,
+            shape: Box,
             bounds: (-1, 0, -1, 1, 1, 1),
-            color:"sensor",
+            color: "sensor",
         ),
         (
             name: "sensor_base",
-            shape:Cylinder,
+            shape: Box,
             bounds: (-1, -1, -1, 1, 0, 1),
-            color:"sensor",
+            color: "sensor",
         )
     ],
 )

@@ -80,12 +80,7 @@ fn primitive_sdf(shape: PrimitiveShape, world_tf: &Transform) -> Tree {
     // Unit SDFs: shapes from -0.5 to 0.5
     match shape {
         PrimitiveShape::Box => sdf_box(lx, ly, lz),
-        PrimitiveShape::Sphere => sdf_sphere(lx, ly, lz),
-        PrimitiveShape::Cylinder => sdf_cylinder(lx, ly, lz),
-        PrimitiveShape::Dome => sdf_dome(lx, ly, lz),
-        PrimitiveShape::Cone => sdf_cone(lx, ly, lz),
         PrimitiveShape::Wedge => sdf_wedge(lx, ly, lz),
-        PrimitiveShape::Torus => sdf_torus(lx, ly, lz),
         PrimitiveShape::Corner => sdf_corner(lx, ly, lz),
     }
 }
@@ -94,38 +89,6 @@ fn primitive_sdf(shape: PrimitiveShape, world_tf: &Transform) -> Tree {
 
 fn sdf_box(x: Tree, y: Tree, z: Tree) -> Tree {
     (x.abs() - 0.5).max(y.abs() - 0.5).max(z.abs() - 0.5)
-}
-
-fn sdf_sphere(x: Tree, y: Tree, z: Tree) -> Tree {
-    (x.square() + y.square() + z.square()).sqrt() - 0.5
-}
-
-fn sdf_cylinder(x: Tree, y: Tree, z: Tree) -> Tree {
-    // Cylinder along Y axis, radius 0.5, height 1.0
-    let radial = (x.square() + z.square()).sqrt() - 0.5;
-    let vertical = y.abs() - 0.5;
-    radial.max(vertical)
-}
-
-fn sdf_dome(x: Tree, y: Tree, z: Tree) -> Tree {
-    // Ellipsoidal cap matching the mesh builder's profile:
-    // r = 0.5*cos(t), y = -0.5 + sin(t) for t in [0, PI/2]
-    // This traces an ellipse: (r/0.5)² + (y+0.5)² = 1
-    // Which is: 4(x² + z²) + (y+0.5)² = 1, clipped to y >= -0.5
-    let scaled_xz = (x.square() + z.square()) * 4.0;
-    let dy = y.clone() + 0.5;
-    let ellipsoid = (scaled_xz + dy.square()).sqrt() - 1.0;
-    let clip = -(y + 0.5); // y >= -0.5
-    ellipsoid.max(clip)
-}
-
-fn sdf_cone(x: Tree, y: Tree, z: Tree) -> Tree {
-    // Cone: base at y=-0.5 (radius 0.5), tip at y=0.5
-    // Radius at height y: r = 0.5 * (0.5 - y)
-    let r_at_y = (Tree::from(0.5) - y.clone()) * 0.5;
-    let radial = (x.square() + z.square()).sqrt() - r_at_y;
-    let cap = -y - 0.5; // y >= -0.5
-    radial.max(cap)
 }
 
 fn sdf_wedge(x: Tree, y: Tree, z: Tree) -> Tree {
@@ -138,14 +101,6 @@ fn sdf_wedge(x: Tree, y: Tree, z: Tree) -> Tree {
     // Slope plane: y + z <= 0 (normalized)
     let slope = (y + z) * std::f32::consts::FRAC_1_SQRT_2;
     bottom.max(back).max(left).max(right).max(slope)
-}
-
-fn sdf_torus(x: Tree, y: Tree, z: Tree) -> Tree {
-    // Torus: major radius 0.35, minor radius 0.15
-    let major_r = 0.35;
-    let minor_r = 0.15;
-    let xz_dist = (x.square() + z.square()).sqrt() - major_r;
-    (xz_dist.square() + y.square()).sqrt() - minor_r
 }
 
 fn sdf_corner(x: Tree, y: Tree, z: Tree) -> Tree {

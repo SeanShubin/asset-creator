@@ -1,7 +1,0 @@
-(
-    name: "cone",
-    palette: { "body": (2, 2, 1) },
-    shape: Cone,
-    bounds: (-1, -1, -1, 1, 1, 1),
-    color: "body",
-)

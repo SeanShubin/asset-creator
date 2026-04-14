@@ -1,7 +1,0 @@
-(
-    name: "dome",
-    palette: { "body": (1, 2, 2) },
-    shape: Dome,
-    bounds: (-1, -1, -1, 1, 1, 1),
-    color: "body",
-)

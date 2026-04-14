@@ -42,20 +42,10 @@
             color: "body",
             symmetry: QuadXZ,
         ),
-        (
-            name: "weapon_bay",
-            shape: Box,
-            bounds: (2, -1, -2, 3, 0, 4),
-            color: "bay",
-            combine: Subtract,
-            symmetry: PairX,
-        ),
-        (
-            name: "sensor_bay",
-            shape: Box,
-            bounds: (-1, 0, -1, 1, 1, 1),
-            color: "bay",
-            combine: Subtract,
-        ),
+        // Previous versions had a `weapon_bay` Box and a `sensor_bay` Box
+        // with `combine: Subtract` that cut cavities into the body.
+        // Cell-level architecture has no CSG, so those are gone. If
+        // bays are wanted later they can be authored by composing the
+        // body out of smaller boxes around empty cells.
     ],
 )
