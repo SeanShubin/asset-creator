@@ -7,40 +7,58 @@ use super::spec::PrimitiveShape;
 // RawMesh — intermediate mesh representation for CSG and conversion
 // =====================================================================
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct RawMesh {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
+    /// Per-vertex RGBA color. Always the same length as `positions`.
+    /// The fusion step fills this with the per-cell authored color so
+    /// a single fused mesh can carry cells of different colors without
+    /// needing multiple materials.
+    pub colors: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
 }
 
 impl RawMesh {
     pub fn to_bevy_mesh(self) -> Mesh {
-        build_mesh(self.positions, self.normals, self.uvs, self.indices)
+        build_mesh(self.positions, self.normals, self.uvs, self.colors, self.indices)
     }
 
-    /// Merge another RawMesh into this one (simple concatenation, no CSG).
-    pub fn merge(&mut self, other: &RawMesh) {
-        let offset = self.positions.len() as u32;
-        self.positions.extend_from_slice(&other.positions);
-        self.normals.extend_from_slice(&other.normals);
-        self.uvs.extend_from_slice(&other.uvs);
-        self.indices.extend(other.indices.iter().map(|i| i + offset));
-    }
-
-    /// Apply an affine transform to all positions and normals.
-    pub fn apply_transform(&mut self, tf: &Transform) {
-        let mat = tf.compute_matrix();
+    /// Append a template mesh transformed into world space, with every
+    /// vertex stamped with the given color. Used by the fusion step to
+    /// accumulate cell geometry into a per-part mesh.
+    pub fn append_transformed(
+        &mut self,
+        template: &RawMesh,
+        world_tf: &Transform,
+        color: [f32; 4],
+    ) {
+        let mat = world_tf.compute_matrix();
         let normal_mat = mat.inverse().transpose();
-        for pos in &mut self.positions {
+        let base = self.positions.len() as u32;
+
+        for pos in &template.positions {
             let p = mat.transform_point3(Vec3::from(*pos));
-            *pos = [p.x, p.y, p.z];
+            self.positions.push([p.x, p.y, p.z]);
         }
-        for normal in &mut self.normals {
+        for normal in &template.normals {
             let n = normal_mat.transform_vector3(Vec3::from(*normal)).normalize();
-            *normal = [n.x, n.y, n.z];
+            self.normals.push([n.x, n.y, n.z]);
         }
+        for uv in &template.uvs {
+            self.uvs.push(*uv);
+        }
+        for _ in 0..template.positions.len() {
+            self.colors.push(color);
+        }
+        for idx in &template.indices {
+            self.indices.push(base + idx);
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
     }
 }
 
@@ -89,16 +107,12 @@ fn create_raw_box() -> RawMesh {
         [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [-0.5, -0.5, 0.5],
         [-1.0, 0.0, 0.0]);
 
-    RawMesh { positions, normals, uvs, indices }
+    RawMesh { positions, normals, uvs, colors: Vec::new(), indices }
 }
 
 // =====================================================================
 // Wedge — box that tapers to zero height on one edge
 // =====================================================================
-
-pub fn create_wedge_mesh() -> Mesh {
-    create_raw_wedge().to_bevy_mesh()
-}
 
 fn create_raw_wedge() -> RawMesh {
     let mut positions = Vec::new();
@@ -133,7 +147,7 @@ fn create_raw_wedge() -> RawMesh {
         [ 0.5, -0.5, -0.5], [ 0.5, -0.5,  0.5], [ 0.5,  0.5, -0.5],
         [1.0, 0.0, 0.0]);
 
-    RawMesh { positions, normals, uvs, indices }
+    RawMesh { positions, normals, uvs, colors: Vec::new(), indices }
 }
 
 // =====================================================================
@@ -142,11 +156,6 @@ fn create_raw_wedge() -> RawMesh {
 
 /// Unit corner: fills the (-X, -Y, -Z) corner of a 1x1x1 cube.
 /// Three right-triangle faces on the cube walls + one diagonal face.
-/// Orient/flip determines which corner the solid fills.
-pub fn create_unit_corner() -> Mesh {
-    create_raw_corner().to_bevy_mesh()
-}
-
 fn create_raw_corner() -> RawMesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -188,7 +197,7 @@ fn create_raw_corner() -> RawMesh {
         [diag_normal.x, diag_normal.y, diag_normal.z],
     );
 
-    RawMesh { positions, normals, uvs, indices }
+    RawMesh { positions, normals, uvs, colors: Vec::new(), indices }
 }
 
 // =====================================================================
@@ -229,12 +238,16 @@ fn build_mesh(
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
+    colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
 ) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    if !colors.is_empty() {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    }
     mesh.insert_indices(Indices::U32(indices));
     mesh
 }

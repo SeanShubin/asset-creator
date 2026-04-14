@@ -1,36 +1,27 @@
 mod animation;
-mod csg;
 mod interpreter;
 mod meshes;
 mod render;
-mod sdf;
 mod spec;
 
 use bevy::prelude::*;
 
 pub use animation::{animate_shapes, ShapeAnimator};
-pub use csg::{CsgStats, perform_csg_uncached};
 pub use interpreter::{
-    despawn_shape, rebuild_csg_on_toggle, spawn_shape, spawn_shape_as_sdf,
-    spawn_shape_with_layers, suppress_csg_member_meshes, ShapePart, ShapeRoot,
+    despawn_shape, spawn_shape, spawn_shape_with_layers, ShapePart, ShapeRoot,
 };
-pub use render::{collect_raw_mesh, compile, ColorMap, RenderEvent};
+pub use render::{compile, CompiledShape};
 #[allow(unused_imports)]
 pub use spec::{
     collect_occupancy, identity_placement, Bounds, Collision, CombineMode,
     Occupancy, Placement, SpecNode, Symmetry,
 };
 
-/// Plugin that maintains shape system invariants.
-/// Register this once; it ensures CSG member meshes are always suppressed
-/// regardless of which editor or consumer spawns shapes.
+/// Plugin placeholder for shape-system invariants. Currently empty
+/// because the cell-level fusion pipeline has no runtime maintenance
+/// systems — everything is computed at shape spawn time.
 pub struct ShapePlugin;
 
 impl Plugin for ShapePlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(Update, (
-            bevy::ecs::schedule::apply_deferred,
-            suppress_csg_member_meshes,
-        ).chain());
-    }
+    fn build(&self, _app: &mut App) {}
 }

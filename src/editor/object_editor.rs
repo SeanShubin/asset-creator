@@ -5,9 +5,8 @@ use std::path::PathBuf;
 use crate::browser::ActiveEditor;
 use crate::registry::AssetRegistry;
 use crate::shape::{
-    animate_shapes, collect_occupancy, rebuild_csg_on_toggle,
+    animate_shapes, collect_occupancy, despawn_shape, spawn_shape,
     ShapeAnimator, ShapePart, ShapeRoot,
-    despawn_shape, spawn_shape, spawn_shape_as_sdf,
 };
 use super::orbit_camera::{self, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
 
@@ -21,7 +20,6 @@ impl Plugin for ObjectEditorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EditorActivation>()
             .init_resource::<ShapeReloadState>()
-            .init_resource::<CsgPreviewMode>()
             .init_resource::<CameraFitState>()
             .init_resource::<SceneStats>()
             .init_resource::<SceneBounds>()
@@ -50,16 +48,9 @@ impl Plugin for ObjectEditorPlugin {
                     orbit_camera::apply_orbit.run_if(is_object_active),
                     orbit_camera::apply_zoom.run_if(is_object_active),
                 ).chain(),
-                // Independent systems
-
                 animate_shapes.run_if(is_object_active),
                 update_light.run_if(is_object_active),
-                // CSG toggle: UI → rebuild (may despawn) → flush (so suppress sees consistent state)
-                (
-                    part_tree_ui.run_if(is_object_active),
-                    rebuild_csg_on_toggle.run_if(is_object_active),
-                    bevy::ecs::schedule::apply_deferred,
-                ).chain(),
+                part_tree_ui.run_if(is_object_active),
                 draw_grid.run_if(is_object_active),
             ));
     }
@@ -86,15 +77,6 @@ struct EditorActivation {
 struct ShapeReloadState {
     needs_reload: bool,
     last_shape_generation: u64,
-}
-
-/// When true, render the shape using SDF dual contouring (same as CSG output).
-/// Only applies to shapes without CSG children.
-#[derive(Resource, Default)]
-struct CsgPreviewMode {
-    enabled: bool,
-    /// Whether the current shape has CSG — if so, the toggle is hidden.
-    shape_has_csg: bool,
 }
 
 /// Camera fit state: computed on model load, used by zoom controls.
@@ -244,7 +226,6 @@ fn reload_shape(
     mut reload: ResMut<ShapeReloadState>,
     mut stats: ResMut<SceneStats>,
     mut bounds: ResMut<SceneBounds>,
-    mut preview: ResMut<CsgPreviewMode>,
     activation: Res<EditorActivation>,
     registry: Res<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
@@ -262,13 +243,8 @@ fn reload_shape(
         return;
     };
 
-    preview.shape_has_csg = shape_file.has_csg_children();
-
     // Compute the cell-level occupancy index once per reload. This is the
     // single source of truth for scene AABB AND collision count.
-    // Subset-enumeration `compute_aabb` is kept alive for the CSG paths
-    // that still use `Bounds::enclosing`; those go away with CSG in
-    // step 6 of the architecture plan.
     let occupancy = collect_occupancy(shape_file, &registry);
 
     if let Some(aabb) = occupancy.aabb() {
@@ -296,11 +272,7 @@ fn reload_shape(
         }
     }
 
-    if preview.enabled && !preview.shape_has_csg {
-        spawn_shape_as_sdf(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
-    } else {
-        spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
-    }
+    spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
     stats.needs_update = true;
 }
 
@@ -607,8 +579,6 @@ fn part_tree_ui(
     mut camera: Query<&mut Projection, With<OrbitCamera>>,
     fit: Res<CameraFitState>,
     stats: Res<SceneStats>,
-    mut preview: ResMut<CsgPreviewMode>,
-    mut reload: ResMut<ShapeReloadState>,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else { return };
     let mut toggles: Vec<(Entity, Visibility)> = Vec::new();
@@ -616,13 +586,6 @@ fn part_tree_ui(
     egui::SidePanel::left("part_tree").min_width(200.0).show(ctx, |ui| {
         camera_controls(ui, &mut orbit, &mut camera, &fit, &stats);
         ui.separator();
-
-        if !preview.shape_has_csg {
-            if ui.checkbox(&mut preview.enabled, "Preview CSG mesh").changed() {
-                reload.needs_reload = true;
-            }
-            ui.separator();
-        }
 
         animation_controls(ui, &roots, &mut animators);
         ui.heading("Part Tree");

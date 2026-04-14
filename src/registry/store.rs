@@ -120,6 +120,20 @@ impl AssetRegistry {
         self.clear_error_for(&path);
         self.errors.push(AssetError { path, message });
     }
+
+    /// Test-only helper: insert a `SpecNode` directly under a given key
+    /// so downstream tests can exercise import resolution without
+    /// touching the filesystem.
+    #[cfg(test)]
+    pub fn test_insert_shape(&mut self, key: impl Into<String>, data: SpecNode) {
+        self.shapes.insert(
+            key.into(),
+            RegisteredAsset {
+                data,
+                path: std::path::PathBuf::new(),
+            },
+        );
+    }
 }
 
 // =====================================================================

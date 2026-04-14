@@ -74,11 +74,6 @@ impl SpecNode {
         }
     }
 
-    /// Whether any children use CSG (Subtract or Clip combine modes).
-    pub fn has_csg_children(&self) -> bool {
-        self.children.iter().any(|c| c.combine != CombineMode::Union)
-    }
-
     /// Compute the AABB enclosing this node and all descendants.
     /// Integer arithmetic throughout. Symmetry expansion is handled by
     /// applying each placement to the node's bounds and including the
@@ -155,7 +150,6 @@ pub enum CombineMode {
     #[default]
     Union,
     Subtract,
-    Clip,
 }
 
 /// What kind of combinator this node is, if any.
@@ -184,21 +178,6 @@ pub enum PrimitiveShape {
 pub struct Bounds(pub i32, pub i32, pub i32, pub i32, pub i32, pub i32);
 
 impl Bounds {
-    /// Compute the AABB enclosing a list of spec nodes.
-    pub fn enclosing(nodes: &[SpecNode]) -> Option<Bounds> {
-        let mut min = (i32::MAX, i32::MAX, i32::MAX);
-        let mut max = (i32::MIN, i32::MIN, i32::MIN);
-        let mut found = false;
-        for node in nodes {
-            node.collect_bounds(identity_placement(), &mut min, &mut max, &mut found);
-        }
-        if found {
-            Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
-        } else {
-            None
-        }
-    }
-
     /// Center as float — used for camera positioning and render export.
     /// This is the one float escape hatch and it is NEVER called during
     /// spec-side processing.
@@ -816,39 +795,6 @@ fn append_path(parent: &str, name: Option<&str>) -> String {
         (false, Some(n)) => format!("{parent}/{n}"),
         (false, None) => parent.to_string(),
     }
-}
-
-// =====================================================================
-// Expand symmetry for CSG rebuild
-// =====================================================================
-
-/// Flatten symmetry combinators on a list of children into a flat list
-/// of pre-transformed `(SpecNode, Placement)` pairs. Used by CSG rebuild
-/// to produce the same sequence the render walker would.
-///
-/// Each output pair represents one rendered copy with its accumulated
-/// placement. The caller applies the placement to bounds / orient at
-/// the appropriate moment.
-pub fn expand_symmetry_children(children: &[SpecNode]) -> Vec<(SpecNode, Placement)> {
-    let mut result = Vec::new();
-    for child in children {
-        if child.symmetry != Symmetry::Single {
-            let mut base = child.clone();
-            base.symmetry = Symmetry::Single;
-            for (placement, suffix) in placements(child.symmetry) {
-                let mut copy = base.clone();
-                if !suffix.is_empty() {
-                    if let Some(ref name) = copy.name {
-                        copy.name = Some(format!("{name}{suffix}"));
-                    }
-                }
-                result.push((copy, *placement));
-            }
-        } else {
-            result.push((child.clone(), identity_placement()));
-        }
-    }
-    result
 }
 
 // =====================================================================
