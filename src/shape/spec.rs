@@ -110,13 +110,21 @@ impl SpecNode {
             let b_min = b.min();
             let b_max = b.max();
 
-            include_point(min, max, b_min, found);
-            include_point(min, max, b_max, found);
-
-            for &axis in &self.mirror {
-                let (mir_min, mir_max) = reflect_mirror_extents(b_min, b_max, axis);
-                include_point(min, max, mir_min, found);
-                include_point(min, max, mir_max, found);
+            // Enumerate every subset of the mirror list and apply its
+            // composition in list order. For orthogonal axes
+            // (`X`/`Y`/`Z`) individual reflections would suffice — they
+            // commute and each subset's AABB is just the convex hull of
+            // single-axis reflections. But the diagonal axes
+            // (`XY`/`XZ`/`YZ`) don't commute with the orthogonal ones, so
+            // cross-term copies like `{X, XY}` visit quadrants no single
+            // reflection reaches. We enumerate all 2^n subsets to cover
+            // every copy, and since `mirror.len()` is bounded at 6 the
+            // cost is at most 64 transforms per node.
+            let combos = mirror_combinations(&self.mirror);
+            for (subset, _) in &combos {
+                let (sub_min, sub_max) = compose_mirror_sequence(b_min, b_max, subset);
+                include_point(min, max, sub_min, found);
+                include_point(min, max, sub_max, found);
             }
         }
         for child in &self.children {
@@ -215,6 +223,26 @@ fn include_point(
     max.1 = max.1.max(p.1);
     max.2 = max.2.max(p.2);
     *found = true;
+}
+
+/// Compose a sequence of mirror transformations onto an AABB, applying
+/// each axis in order. Used by `collect_bounds` to compute the full
+/// enclosing AABB across every mirror subset. Each individual
+/// `reflect_mirror_extents` call preserves ordering (min ≤ max), so the
+/// chained result is still a valid canonicalized AABB.
+pub(super) fn compose_mirror_sequence(
+    b_min: (i32, i32, i32),
+    b_max: (i32, i32, i32),
+    axes: &[MirrorAxis],
+) -> ((i32, i32, i32), (i32, i32, i32)) {
+    let mut cur_min = b_min;
+    let mut cur_max = b_max;
+    for &axis in axes {
+        let (new_min, new_max) = reflect_mirror_extents(cur_min, cur_max, axis);
+        cur_min = new_min;
+        cur_max = new_max;
+    }
+    (cur_min, cur_max)
 }
 
 /// Compute the AABB of a mirror copy for the given mirror axis. X/Y/Z flip
@@ -704,6 +732,22 @@ mod tests {
             let spec = leaf_spec(Bounds(1, 3, 0, 2, 5, 1), combo.clone());
             assert!(spec.validate().is_ok(), "rejected valid combo {:?}", combo);
         }
+    }
+
+    /// `collect_bounds` must enumerate all 2^n mirror subsets when the
+    /// list contains diagonals. Single-axis union is wrong because
+    /// cross-term copies like `{X, XY}` visit quadrants no individual
+    /// reflection reaches. Regression for the "blue grid two cells too
+    /// close" bug in cornered_cube.shape.ron.
+    #[test]
+    fn mixed_axis_and_diagonal_mirror_aabb_covers_cross_terms() {
+        let spec = leaf_spec(
+            Bounds(1, -1, -1, 3, 1, 1),
+            vec![MirrorAxis::X, MirrorAxis::XY, MirrorAxis::XZ],
+        );
+        let aabb = spec.compute_aabb().expect("should produce an aabb");
+        assert_eq!(aabb.min(), (-3, -3, -3));
+        assert_eq!(aabb.max(), (3, 3, 3));
     }
 
     /// The original `[X, Y, Z]` should still work and produce 8 copies

@@ -3,55 +3,25 @@
     palette: { "body": (2, 2, 2) },
     children: [
         (
-            name:"x-box",
+            name:"box",
             shape: Box,
             bounds: (1, -1, -1, 3, 1, 1),
             color: "body",
             mirror: [X, XY, XZ]
         ),
-        // (
-        //     name:"y-box",
-        //     shape: Box,
-        //     bounds: (-1, 1, -1, 1, 3, 1),
-        //     color: "body",
-        //     mirror: [Y]
-        // ),
-        // (
-        //     name:"z-box",
-        //     shape: Box,
-        //     bounds: (-1, -1, 1, 1, 1, 3),
-        //     color: "body",
-        //     mirror: [Z]
-        // ),
-        // (
-        //     name:"wedge-x",
-        //     shape: Wedge,
-        //     bounds: (-1, 1, 1, 1, 3, 3),
-        //     color: "body",
-        //     mirror: [Y, Z]
-        // ),
-        // (
-        //     name:"wedge-y",
-        //     shape: Wedge,
-        //     bounds: (1, -1, 1, 3, 1, 3),
-        //     color: "body",
-        //     orient: (Front, NoMirror, RotateClockwise),
-        //     mirror: [X, Z]
-        // ),
-        // (
-        //     name:"wedge-z",
-        //     shape: Wedge,
-        //     bounds: (1, 1, -1, 3, 3, 1),
-        //     color: "body",
-        //     orient: (Right, NoMirror, NoRotation),
-        //     mirror: [X,Y]
-        // ),
-        // (
-        //     name:"corner",
-        //     shape: Corner,
-        //     bounds: (1, 1, 1, 3, 3, 3),
-        //     color: "body",
-        //     mirror: [X, Y, Z]
-        // ),
+        (
+            name:"wedge",
+            shape: Wedge,
+            bounds: (-1, 1, 1, 1, 3, 3),
+            color: "body",
+            mirror: [Y, Z, XY, XZ]
+        ),
+        (
+            name:"corner",
+            shape: Corner,
+            bounds: (1, 1, 1, 3, 3, 3),
+            color: "body",
+            mirror: [X, Y, Z]
+        ),
     ],
 )
