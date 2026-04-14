@@ -61,6 +61,14 @@
             color:"b",
             orient:(Left, NoMirror, NoRotation),
             mirror: [X]
+        ),
+        (
+            name: "topC",
+            shape:Wedge,
+            bounds:(-2,0,4,2,1,2),
+            color:"c",
+            orient:(Front, NoMirror, NoRotation),
+            mirror: [Z]
         )
     ],
 )
