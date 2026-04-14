@@ -232,7 +232,9 @@ fn load_ron_files(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if filter(&path) {
+        if path.is_dir() {
+            load_ron_files(&path, registry, filter, loader);
+        } else if filter(&path) {
             loader(&path, registry);
         }
     }
