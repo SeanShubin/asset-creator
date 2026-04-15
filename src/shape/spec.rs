@@ -56,7 +56,7 @@ pub struct SpecNode {
     #[serde(default)]
     pub symmetry: Symmetry,
     #[serde(default)]
-    pub combine: CombineMode,
+    pub subtract: bool,
     #[serde(default)]
     pub animations: Vec<AnimState>,
 }
@@ -139,17 +139,6 @@ impl SpecNode {
             child.remap_bounds(from, to);
         }
     }
-}
-
-// =====================================================================
-// Combine mode
-// =====================================================================
-
-#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq)]
-pub enum CombineMode {
-    #[default]
-    Union,
-    Subtract,
 }
 
 /// What kind of combinator this node is, if any.
@@ -786,7 +775,7 @@ mod tests {
             colors: vec![],
             children: vec![],
             symmetry,
-            combine: CombineMode::Union,
+            subtract: false,
             animations: vec![],
         }
     }

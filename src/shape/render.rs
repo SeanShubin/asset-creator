@@ -8,7 +8,7 @@
 //! to named sub-parts — those become child `CompiledShape`s.
 //!
 //! The compile step resolves symmetry expansion, import remapping, and
-//! `combine: Subtract` all in integer cell space, then bakes the
+//! `subtract: true` all in integer cell space, then bakes the
 //! surviving cells into per-part fused meshes with vertex colors. The
 //! interpreter then spawns one Bevy entity per `CompiledShape` with the
 //! fused meshes attached as child `Mesh3d` entities.
@@ -22,7 +22,7 @@ use crate::util::Color3;
 use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
     apply_placement_to_bounds, compose_placements, identity_placement,
-    placements, Bounds, CombineMode, Combinator, Facing, Mirroring, Orientation,
+    placements, Bounds, Combinator, Facing, Mirroring, Orientation,
     Placement, PrimitiveShape, Rotation, SignedAxis, SpecNode,
 };
 
@@ -142,7 +142,7 @@ pub fn orientation_to_mat3(orient: &Orientation, placement: Placement) -> Mat3 {
     apply_placement_to_mat3(placement, base)
 }
 
-fn base_orientation_matrix(orient: &Orientation) -> Mat3 {
+pub fn base_orientation_matrix(orient: &Orientation) -> Mat3 {
     let facing = facing_matrix(orient.facing());
     let mirror = match orient.mirroring() {
         Mirroring::NoMirror => Mat3::IDENTITY,
@@ -645,20 +645,17 @@ fn walk_node_body(
             return;
         }
 
-        match spec.combine {
-            CombineMode::Subtract => {
-                // Record the bounds so finish() can remove overlapping
-                // Union cells. The orient/shape of a Subtract child is
-                // irrelevant — only its cell set matters.
-                group
-                    .subtract_bounds
-                    .push((bounds, placement, scale));
-            }
-            CombineMode::Union => {
-                add_union_primitive(
-                    shape, &bounds, placement, scale, spec.orient, colors, spec, group,
-                );
-            }
+        if spec.subtract {
+            // Record the bounds so finish() can remove overlapping
+            // union cells. The orient/shape of a subtract child is
+            // irrelevant — only its cell set matters.
+            group
+                .subtract_bounds
+                .push((bounds, placement, scale));
+        } else {
+            add_union_primitive(
+                shape, &bounds, placement, scale, spec.orient, colors, spec, group,
+            );
         }
     }
 
@@ -767,7 +764,7 @@ fn walk_import(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::spec::{AnimState, CombineMode, Orientation, Symmetry};
+    use super::super::spec::{AnimState, Orientation, Symmetry};
     use std::collections::HashMap;
 
     fn leaf_box(name: &str, bounds: Bounds) -> SpecNode {
@@ -784,7 +781,7 @@ mod tests {
             colors: vec![],
             children: vec![],
             symmetry: Symmetry::Single,
-            combine: CombineMode::Union,
+            subtract: false,
             animations: Vec::<AnimState>::new(),
         }
     }

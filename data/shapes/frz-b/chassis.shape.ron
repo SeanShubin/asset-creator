@@ -22,8 +22,10 @@
         (
             name: "corner",
             shape: Wedge,
-            bounds: (-2, 0, -2, 2, 1, 2),
-            color: "body",
+            bounds: (-4, -1, 4, -2, 1, 2),
+            color: "hover",
+            orient: (Back, NoMirror, RotateClockwise),
+            subtract: true
         ),
         // (
         //     name: "top",
