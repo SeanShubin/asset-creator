@@ -20,10 +20,16 @@
             color: "body",
         ),
         (
-            name: "top",
-            shape: Box,
-            bounds: (-4, 0, -4, 4, 1, 4),
+            name: "corner",
+            shape: Wedge,
+            bounds: (-2, 0, -2, 2, 1, 2),
             color: "body",
         ),
+        // (
+        //     name: "top",
+        //     shape: Box,
+        //     bounds: (-4, 0, -4, 4, 1, 4),
+        //     color: "body",
+        // ),
     ],
 )
