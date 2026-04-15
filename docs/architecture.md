@@ -269,17 +269,18 @@ Grid cells are 1 world unit. Colored axis lines mark the origin on each grid pla
 
 The zoom system provides deterministic, angle-independent fit scaling for the 3D object editor.
 
-**Fit scale** is the orthographic scale at which the object fills the viewport with approximately 5% buffer on each side of the constraining dimension. It is computed using fixed projection angles (yaw=45°, pitch=45°) so the result does not depend on the user's current orbit.
+**Fit scale** is the orthographic scale at which the object fills the visible viewport with approximately 5% buffer per side (10% total) on the constraining dimension. The non-constraining dimension has at least that much margin. It is computed using fixed projection angles (yaw=45°, pitch=45°) against the scene AABB (treated as a single box — the actual geometry is ignored for fit purposes), so the result does not depend on the user's current orbit.
+
+**Visible viewport** is the egui central rect — the screen area left over after side panels have been drawn. It is tracked each frame in `ViewportRect` (logical and physical pixels) and is the single abstraction boundary for "what's visible." The `Camera.viewport` is set to this rect each frame, and all fit/zoom math reads viewport size from this resource — hardcoded panel widths are not used.
 
 **Projection math** (computed once, stored as constants):
 - At yaw=45°, pitch=45°, a unit AABB projects to:
   - Screen width = `max_extent * sqrt(2)` ≈ `max_extent * 1.414`
   - Screen height = `max_extent * (1 + sqrt(2)/2)` ≈ `max_extent * 1.707`
-- The constraining dimension (width or height) is whichever requires the larger scale
-- Usable viewport width = window width - left panel - right panel
+- The constraining dimension (width or height) is whichever requires the larger scale.
 
 **Zoom percentage:**
-- 100% = fit scale (object fills viewport with ~5% buffer)
+- 100% = fit scale (object fills viewport with ~5% buffer per side)
 - 200% = maximum zoom in (`ortho.scale = fit_scale / 2`)
 - 10% = maximum zoom out (`ortho.scale = fit_scale * 10`)
 - Formula: `zoom_pct = fit_scale / ortho.scale * 100`
@@ -294,6 +295,12 @@ The zoom system provides deterministic, angle-independent fit scaling for the 3D
 - Do NOT change ortho.scale or orbit angles
 - Zoom percentage may shift (because fit_scale changed)
 - If current zoom exceeds new limits, it remains until the user scrolls, then clamps
+
+**Behavior on window/panel resize** (viewport rect changes while the same shape is loaded):
+- Recompute fit_scale against the new viewport size and update zoom limits
+- Scale `ortho.scale` by `new_fit / old_fit` so the current **zoom percentage is preserved** — the object's apparent pixel size changes with the window, but "100% still means fit"
+- This also handles the edge case where a different dimension becomes the constraining one (width vs height) — `compute_fit_scale` recomputes `max(scale_for_width, scale_for_height)` from scratch, so the transition is seamless
+- If the visible viewport is degenerate (zero width or height — e.g. side panels fill the window), the update is skipped and the previous valid fit/zoom/camera-viewport are held until a renderable viewport returns
 
 ### 2D Pan/Zoom Camera
 

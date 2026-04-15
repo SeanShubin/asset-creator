@@ -1,8 +1,9 @@
 use bevy::prelude::*;
+use bevy::render::camera::Viewport;
 use bevy_egui::{EguiContexts, egui};
 use std::path::PathBuf;
 
-use crate::browser::ActiveEditor;
+use crate::browser::{browser_ui, ActiveEditor};
 use crate::registry::AssetRegistry;
 use crate::shape::{
     animate_shapes, collect_occupancy, despawn_shape, spawn_shape,
@@ -26,6 +27,7 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<OrbitState>()
             .init_resource::<ZoomLimits>()
             .init_resource::<CameraIntent>()
+            .init_resource::<ViewportRect>()
             .add_systems(Update, (
                 // Phase 1: detect what needs to change
                 (
@@ -50,7 +52,16 @@ impl Plugin for ObjectEditorPlugin {
                 ).chain(),
                 animate_shapes.run_if(is_object_active),
                 update_light.run_if(is_object_active),
+                // UI must run before viewport tracking so egui's
+                // available_rect reflects the panels for this frame.
+                // The right-side browser panel is drawn by `browser_ui`
+                // in a different plugin, so we explicitly order after it.
                 part_tree_ui.run_if(is_object_active),
+                (
+                    track_viewport_rect.run_if(is_object_active),
+                    sync_camera_viewport.run_if(is_object_active),
+                    sync_zoom_to_viewport.run_if(is_object_active),
+                ).chain().after(part_tree_ui).after(browser_ui),
                 draw_grid.run_if(is_object_active),
             ));
     }
@@ -84,6 +95,27 @@ struct ShapeReloadState {
 struct CameraFitState {
     needs_fit: bool,
     fit_scale: f32,
+}
+
+/// The central viewport rect — the screen area that's actually visible
+/// to the user, after egui sidebars are subtracted. Tracks the egui
+/// "available rect" each frame in both logical and physical pixels.
+/// All fit/zoom computations and the camera viewport read this resource
+/// so the abstraction boundary "what's visible" is in one place.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+struct ViewportRect {
+    logical_size: Vec2,
+    physical_min: UVec2,
+    physical_size: UVec2,
+}
+
+impl ViewportRect {
+    /// True when the visible rect is large enough to render anything
+    /// meaningful. Returns false during transient states where the
+    /// window is so small that egui side panels can't fit.
+    fn is_renderable(&self) -> bool {
+        self.physical_size.x > 0 && self.physical_size.y > 0
+    }
 }
 
 /// Display statistics for the scene.
@@ -123,6 +155,7 @@ fn handle_activation(
     mut activation: ResMut<EditorActivation>,
     mut reload: ResMut<ShapeReloadState>,
     mut fit: ResMut<CameraFitState>,
+    mut orbit: ResMut<OrbitState>,
     mut commands: Commands,
     existing_editor: Query<Entity, With<ObjectEditorEntity>>,
     existing_shapes: Query<Entity, With<ShapeRoot>>,
@@ -153,11 +186,17 @@ fn handle_activation(
         activation.spawned = true;
     }
 
-    // Load the new shape and fit camera
+    // Load the new shape, fit the camera, and reset the orbit to its
+    // default angles. Resetting on every activation (not just the
+    // initial spawn) means switching between shapes always presents
+    // the new shape from the canonical default angle.
     if let ActiveEditor::Object { ref path } = current {
         activation.current_path = Some(path.clone());
         reload.needs_reload = true;
         fit.needs_fit = true;
+        orbit.yaw = DEFAULT_YAW;
+        orbit.pitch = DEFAULT_PITCH;
+        orbit.target = Vec3::ZERO;
         info!("Object editor activated for '{}'", path.display());
     }
 
@@ -287,8 +326,6 @@ fn reload_shape(
 //   height = max_extent * 1.707107  (1 + sqrt(2)/2)
 const ZOOM_PROJ_WIDTH_RATIO: f32 = 1.414214;
 const ZOOM_PROJ_HEIGHT_RATIO: f32 = 1.707107;
-const LEFT_PANEL_MIN: f32 = 200.0;
-const RIGHT_PANEL_MAX: f32 = 250.0;
 const FIT_BORDER: f32 = 1.1;
 const ZOOM_MIN_PCT: f32 = 10.0;
 const ZOOM_MAX_PCT: f32 = 200.0;
@@ -296,23 +333,23 @@ const ZOOM_MAX_PCT: f32 = 200.0;
 /// Runs on shape switch: computes fit scale and sets initial zoom to 100%.
 fn on_model_loaded(
     mut fit: ResMut<CameraFitState>,
-    mut camera: Query<(&mut Projection, &Camera), With<OrbitCamera>>,
+    mut camera: Query<&mut Projection, With<OrbitCamera>>,
     mut limits: ResMut<ZoomLimits>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
-    windows: Query<&Window>,
+    viewport: Res<ViewportRect>,
 ) {
     if !fit.needs_fit { return; }
     if mesh_aabbs.is_empty() { return; }
+    if !viewport.is_renderable() { return; }
     fit.needs_fit = false;
 
-    let window_size = windows.get_single().map(|w| Vec2::new(w.width(), w.height())).unwrap_or(Vec2::new(1100.0, 720.0));
-    let fit_scale = compute_fit_scale(&mesh_aabbs, window_size);
+    let fit_scale = compute_fit_scale(&mesh_aabbs, viewport.logical_size);
     if fit_scale < 0.001 { return; }
 
     fit.fit_scale = fit_scale;
     update_zoom_limits(&mut limits, fit_scale);
 
-    if let Ok((mut projection, _)) = camera.get_single_mut() {
+    if let Ok(mut projection) = camera.get_single_mut() {
         if let Projection::Orthographic(ref mut ortho) = projection.as_mut() {
             ortho.scale = fit_scale;
         }
@@ -328,17 +365,18 @@ fn compute_stats(
     mesh_handles: Query<&Mesh3d>,
     mesh_assets: Res<Assets<Mesh>>,
     mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
-    windows: Query<&Window>,
+    viewport: Res<ViewportRect>,
 ) {
     if !stats.needs_update { return; }
     if mesh_handles.is_empty() { return; }
     stats.needs_update = false;
 
-    let window_size = windows.get_single().map(|w| Vec2::new(w.width(), w.height())).unwrap_or(Vec2::new(1100.0, 720.0));
-    let fit_scale = compute_fit_scale(&mesh_aabbs, window_size);
-    if fit_scale > 0.001 {
-        bounds.fit_scale = fit_scale;
-        update_zoom_limits(&mut limits, fit_scale);
+    if viewport.is_renderable() {
+        let fit_scale = compute_fit_scale(&mesh_aabbs, viewport.logical_size);
+        if fit_scale > 0.001 {
+            bounds.fit_scale = fit_scale;
+            update_zoom_limits(&mut limits, fit_scale);
+        }
     }
 
     stats.parts = parts.iter().count();
@@ -356,12 +394,16 @@ fn compute_stats(
     stats.triangles = triangle_count;
 }
 
-/// Compute the orthographic scale at which the AABB fills the viewport with ~5% border.
-/// Uses fixed projection angles (yaw=45, pitch=45) for deterministic results.
+/// Compute the orthographic scale at which the AABB fills the viewport with ~5% border on
+/// the constraining dimension. Uses fixed projection angles (yaw=45, pitch=45) for
+/// deterministic results — the shape's own rotation is ignored; the fit is computed against
+/// its AABB as if it were a single box.
 fn compute_fit_scale(
     mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
-    window_size: Vec2,
+    viewport_size: Vec2,
 ) -> f32 {
+    if viewport_size.x <= 0.0 || viewport_size.y <= 0.0 { return 0.0; }
+
     let (scene_min, scene_max) = compute_scene_aabb(mesh_aabbs);
     let scene_size = scene_max - scene_min;
 
@@ -371,12 +413,114 @@ fn compute_fit_scale(
     let proj_width = max_extent * ZOOM_PROJ_WIDTH_RATIO;
     let proj_height = max_extent * ZOOM_PROJ_HEIGHT_RATIO;
 
-    let usable_width = window_size.x - LEFT_PANEL_MIN - RIGHT_PANEL_MAX;
-
-    let scale_for_width = proj_width * FIT_BORDER / usable_width;
-    let scale_for_height = proj_height * FIT_BORDER / window_size.y;
+    let scale_for_width = proj_width * FIT_BORDER / viewport_size.x;
+    let scale_for_height = proj_height * FIT_BORDER / viewport_size.y;
 
     scale_for_width.max(scale_for_height)
+}
+
+// =====================================================================
+// Viewport tracking
+// =====================================================================
+
+/// Read the egui central rect — the area not covered by side panels — and
+/// store it in the `ViewportRect` resource. Runs after all egui panels for
+/// this frame have been drawn, so `available_rect()` reflects them all.
+fn track_viewport_rect(
+    mut contexts: EguiContexts,
+    windows: Query<&Window>,
+    mut viewport: ResMut<ViewportRect>,
+) {
+    let Some(ctx) = contexts.try_ctx_mut() else { return };
+    let Ok(window) = windows.get_single() else { return };
+
+    let rect = ctx.available_rect();
+    let logical_size = Vec2::new(rect.width().max(0.0), rect.height().max(0.0));
+
+    let scale = window.scale_factor();
+    let phys_min_x = (rect.min.x * scale).round().max(0.0) as u32;
+    let phys_min_y = (rect.min.y * scale).round().max(0.0) as u32;
+    let phys_w = (logical_size.x * scale).round().max(0.0) as u32;
+    let phys_h = (logical_size.y * scale).round().max(0.0) as u32;
+
+    // Clamp so position+size never exceeds the physical window, otherwise
+    // wgpu rejects the viewport.
+    let win_w = window.physical_width();
+    let win_h = window.physical_height();
+    let phys_min = UVec2::new(phys_min_x.min(win_w), phys_min_y.min(win_h));
+    let phys_size = UVec2::new(
+        phys_w.min(win_w.saturating_sub(phys_min.x)),
+        phys_h.min(win_h.saturating_sub(phys_min.y)),
+    );
+
+    *viewport = ViewportRect {
+        logical_size,
+        physical_min: phys_min,
+        physical_size: phys_size,
+    };
+}
+
+/// Apply the `ViewportRect` to the camera so it only renders inside the
+/// central area. When the visible area is degenerate (e.g. egui side
+/// panels fill the whole window), hold the previous viewport rather than
+/// setting a zero-size one, which wgpu would reject.
+fn sync_camera_viewport(
+    viewport: Res<ViewportRect>,
+    mut camera: Query<&mut Camera, With<OrbitCamera>>,
+) {
+    if !viewport.is_renderable() { return; }
+    let Ok(mut cam) = camera.get_single_mut() else { return };
+    let new = Viewport {
+        physical_position: viewport.physical_min,
+        physical_size: viewport.physical_size,
+        ..default()
+    };
+    let changed = match &cam.viewport {
+        Some(v) => v.physical_position != new.physical_position
+            || v.physical_size != new.physical_size,
+        None => true,
+    };
+    if changed {
+        cam.viewport = Some(new);
+    }
+}
+
+/// On viewport size changes (window resize, panel resize), recompute
+/// `fit_scale` against the new viewport and update `ortho.scale` so that
+/// the user's current zoom percentage is preserved — the object's apparent
+/// size in the visible rect changes, but "100% is fit" remains true.
+///
+/// This keeps `fit.fit_scale` authoritative for the CURRENT viewport.
+/// `on_model_loaded` handles the shape-switch case (needs_fit=true) and
+/// sets zoom to 100%; this system handles the resize case (viewport
+/// changed with the same shape loaded) and preserves zoom_pct.
+fn sync_zoom_to_viewport(
+    viewport: Res<ViewportRect>,
+    mut fit: ResMut<CameraFitState>,
+    mut limits: ResMut<ZoomLimits>,
+    mut camera: Query<&mut Projection, With<OrbitCamera>>,
+    mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
+) {
+    if fit.needs_fit { return; }
+    if !viewport.is_renderable() { return; }
+    if mesh_aabbs.is_empty() { return; }
+    if fit.fit_scale <= 0.0 { return; }
+
+    let new_fit = compute_fit_scale(&mesh_aabbs, viewport.logical_size);
+    if new_fit < 0.001 { return; }
+    if (new_fit - fit.fit_scale).abs() < f32::EPSILON * fit.fit_scale.max(1.0) {
+        return;
+    }
+
+    let old_fit = fit.fit_scale;
+    fit.fit_scale = new_fit;
+    update_zoom_limits(&mut limits, new_fit);
+
+    if let Ok(mut projection) = camera.get_single_mut() {
+        if let Projection::Orthographic(ref mut ortho) = projection.as_mut() {
+            ortho.scale *= new_fit / old_fit;
+        }
+    }
 }
 
 fn update_zoom_limits(limits: &mut ZoomLimits, fit_scale: f32) {

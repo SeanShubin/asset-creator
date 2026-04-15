@@ -82,7 +82,7 @@ impl Plugin for BrowserPlugin {
 // Browser UI
 // =====================================================================
 
-fn browser_ui(
+pub(crate) fn browser_ui(
     mut contexts: EguiContexts,
     registry: Res<AssetRegistry>,
     mut active: ResMut<ActiveEditor>,
