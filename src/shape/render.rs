@@ -672,8 +672,20 @@ fn walk_into_group(
         return;
     }
 
-    // Hidden nodes produce an empty group — no geometry, no CSG.
+    // Hidden nodes skip their own geometry and CSG but still walk
+    // children so they appear in the parts tree. Non-hidden children
+    // of a hidden parent compile normally with full geometry.
     if is_hidden(spec, hidden) {
+        match spec.combinator() {
+            Combinator::Import(import_name) => {
+                walk_import(spec, import_name, inherited_placement, scale, group, ctx, hidden);
+            }
+            _ => {
+                for child in &spec.children {
+                    walk_into_group(child, inherited_placement, scale, group, false, ctx, is_direct, all_subtracts, hidden);
+                }
+            }
+        }
         return;
     }
 
@@ -692,6 +704,7 @@ fn walk_into_group(
                 scale,
                 group,
                 ctx,
+                hidden,
             );
         }
         Combinator::None => {
@@ -854,6 +867,7 @@ fn walk_import(
     parent_scale: (i32, i32, i32),
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
+    hidden: &[String],
 ) {
     let imported = match ctx.registry.get_shape(import_name) {
         Some(parts) => parts.to_vec(),
@@ -879,6 +893,13 @@ fn walk_import(
     let mut remapped = imported;
     remap_bounds_for_parts(&mut remapped, &native_aabb, &placement_bounds);
 
+    // Collect subtracts from the imported parts so they carve into
+    // sibling unions within the same import.
+    let mut import_subtracts = Vec::new();
+    for part in &remapped {
+        collect_subtracts(part, inherited_placement, new_scale, hidden, &mut import_subtracts);
+    }
+
     // The imported parts are inlined into THIS group. Subtract previews
     // are suppressed inside imports — the imported shape's own direct
     // compile shows them.
@@ -891,8 +912,8 @@ fn walk_import(
             false,
             ctx,
             false,
-            &[],
-            &[],
+            &import_subtracts,
+            hidden,
         );
     }
 }

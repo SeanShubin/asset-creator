@@ -1491,11 +1491,6 @@ fn draw_tree_node(
             for e in subtree {
                 toggles.push((e, new_vis));
             }
-            if new_vis == Visibility::Inherited {
-                for &ancestor in ancestors {
-                    toggles.push((ancestor, Visibility::Inherited));
-                }
-            }
         }
         if ui.selectable_label(is_selected, label).clicked() {
             // name_path holds the path to this node's PARENT; append

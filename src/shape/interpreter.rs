@@ -159,7 +159,7 @@ fn attach_compiled(
     } else {
         let is_hidden = compiled.name.as_ref()
             .is_some_and(|n| hidden.iter().any(|h| h == n));
-        let vis = if is_hidden { Visibility::Hidden } else { Visibility::default() };
+        let vis = if is_hidden { Visibility::Hidden } else { Visibility::Visible };
         let part_entity = commands
             .spawn((
                 ShapePart { name: compiled.name.clone() },

@@ -714,10 +714,10 @@ impl Occupancy {
 /// authoring errors to the shape that actually caused them, and removes
 /// the need for scale tracking or rational comparison across import
 /// boundaries.
-pub fn collect_occupancy(parts: &[SpecNode], _registry: &AssetRegistry) -> Occupancy {
+pub fn collect_occupancy(parts: &[SpecNode], registry: &AssetRegistry) -> Occupancy {
     let mut occ = Occupancy::new();
     for part in parts {
-        walk_for_occupancy(&mut occ, part, "", identity_placement());
+        walk_for_occupancy(&mut occ, part, "", identity_placement(), registry);
     }
     occ
 }
@@ -727,6 +727,7 @@ fn walk_for_occupancy(
     node: &SpecNode,
     parent_path: &str,
     inherited: Placement,
+    registry: &AssetRegistry,
 ) {
     let base_path = append_path(parent_path, node.effective_name().as_deref());
 
@@ -739,21 +740,24 @@ fn walk_for_occupancy(
                 } else {
                     format!("{base_path}{suffix}")
                 };
-                walk_single_for_occupancy(occ, node, &path, combined);
+                walk_single_for_occupancy(occ, node, &path, combined, registry);
             }
         }
-        Combinator::Import(_import_name) => {
+        Combinator::Import(import_name) => {
             // Opaque import: claim the placement bounds as a single
-            // region in this shape's own coordinate space. Do NOT
-            // descend into the imported subtree — that shape's own
-            // collision check handles its internal cells.
-            if let Some(bounds) = node.bounds {
+            // region in this shape's own coordinate space. When bounds
+            // are not specified, use the imported shape's native AABB.
+            let bounds = node.bounds.or_else(|| {
+                registry.get_shape(import_name)
+                    .and_then(|parts| compute_aabb_for_parts(parts))
+            });
+            if let Some(bounds) = bounds {
                 let transformed = apply_placement_to_bounds(inherited, bounds);
                 claim_cells(occ, &transformed, &base_path);
             }
         }
         Combinator::None => {
-            walk_single_for_occupancy(occ, node, &base_path, inherited);
+            walk_single_for_occupancy(occ, node, &base_path, inherited, registry);
         }
     }
 }
@@ -763,6 +767,7 @@ fn walk_single_for_occupancy(
     node: &SpecNode,
     path: &str,
     placement: Placement,
+    registry: &AssetRegistry,
 ) {
     // Subtract nodes carve geometry out of unions; they never occupy
     // cells of their own, so they can't collide with anything.
@@ -773,7 +778,7 @@ fn walk_single_for_occupancy(
         }
     }
     for child in &node.children {
-        walk_for_occupancy(occ, child, path, placement);
+        walk_for_occupancy(occ, child, path, placement, registry);
     }
 }
 
