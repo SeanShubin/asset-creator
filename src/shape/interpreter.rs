@@ -83,34 +83,52 @@ pub fn spawn_shape_with_layers(
 fn validate_parts(parts: &[SpecNode]) {
     let mut seen = std::collections::HashSet::new();
     for part in parts {
-        if let Some(ref name) = part.name {
+        if part.name.is_some() && part.import.is_some() {
+            error!(
+                "Part has both name '{}' and import '{}' — they are mutually exclusive",
+                part.name.as_deref().unwrap_or(""),
+                part.import.as_deref().unwrap_or(""),
+            );
+        }
+        if let Some(name) = part.effective_name() {
             if !seen.insert(name.clone()) {
-                warn!("Duplicate part name '{}'", name);
+                error!("Duplicate part name '{}'", name);
             }
         } else if part.shape.is_some() {
             warn!("Unnamed shape part — every shape should have a name");
         }
     }
     for part in parts {
-        validate_names(part, part.name.as_deref().unwrap_or(""));
+        validate_names(part, &part.effective_name().unwrap_or_default());
     }
 }
 
 fn validate_names(node: &SpecNode, path: &str) {
     let mut seen = std::collections::HashSet::new();
     for child in &node.children {
-        if let Some(ref name) = child.name {
+        if child.name.is_some() && child.import.is_some() {
+            error!(
+                "Node at '{}' has both name '{}' and import '{}' — they are mutually exclusive",
+                path,
+                child.name.as_deref().unwrap_or(""),
+                child.import.as_deref().unwrap_or(""),
+            );
+        }
+        if let Some(name) = child.effective_name() {
             if !seen.insert(name.clone()) {
-                warn!("Duplicate child name '{}' at path '{}'", name, path);
+                error!("Duplicate child name '{}' at path '{}'", name, path);
             }
         }
     }
 
     for child in &node.children {
-        let child_path = match &child.name {
-            Some(name) if path.is_empty() => name.clone(),
-            Some(name) => format!("{path}/{name}"),
-            None => path.to_string(),
+        let child_name = child.effective_name().unwrap_or_default();
+        let child_path = if path.is_empty() {
+            child_name
+        } else if child_name.is_empty() {
+            path.to_string()
+        } else {
+            format!("{path}/{child_name}")
         };
         validate_names(child, &child_path);
     }

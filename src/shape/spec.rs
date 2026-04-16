@@ -52,6 +52,21 @@ pub struct SpecNode {
 }
 
 impl SpecNode {
+    /// The effective name of this node. Import nodes that don't specify
+    /// an explicit name use the last path segment of the import path
+    /// (e.g. `"frz-b/chassis"` → `"chassis"`). Name and import are
+    /// mutually exclusive.
+    pub fn effective_name(&self) -> Option<String> {
+        if let Some(ref name) = self.name {
+            return Some(name.clone());
+        }
+        if let Some(ref import) = self.import {
+            let last = import.rsplit('/').next().unwrap_or(import);
+            return Some(last.to_string());
+        }
+        None
+    }
+
     /// Determine what kind of combinator this node is.
     /// A node is at most one combinator type; priority: symmetry > import.
     pub fn combinator(&self) -> Combinator<'_> {
@@ -713,7 +728,7 @@ fn walk_for_occupancy(
     parent_path: &str,
     inherited: Placement,
 ) {
-    let base_path = append_path(parent_path, node.name.as_deref());
+    let base_path = append_path(parent_path, node.effective_name().as_deref());
 
     match node.combinator() {
         Combinator::Symmetry(sym) => {

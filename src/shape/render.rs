@@ -640,12 +640,12 @@ fn compile_group(
         all_subtracts,
         hidden,
     );
-    group.finish(spec.name.clone(), ctx.templates)
+    group.finish(spec.effective_name(), ctx.templates)
 }
 
 fn is_hidden(spec: &SpecNode, hidden: &[String]) -> bool {
-    if let Some(ref name) = spec.name {
-        hidden.iter().any(|h| h == name)
+    if let Some(name) = spec.effective_name() {
+        hidden.iter().any(|h| h == &name)
     } else {
         false
     }
@@ -663,7 +663,7 @@ fn walk_into_group(
     hidden: &[String],
 ) {
     // Named non-root nodes start their own group as a child of this one.
-    if !is_group_root && spec.name.is_some() {
+    if !is_group_root && spec.effective_name().is_some() {
         let child = compile_group(
             spec, inherited_placement, scale, ctx, is_direct,
             all_subtracts, hidden,
@@ -716,7 +716,7 @@ fn walk_node_body(
         let Some(bounds) = spec.bounds else {
             warn!(
                 "Shape '{}' has no bounds — skipping geometry",
-                spec.name.as_deref().unwrap_or("unnamed")
+                spec.effective_name().as_deref().unwrap_or("unnamed")
             );
             for child in &spec.children {
                 walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts, hidden);
@@ -728,7 +728,7 @@ fn walk_node_body(
         if size.0 == 0 || size.1 == 0 || size.2 == 0 {
             error!(
                 "'{}' has zero-size bounds ({},{},{}) — skipping",
-                spec.name.as_deref().unwrap_or("unnamed"),
+                spec.effective_name().as_deref().unwrap_or("unnamed"),
                 size.0,
                 size.1,
                 size.2

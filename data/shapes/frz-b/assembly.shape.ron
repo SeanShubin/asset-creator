@@ -1,16 +1,13 @@
 [
     (
-        name: "chassis",
         import: "frz-b/chassis",
         bounds: (-8, -2, -8, 8, 2, 8),
     ),
     (
-        name: "sensor",
         import: "frz-b/sensor",
         bounds: (-2, 1, -2, 2, 3, 2),
     ),
     (
-        name: "melee",
         import: "frz-b/melee",
         bounds: (4, -2, -4, 6, 0, 12),
         symmetry: MirrorX,

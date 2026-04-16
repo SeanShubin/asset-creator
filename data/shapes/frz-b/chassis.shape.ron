@@ -4,48 +4,11 @@
 // If cavities are wanted later they can be expressed by composing smaller
 // boxes around empty cells.
 [
+
     (
-        name: "body",
-        shape: Box,
-        bounds: (-4, -1, -4, 4, 0, 4),
-        tags: ["red"],
+        import: "frz-b/chassis_middle"
     ),
     (
-        name: "corner",
-        shape: Wedge,
-        bounds: (-4, -1, 4, -2, 0, 2),
-        tags: ["green"],
-        orient: (Back, NoMirror, RotateClockwise),
-        symmetry: MirrorXZ,
-        subtract: true,
-    ),
-    (
-        name: "top-edges",
-        shape: Wedge,
-        bounds: (-4, 0, -2, -2, 1, 2),
-        tags: ["red"],
-        orient: (Left, NoMirror, NoRotation),
-        symmetry: MirrorX_SpinY
-    ),
-    (
-        name: "top-corners",
-        shape: Corner,
-        bounds: (-4, 0, 2, -2, 1, 4),
-        tags: ["red"],
-        orient: (Left, NoMirror, NoRotation),
-        symmetry: MirrorXZ
-    ),
-    (
-        name: "top-center",
-        shape: Box,
-        bounds: (-2, 0, -2, 2, 1, 2),
-        tags: ["red"],
-    ),
-    (
-        name: "top-center-hole",
-        shape: Box,
-        bounds: (-1, 0, -1, 1, 1, 1),
-        tags: ["blue"],
-        subtract: true
-    ),
+        import:  "frz-b/chassis_top"
+    )
 ]
