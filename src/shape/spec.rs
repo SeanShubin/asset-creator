@@ -12,12 +12,9 @@
 //! file → spec → render → Bevy entities.
 
 use serde::Deserialize;
-use serde::de::{self, MapAccess, Visitor};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::fmt;
 use crate::registry::AssetRegistry;
-use crate::util::Color3;
 
 // =====================================================================
 // SpecNode — the authored shape tree
@@ -34,18 +31,10 @@ pub struct SpecNode {
     pub bounds: Option<Bounds>,
     #[serde(default)]
     pub orient: Orientation,
-    #[serde(default, deserialize_with = "deserialize_ordered_map")]
-    pub palette: Vec<(String, Color3)>,
     #[serde(default)]
-    pub color: Option<String>,
-    #[serde(default)]
-    pub emissive: bool,
+    pub tags: Vec<String>,
     #[serde(default)]
     pub import: Option<String>,
-    #[serde(default)]
-    pub color_map: HashMap<String, String>,
-    #[serde(default)]
-    pub colors: Vec<String>,
     #[serde(default)]
     pub children: Vec<SpecNode>,
     /// Named symmetry pattern. `Single` means "render once, no copies".
@@ -757,10 +746,6 @@ fn append_path(parent: &str, name: Option<&str>) -> String {
     }
 }
 
-// =====================================================================
-// Serde helpers
-// =====================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -771,12 +756,8 @@ mod tests {
             shape: Some(PrimitiveShape::Box),
             bounds: Some(bounds),
             orient: Orientation::default(),
-            palette: vec![],
-            color: None,
-            emissive: false,
+            tags: vec![],
             import: None,
-            color_map: HashMap::new(),
-            colors: vec![],
             children: vec![],
             symmetry,
             subtract: false,
@@ -970,31 +951,3 @@ mod tests {
     }
 }
 
-/// Deserialize a RON map into a Vec preserving insertion order.
-fn deserialize_ordered_map<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<(String, Color3)>, D::Error> {
-    struct OrderedMapVisitor;
-
-    impl<'de> Visitor<'de> for OrderedMapVisitor {
-        type Value = Vec<(String, Color3)>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a map of string to color")
-        }
-
-        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-            let mut entries = Vec::new();
-            while let Some((key, value)) = map.next_entry::<String, Color3>()? {
-                entries.push((key, value));
-            }
-            Ok(entries)
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(Vec::new())
-        }
-    }
-
-    deserializer.deserialize_map(OrderedMapVisitor)
-}

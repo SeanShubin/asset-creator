@@ -1,21 +1,15 @@
 (
     name: "directional_cube",
-    palette: {
-        "body": (2, 2, 2),
-        "arrow": (3, 0, 0)
-    },
     children: [
         (
             name:"base",
             shape: Box,
             bounds: (-5, -5, -5, 5, 5, 5),
-            color: "body"
         ),
         (
             name:"arrow",
             import: "arrow",
             bounds: (-3, -4, 5, 3, 4, 6),
-            colors: ["arrow"]
         )
     ],
 )

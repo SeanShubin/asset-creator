@@ -1,12 +1,5 @@
 (
     name: "frz-b",
-    palette: {
-        "body": (1, 0, 0),
-        "hover": (0, 1, 0),
-        "sensor": (0, 0, 2),
-        "blade": (3, 0, 0),
-        "bay":(0, 0, 0)
-    },
     children: [
         (
             name: "chassis",
@@ -28,7 +21,7 @@
             name: "hover",
             shape: Box,
             bounds: (2, -3, 2, 6, -2, 6),
-            color: "hover",
+            tags: ["green"],
             symmetry: QuadXZ,
         ),
     ],

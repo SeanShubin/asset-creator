@@ -12,27 +12,23 @@
 // Total: 3 authored children, 26 rendered cells, no collisions.
 (
     name: "cornered_cube",
-    palette: { "body": (2, 2, 2) },
     children: [
         (
             name: "face",
             shape: Box,
             bounds: (1, -1, -1, 3, 1, 1),
-            color: "body",
             symmetry: Faces,
         ),
         (
             name: "edge",
             shape: Wedge,
             bounds: (-1, 1, 1, 1, 3, 3),
-            color: "body",
             symmetry: Edges,
         ),
         (
             name: "corner",
             shape: Corner,
             bounds: (1, 1, 1, 3, 3, 3),
-            color: "body",
             symmetry: Octants,
         ),
     ],

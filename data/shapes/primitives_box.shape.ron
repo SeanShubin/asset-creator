@@ -1,7 +1,5 @@
 (
     name: "box",
-    palette: { "body": (2, 2, 2) },
     shape: Box,
     bounds: (-1, -1, -1, 1, 1, 1),
-    color: "body",
 )

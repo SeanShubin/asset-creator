@@ -1,9 +1,7 @@
 (
     name: "mirror_test",
-    palette: {"body": (2, 2, 2)},
     shape: Box,
     // bounds: (3, 3, 3, 4, 4, 4),
     bounds: (-3, -3, -3, -4, -4, -4),
-    color: "body",
     symmetry: Octants,
 )

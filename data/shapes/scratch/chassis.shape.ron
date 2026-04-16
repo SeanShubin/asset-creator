@@ -1,40 +1,28 @@
 (
     name: "chassis",
-    palette: {
-        "a": (3, 0, 0),
-        "b": (3, 3, 0),
-        "c": (0, 3, 0),
-        "d": (0, 3, 3),
-        "e": (0, 0, 3),
-        "body": (2,2,2)
-    },
     children: [
         (
             name: "bodyA",
             shape: Box,
             bounds: (-4, -1, 0, -3, 0, -2),
-            color: "body",
             symmetry: QuadXZ,
         ),
         (
             name: "bodyB",
             shape: Box,
             bounds: (0, -1, 0, -2, 0, -2),
-            color: "body",
             symmetry: QuadXZ,
         ),
         (
             name: "bodyC",
             shape: Box,
             bounds: (0, -1, -4, -2, 0, -2),
-            color: "body",
             symmetry: QuadXZ,
         ),
         (
             name: "bodyD",
             shape: Wedge,
             bounds: (-4, -1, -4, -2, 0, -2),
-            color: "body",
             symmetry: PairX,
             orient: (Back, Mirror, RotateCounter)
         ),
@@ -42,32 +30,28 @@
             name: "bodyE",
             shape: Wedge,
             bounds: (-4, -1, 2, -3, 0, 3),
-            color: "body",
             symmetry: PairX,
             orient: (Front, NoMirror, RotateCounter)
         ),
         (
             name: "topA",
-            shape:Corner,
-            bounds:(-4,0,-4,-2,1,-2),
-            color:"body",
-            orient:(Back, NoMirror, NoRotation),
+            shape: Corner,
+            bounds: (-4, 0, -4, -2, 1, -2),
+            orient: (Back, NoMirror, NoRotation),
             symmetry: QuadXZ,
         ),
         (
             name: "topB",
-            shape:Wedge,
-            bounds:(-4,0,-2,-2,1,2),
-            color:"body",
-            orient:(Left, NoMirror, NoRotation),
+            shape: Wedge,
+            bounds: (-4, 0, -2, -2, 1, 2),
+            orient: (Left, NoMirror, NoRotation),
             symmetry: PairX,
         ),
         (
             name: "topC",
-            shape:Wedge,
-            bounds:(-2,0,4,2,1,2),
-            color:"body",
-            orient:(Front, NoMirror, NoRotation),
+            shape: Wedge,
+            bounds: (-2, 0, 4, 2, 1, 2),
+            orient: (Front, NoMirror, NoRotation),
             symmetry: PairZ,
         )
     ],

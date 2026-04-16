@@ -1,7 +1,5 @@
 (
     name: "wedge",
-    palette: { "body": (2, 2, 2) },
     shape: Wedge,
     bounds: (-1, -1, -1, 1, 1, 1),
-    color: "body",
 )

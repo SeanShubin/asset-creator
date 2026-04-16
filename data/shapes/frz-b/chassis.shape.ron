@@ -5,25 +5,18 @@
 // boxes around empty cells.
 (
     name: "chassis",
-    palette: {
-        "body": (1, 0, 0),
-        "hover": (0, 2, 0),
-        "sensor": (0, 0, 2),
-        "blade": (3, 0, 0),
-        "bay": (0, 0, 0)
-    },
     children: [
         (
             name: "body",
             shape: Box,
             bounds: (-4, -1, -4, 4, 0, 4),
-            color: "body",
+            tags: ["red"],
         ),
         (
             name: "corner",
             shape: Wedge,
             bounds: (-4, -1, 4, -2, 1, 2),
-            color: "hover",
+            tags: ["green"],
             orient: (Back, NoMirror, RotateClockwise),
             subtract: true
         ),
@@ -31,7 +24,7 @@
         //     name: "top",
         //     shape: Box,
         //     bounds: (-4, 0, -4, 4, 1, 4),
-        //     color: "body",
+        //     tags: ["red"],
         // ),
     ],
 )

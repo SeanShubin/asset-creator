@@ -1,30 +1,29 @@
 (
     name: "orientation_test",
-    palette: { "white": (3, 3, 3), "red": (3, 0, 0), "green": (0, 3, 0), "blue": (0, 0, 3) },
     children: [
         (
             name:"center",
             shape: Box,
             bounds: (-1, -1, -1, 1, 1, 1),
-            color: "white"
+            tags: ["white"],
         ),
         (
             name:"x",
             shape: Box,
             bounds: (1, -1, -1, 3, 1, 1),
-            color: "red"
+            tags: ["red"],
         ),
         (
             name:"y",
             shape: Box,
             bounds: (-1, 1, -1, 1, 3, 1),
-            color: "green"
+            tags: ["green"],
         ),
         (
             name:"z",
             shape: Box,
             bounds: (-1, -1, 1, 1, 1, 3),
-            color: "blue"
+            tags: ["blue"],
         ),
     ],
 )

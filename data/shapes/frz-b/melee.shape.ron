@@ -1,24 +1,17 @@
 (
     name: "melee",
-    palette: {
-        "body": (0, 0, 1),
-        "hover": (0, 2, 0),
-        "sensor": (0, 0, 2),
-        "blade": (3, 0, 0),
-        "bay":(0, 0, 0)
-    },
     children: [
         (
             name: "body",
-            shape:Box,
+            shape: Box,
             bounds: (-2, -2, -4, 2, 2, 4),
-            color:"body",
+            tags: ["blue"],
         ),
         (
             name: "blade",
-            shape:Box,
+            shape: Box,
             bounds: (-1, -1, 4, 1, 1, 12),
-            color:"blade",
+            tags: ["red"],
         )
     ],
 )

@@ -66,74 +66,33 @@ pub struct FusedMesh {
 }
 
 // =====================================================================
-// Colors
+// Tags → material properties
 // =====================================================================
 
-pub type ColorMap = Vec<(String, Color3)>;
-
-pub fn merge_colors(parent: &ColorMap, child: &ColorMap) -> ColorMap {
-    let mut merged = child.clone();
-    for (pk, pv) in parent {
-        if let Some(entry) = merged.iter_mut().find(|(k, _)| k == pk) {
-            entry.1 = *pv;
-        } else {
-            merged.push((pk.clone(), *pv));
+/// Resolve an ordered tag list into a color. The first recognized color
+/// tag wins; unrecognized tags are silently skipped (future textures,
+/// effects, etc.). Case-insensitive. Returns default grey if no color
+/// tag is found.
+pub fn resolve_tags_color(tags: &[String]) -> Color3 {
+    for tag in tags {
+        match tag.to_ascii_lowercase().as_str() {
+            "red"     => return Color3(3, 0, 0),
+            "green"   => return Color3(0, 3, 0),
+            "blue"    => return Color3(0, 0, 3),
+            "cyan"    => return Color3(0, 3, 3),
+            "magenta" => return Color3(3, 0, 3),
+            "yellow"  => return Color3(3, 3, 0),
+            "white"   => return Color3(3, 3, 3),
+            "black"   => return Color3(0, 0, 0),
+            _ => {}
         }
     }
-    merged
+    Color3(1, 1, 1) // default grey
 }
 
-pub fn resolve_color(name: &str, colors: &ColorMap) -> Color3 {
-    colors
-        .iter()
-        .find(|(k, _)| k == name)
-        .map(|(_, v)| *v)
-        .unwrap_or_else(|| {
-            warn!("Color '{}' not found in color map, using default gray", name);
-            Color3(1, 1, 1)
-        })
-}
-
-fn apply_color_remapping(
-    import_node: &SpecNode,
-    imported_colors: &ColorMap,
-    parent_colors: &ColorMap,
-) -> ColorMap {
-    if !import_node.color_map.is_empty() && !import_node.colors.is_empty() {
-        warn!(
-            "Node '{}' specifies both color_map and colors — using color_map",
-            import_node.name.as_deref().unwrap_or("unnamed")
-        );
-    }
-
-    if !import_node.color_map.is_empty() {
-        imported_colors
-            .iter()
-            .map(|(child_name, child_val)| {
-                if let Some(parent_name) = import_node.color_map.get(child_name) {
-                    let resolved = resolve_color(parent_name, parent_colors);
-                    (child_name.clone(), resolved)
-                } else {
-                    (child_name.clone(), *child_val)
-                }
-            })
-            .collect()
-    } else if !import_node.colors.is_empty() {
-        imported_colors
-            .iter()
-            .enumerate()
-            .map(|(i, (child_name, child_val))| {
-                if let Some(parent_name) = import_node.colors.get(i) {
-                    let resolved = resolve_color(parent_name, parent_colors);
-                    (child_name.clone(), resolved)
-                } else {
-                    (child_name.clone(), *child_val)
-                }
-            })
-            .collect()
-    } else {
-        merge_colors(parent_colors, imported_colors)
-    }
+/// Check whether the tag list includes "emissive" (case-insensitive).
+pub fn resolve_tags_emissive(tags: &[String]) -> bool {
+    tags.iter().any(|t| t.eq_ignore_ascii_case("emissive"))
 }
 
 // =====================================================================
@@ -276,7 +235,6 @@ pub fn compile(
         registry,
         templates: &templates,
     };
-    let colors = spec.palette.clone();
     // Pre-pass: collect all subtract primitives from the spec tree
     // (stopping at import boundaries). Every group gets this full list
     // so subtracts carve into unions regardless of naming hierarchy.
@@ -286,7 +244,6 @@ pub fn compile(
         spec,
         identity_placement(),
         (1, 1, 1),
-        &colors,
         &ctx,
         /* is_direct */ true,
         &all_subtracts,
@@ -651,7 +608,6 @@ fn compile_group(
     spec: &SpecNode,
     inherited_placement: Placement,
     scale: (i32, i32, i32),
-    inherited_colors: &ColorMap,
     ctx: &CompileCtx<'_>,
     is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
@@ -662,7 +618,6 @@ fn compile_group(
         spec,
         inherited_placement,
         scale,
-        inherited_colors,
         &mut group,
         /* is_group_root */ true,
         ctx,
@@ -676,23 +631,16 @@ fn walk_into_group(
     spec: &SpecNode,
     inherited_placement: Placement,
     scale: (i32, i32, i32),
-    inherited_colors: &ColorMap,
     group: &mut GroupAccumulator,
     is_group_root: bool,
     ctx: &CompileCtx<'_>,
     is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
 ) {
-    let colors = if spec.palette.is_empty() {
-        inherited_colors.clone()
-    } else {
-        merge_colors(inherited_colors, &spec.palette)
-    };
-
     // Named non-root nodes start their own group as a child of this one.
     if !is_group_root && spec.name.is_some() {
         let child = compile_group(
-            spec, inherited_placement, scale, &colors, ctx, is_direct,
+            spec, inherited_placement, scale, ctx, is_direct,
             all_subtracts,
         );
         group.children.push(child);
@@ -703,7 +651,7 @@ fn walk_into_group(
         Combinator::Symmetry(sym) => {
             for (local, _suffix) in placements(sym) {
                 let combined = compose_placements(inherited_placement, *local);
-                walk_node_body(spec, combined, scale, &colors, group, ctx, is_direct, all_subtracts);
+                walk_node_body(spec, combined, scale, group, ctx, is_direct, all_subtracts);
             }
         }
         Combinator::Import(import_name) => {
@@ -712,13 +660,12 @@ fn walk_into_group(
                 import_name,
                 inherited_placement,
                 scale,
-                &colors,
                 group,
                 ctx,
             );
         }
         Combinator::None => {
-            walk_node_body(spec, inherited_placement, scale, &colors, group, ctx, is_direct, all_subtracts);
+            walk_node_body(spec, inherited_placement, scale, group, ctx, is_direct, all_subtracts);
         }
     }
 }
@@ -729,7 +676,6 @@ fn walk_node_body(
     spec: &SpecNode,
     placement: Placement,
     scale: (i32, i32, i32),
-    colors: &ColorMap,
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
     is_direct: bool,
@@ -742,7 +688,7 @@ fn walk_node_body(
                 spec.name.as_deref().unwrap_or("unnamed")
             );
             for child in &spec.children {
-                walk_into_group(child, placement, scale, colors, group, false, ctx, is_direct, all_subtracts);
+                walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts);
             }
             return;
         };
@@ -761,19 +707,15 @@ fn walk_node_body(
 
         if spec.subtract {
             if is_direct {
-                add_preview_primitive(
-                    shape, &bounds, placement, scale, spec.orient, colors, spec, group,
-                );
+                add_preview_primitive(shape, &bounds, placement, scale, spec.orient, spec, group);
             }
         } else {
-            add_union_primitive(
-                shape, &bounds, placement, scale, spec.orient, colors, spec, group,
-            );
+            add_union_primitive(shape, &bounds, placement, scale, spec.orient, spec, group);
         }
     }
 
     for child in &spec.children {
-        walk_into_group(child, placement, scale, colors, group, false, ctx, is_direct, all_subtracts);
+        walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts);
     }
 }
 
@@ -787,7 +729,6 @@ fn add_union_primitive(
     placement: Placement,
     scale: (i32, i32, i32),
     orient: Orientation,
-    colors: &ColorMap,
     spec: &SpecNode,
     group: &mut GroupAccumulator,
 ) {
@@ -795,24 +736,15 @@ fn add_union_primitive(
     let orient_mat = orientation_to_mat3(&orient, placement);
     let is_mirrored = orient_mat.determinant() < 0.0;
 
-    let color = spec
-        .color
-        .as_ref()
-        .map(|name| resolve_color(name, colors))
-        .unwrap_or_else(|| {
-            warn!(
-                "Shape '{}' has no color specified",
-                spec.name.as_deref().unwrap_or("unnamed")
-            );
-            Color3(1, 1, 1)
-        });
+    let color = resolve_tags_color(&spec.tags);
+    let emissive = resolve_tags_emissive(&spec.tags);
 
     group.union_primitives.push(UnionPrimitive {
         shape,
         world_bounds,
         orient_mat,
         color,
-        emissive: spec.emissive,
+        emissive,
         is_mirrored,
         scale,
     });
@@ -860,7 +792,6 @@ fn add_preview_primitive(
     placement: Placement,
     scale: (i32, i32, i32),
     orient: Orientation,
-    colors: &ColorMap,
     spec: &SpecNode,
     group: &mut GroupAccumulator,
 ) {
@@ -868,11 +799,7 @@ fn add_preview_primitive(
     let orient_mat = orientation_to_mat3(&orient, placement);
     let is_mirrored = orient_mat.determinant() < 0.0;
 
-    let color = spec
-        .color
-        .as_ref()
-        .map(|name| resolve_color(name, colors))
-        .unwrap_or(Color3(1, 1, 1));
+    let color = resolve_tags_color(&spec.tags);
 
     group.preview_primitives.push(UnionPrimitive {
         shape,
@@ -890,7 +817,6 @@ fn walk_import(
     import_name: &str,
     inherited_placement: Placement,
     parent_scale: (i32, i32, i32),
-    colors: &ColorMap,
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
 ) {
@@ -918,20 +844,17 @@ fn walk_import(
     let mut remapped = imported;
     remapped.remap_bounds(&native_aabb, &placement_bounds);
 
-    let import_colors = apply_color_remapping(import_node, &remapped.palette, colors);
-
     // The imported subtree's top-level node becomes part of THIS group
     // (same named part as the import_node). Walk it as if it were an
     // inlined child, not a new named group. Subtract previews are
     // suppressed inside imports — the imported shape's own direct
     // compile shows them.
-    walk_node_body(&remapped, inherited_placement, new_scale, &import_colors, group, ctx, false, &[]);
+    walk_node_body(&remapped, inherited_placement, new_scale, group, ctx, false, &[]);
     for child in &remapped.children {
         walk_into_group(
             child,
             inherited_placement,
             new_scale,
-            &import_colors,
             group,
             false,
             ctx,
@@ -949,7 +872,6 @@ fn walk_import(
 mod tests {
     use super::*;
     use super::super::spec::{AnimState, Orientation, Symmetry};
-    use std::collections::HashMap;
 
     fn leaf_box(name: &str, bounds: Bounds) -> SpecNode {
         SpecNode {
@@ -957,12 +879,8 @@ mod tests {
             shape: Some(PrimitiveShape::Box),
             bounds: Some(bounds),
             orient: Orientation::default(),
-            palette: vec![],
-            color: None,
-            emissive: false,
+            tags: vec![],
             import: None,
-            color_map: HashMap::new(),
-            colors: vec![],
             children: vec![],
             symmetry: Symmetry::Single,
             subtract: false,
