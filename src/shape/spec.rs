@@ -78,18 +78,33 @@ impl SpecNode {
         }
     }
 
-    pub(super) fn collect_bounds(
+    /// Compute the AABB of this node. Handles all node types:
+    /// explicit bounds, imports (resolved from registry), symmetry
+    /// expansion, and children — callers never need to know which case
+    /// applies.
+    pub fn aabb(&self, registry: &AssetRegistry) -> Option<Bounds> {
+        let mut min = (i32::MAX, i32::MAX, i32::MAX);
+        let mut max = (i32::MIN, i32::MIN, i32::MIN);
+        let mut found = false;
+        self.collect_bounds(identity_placement(), &mut min, &mut max, &mut found, registry);
+        if found {
+            Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
+        } else {
+            None
+        }
+    }
+
+    fn collect_bounds(
         &self,
         inherited: Placement,
         min: &mut (i32, i32, i32),
         max: &mut (i32, i32, i32),
         found: &mut bool,
+        registry: &AssetRegistry,
     ) {
-        // For each placement this node's symmetry produces, compose with the
-        // inherited placement and walk the resulting transformed subtree.
         for (local, _) in placements(self.symmetry) {
             let combined = compose_placements(inherited, *local);
-            self.collect_bounds_single(combined, min, max, found);
+            self.collect_bounds_single(combined, min, max, found, registry);
         }
     }
 
@@ -99,30 +114,51 @@ impl SpecNode {
         min: &mut (i32, i32, i32),
         max: &mut (i32, i32, i32),
         found: &mut bool,
+        registry: &AssetRegistry,
     ) {
-        if let Some(b) = &self.bounds {
-            let transformed = apply_placement_to_bounds(placement, *b);
-            let tmin = transformed.min();
-            let tmax = transformed.max();
-            include_point(min, max, tmin, found);
-            include_point(min, max, tmax, found);
-        }
-        for child in &self.children {
-            child.collect_bounds(placement, min, max, found);
+        match self.combinator() {
+            Combinator::Import(import_name) => {
+                // Use explicit bounds if provided, otherwise resolve
+                // from the imported shape's own AABB.
+                let resolved = self.bounds.or_else(|| {
+                    registry.get_shape(import_name)
+                        .and_then(|parts| aabb_for_parts(parts, registry))
+                });
+                if let Some(b) = resolved {
+                    let transformed = apply_placement_to_bounds(placement, b);
+                    include_point(min, max, transformed.min(), found);
+                    include_point(min, max, transformed.max(), found);
+                }
+            }
+            _ => {
+                if let Some(b) = &self.bounds {
+                    let transformed = apply_placement_to_bounds(placement, *b);
+                    include_point(min, max, transformed.min(), found);
+                    include_point(min, max, transformed.max(), found);
+                }
+                for child in &self.children {
+                    child.collect_bounds(placement, min, max, found, registry);
+                }
+            }
         }
     }
 
-    /// Remap all bounds in this node and its descendants from one coordinate
-    /// space to another. Pure integer multiplication — no division, no
-    /// rounding, no precision loss. The result lives in a coordinate space
-    /// scaled by from_size per axis; the render compile step divides by the
-    /// accumulated scale when converting to world floats.
-    pub fn remap_bounds(&mut self, from: &Bounds, to: &Bounds) {
+    /// Remap bounds from one coordinate space to another. Handles all
+    /// node types: explicit bounds are remapped directly, import nodes
+    /// without explicit bounds get their bounds resolved from the
+    /// registry first so the remap has something to transform.
+    pub fn remap_bounds(&mut self, from: &Bounds, to: &Bounds, registry: &AssetRegistry) {
+        if self.bounds.is_none() {
+            if let Some(ref import) = self.import {
+                self.bounds = registry.get_shape(import)
+                    .and_then(|parts| aabb_for_parts(parts, registry));
+            }
+        }
         if let Some(ref mut b) = self.bounds {
             *b = b.remap(from, to);
         }
         for child in &mut self.children {
-            child.remap_bounds(from, to);
+            child.remap_bounds(from, to, registry);
         }
     }
 }
@@ -132,12 +168,12 @@ impl SpecNode {
 // =====================================================================
 
 /// Compute the AABB enclosing all parts and their descendants.
-pub fn compute_aabb_for_parts(parts: &[SpecNode]) -> Option<Bounds> {
+pub fn aabb_for_parts(parts: &[SpecNode], registry: &AssetRegistry) -> Option<Bounds> {
     let mut min = (i32::MAX, i32::MAX, i32::MAX);
     let mut max = (i32::MIN, i32::MIN, i32::MIN);
     let mut found = false;
     for part in parts {
-        part.collect_bounds(identity_placement(), &mut min, &mut max, &mut found);
+        part.collect_bounds(identity_placement(), &mut min, &mut max, &mut found, registry);
     }
     if found {
         Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
@@ -146,24 +182,10 @@ pub fn compute_aabb_for_parts(parts: &[SpecNode]) -> Option<Bounds> {
     }
 }
 
-/// Resolve the placement bounds for an import node: use the explicit
-/// bounds if specified, otherwise fall back to the imported shape's
-/// native AABB from the registry.
-pub fn resolve_import_bounds(
-    node: &SpecNode,
-    import_name: &str,
-    registry: &AssetRegistry,
-) -> Option<Bounds> {
-    node.bounds.or_else(|| {
-        registry.get_shape(import_name)
-            .and_then(|parts| compute_aabb_for_parts(parts))
-    })
-}
-
 /// Remap all bounds in every part from one coordinate space to another.
-pub fn remap_bounds_for_parts(parts: &mut [SpecNode], from: &Bounds, to: &Bounds) {
+pub fn remap_bounds_for_parts(parts: &mut [SpecNode], from: &Bounds, to: &Bounds, registry: &AssetRegistry) {
     for part in parts {
-        part.remap_bounds(from, to);
+        part.remap_bounds(from, to, registry);
     }
 }
 
@@ -760,7 +782,7 @@ fn walk_for_occupancy(
         Combinator::Import(import_name) => {
             // Opaque import: claim the placement bounds as a single
             // region in this shape's own coordinate space.
-            let bounds = resolve_import_bounds(node, import_name, registry);
+            let bounds = node.aabb(registry);
             if let Some(bounds) = bounds {
                 let transformed = apply_placement_to_bounds(inherited, bounds);
                 claim_cells(occ, &transformed, &base_path);

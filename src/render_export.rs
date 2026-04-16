@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::editor::compute_camera_pose;
 use crate::registry::{AssetRegistry, shape_name_from_path};
-use crate::shape::{collect_occupancy, compute_aabb_for_parts, spawn_shape_with_layers};
+use crate::shape::{collect_occupancy, aabb_for_parts, spawn_shape_with_layers};
 
 const EXPORT_RENDER_LAYER: usize = 1;
 const RENDER_SIZE: u32 = 1024;
@@ -204,8 +204,8 @@ fn process_render_queue(
 
     let image_handle = create_render_target(&mut images);
     let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
-    let fit_scale = compute_fit_from_parts(shape);
-    let shape_center = compute_aabb_for_parts(shape)
+    let fit_scale = compute_fit_from_parts(shape, &registry);
+    let shape_center = aabb_for_parts(shape, &registry)
         .map(|b| { let c = b.center_f32(); Vec3::new(c.0, c.1, c.2) })
         .unwrap_or(Vec3::ZERO);
 
@@ -313,8 +313,8 @@ fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>)
     }
 }
 
-fn compute_fit_from_parts(shape: &[crate::shape::SpecNode]) -> f32 {
-    let aabb = compute_aabb_for_parts(shape);
+fn compute_fit_from_parts(shape: &[crate::shape::SpecNode], registry: &crate::registry::AssetRegistry) -> f32 {
+    let aabb = aabb_for_parts(shape, registry);
     let Some(aabb) = aabb else { return 0.01 };
 
     let center = aabb.center_f32();

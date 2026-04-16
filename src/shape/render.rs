@@ -21,8 +21,8 @@ use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
-    apply_placement_to_bounds, compose_placements, compute_aabb_for_parts,
-    identity_placement, placements, remap_bounds_for_parts, resolve_import_bounds,
+    apply_placement_to_bounds, aabb_for_parts, compose_placements,
+    identity_placement, placements, remap_bounds_for_parts,
     Bounds, Combinator, Facing, Mirroring, Orientation, Placement, PrimitiveShape,
     Rotation, SignedAxis, SpecNode,
 };
@@ -849,13 +849,11 @@ fn walk_import(
         }
     };
 
-    let Some(native_aabb) = compute_aabb_for_parts(&imported) else {
+    let Some(native_aabb) = aabb_for_parts(&imported, ctx.registry) else {
         warn!("Import '{}' has no computable AABB — skipping", import_name);
         return;
     };
-    let Some(placement_bounds) = resolve_import_bounds(import_node, import_name, ctx.registry) else {
-        return;
-    };
+    let placement_bounds = import_node.aabb(ctx.registry).unwrap_or(native_aabb);
 
     let remap_scale = Bounds::remap_scale(&native_aabb);
     let new_scale = (
@@ -865,7 +863,7 @@ fn walk_import(
     );
 
     let mut remapped = imported;
-    remap_bounds_for_parts(&mut remapped, &native_aabb, &placement_bounds);
+    remap_bounds_for_parts(&mut remapped, &native_aabb, &placement_bounds, ctx.registry);
 
     // Collect subtracts from the imported parts so they carve into
     // sibling unions within the same import.
