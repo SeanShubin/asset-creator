@@ -8,7 +8,7 @@
         name: "edges",
         shape: Wedge,
         bounds: (-4, 0, -2, -2, 1, 2),
-        tags: ["red"],
+        tags: ["red", "darken", "darken"],
         orient: (Left, NoMirror, NoRotation),
         symmetry: MirrorX_SpinY
     ),
@@ -16,7 +16,7 @@
         name: "corners",
         shape: Corner,
         bounds: (-4, 0, 2, -2, 1, 4),
-        tags: ["red"],
+        tags: ["red", "darken", "darken"],
         orient: (Left, NoMirror, NoRotation),
         symmetry: MirrorXZ
     ),
@@ -24,7 +24,7 @@
         name: "center",
         shape: Box,
         bounds: (-2, 0, -2, 2, 1, 2),
-        tags: ["red"],
+        tags: ["red", "darken", "darken"],
     ),
     (
         name: "hole",

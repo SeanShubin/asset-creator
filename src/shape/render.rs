@@ -70,25 +70,36 @@ pub struct FusedMesh {
 // Tags → material properties
 // =====================================================================
 
-/// Resolve an ordered tag list into a color. The first recognized color
-/// tag wins; unrecognized tags are silently skipped (future textures,
-/// effects, etc.). Case-insensitive. Returns default grey if no color
-/// tag is found.
+/// Resolve an ordered tag list into a color. Tags are processed left
+/// to right: a color name sets the base, `lighten` and `darken`
+/// modify it. Unrecognized tags are silently skipped.
+/// Returns default grey if no color tag is found.
 pub fn resolve_tags_color(tags: &[String]) -> Color3 {
+    let mut color = None;
     for tag in tags {
         match tag.to_ascii_lowercase().as_str() {
-            "red"     => return Color3(3, 0, 0),
-            "green"   => return Color3(0, 3, 0),
-            "blue"    => return Color3(0, 0, 3),
-            "cyan"    => return Color3(0, 3, 3),
-            "magenta" => return Color3(3, 0, 3),
-            "yellow"  => return Color3(3, 3, 0),
-            "white"   => return Color3(3, 3, 3),
-            "black"   => return Color3(0, 0, 0),
+            "red"     => color = Some(Color3(3, 0, 0)),
+            "green"   => color = Some(Color3(0, 3, 0)),
+            "blue"    => color = Some(Color3(0, 0, 3)),
+            "cyan"    => color = Some(Color3(0, 3, 3)),
+            "magenta" => color = Some(Color3(3, 0, 3)),
+            "yellow"  => color = Some(Color3(3, 3, 0)),
+            "white"   => color = Some(Color3(3, 3, 3)),
+            "black"   => color = Some(Color3(0, 0, 0)),
+            "lighten" => if let Some(ref mut c) = color {
+                c.0 = (c.0 + 1).min(3);
+                c.1 = (c.1 + 1).min(3);
+                c.2 = (c.2 + 1).min(3);
+            },
+            "darken" => if let Some(ref mut c) = color {
+                c.0 = c.0.saturating_sub(1);
+                c.1 = c.1.saturating_sub(1);
+                c.2 = c.2.saturating_sub(1);
+            },
             _ => {}
         }
     }
-    Color3(1, 1, 1) // default grey
+    color.unwrap_or(Color3(1, 1, 1))
 }
 
 /// Check whether the tag list includes "emissive" (case-insensitive).
