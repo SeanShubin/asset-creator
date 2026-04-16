@@ -66,17 +66,6 @@ impl SpecNode {
         None
     }
 
-    /// Determine what kind of combinator this node is.
-    /// A node is at most one combinator type; priority: symmetry > import.
-    pub fn combinator(&self) -> Combinator<'_> {
-        if self.symmetry != Symmetry::Single {
-            Combinator::Symmetry(self.symmetry)
-        } else if let Some(ref import) = self.import {
-            Combinator::Import(import)
-        } else {
-            Combinator::None
-        }
-    }
 
     /// Compute the AABB of this node. Handles all node types:
     /// explicit bounds, imports (resolved from registry), symmetry
@@ -116,29 +105,26 @@ impl SpecNode {
         found: &mut bool,
         registry: &AssetRegistry,
     ) {
-        match self.combinator() {
-            Combinator::Import(import_name) => {
-                // Use explicit bounds if provided, otherwise resolve
-                // from the imported shape's own AABB.
-                let resolved = self.bounds.or_else(|| {
-                    registry.get_shape(import_name)
-                        .and_then(|parts| aabb_for_parts(parts, registry))
-                });
-                if let Some(b) = resolved {
-                    let transformed = apply_placement_to_bounds(placement, b);
-                    include_point(min, max, transformed.min(), found);
-                    include_point(min, max, transformed.max(), found);
-                }
+        if let Some(ref import_name) = self.import {
+            // Use explicit bounds if provided, otherwise resolve
+            // from the imported shape's own AABB.
+            let resolved = self.bounds.or_else(|| {
+                registry.get_shape(import_name)
+                    .and_then(|parts| aabb_for_parts(parts, registry))
+            });
+            if let Some(b) = resolved {
+                let transformed = apply_placement_to_bounds(placement, b);
+                include_point(min, max, transformed.min(), found);
+                include_point(min, max, transformed.max(), found);
             }
-            _ => {
-                if let Some(b) = &self.bounds {
-                    let transformed = apply_placement_to_bounds(placement, *b);
-                    include_point(min, max, transformed.min(), found);
-                    include_point(min, max, transformed.max(), found);
-                }
-                for child in &self.children {
-                    child.collect_bounds(placement, min, max, found, registry);
-                }
+        } else {
+            if let Some(b) = &self.bounds {
+                let transformed = apply_placement_to_bounds(placement, *b);
+                include_point(min, max, transformed.min(), found);
+                include_point(min, max, transformed.max(), found);
+            }
+            for child in &self.children {
+                child.collect_bounds(placement, min, max, found, registry);
             }
         }
     }
@@ -187,13 +173,6 @@ pub fn remap_bounds_for_parts(parts: &mut [SpecNode], from: &Bounds, to: &Bounds
     for part in parts {
         part.remap_bounds(from, to, registry);
     }
-}
-
-/// What kind of combinator this node is, if any.
-pub enum Combinator<'a> {
-    Symmetry(Symmetry),
-    Import(&'a str),
-    None,
 }
 
 // =====================================================================
@@ -767,29 +746,23 @@ fn walk_for_occupancy(
 ) {
     let base_path = append_path(parent_path, node.effective_name());
 
-    match node.combinator() {
-        Combinator::Symmetry(sym) => {
-            for (local, suffix) in placements(sym) {
-                let combined = compose_placements(inherited, *local);
-                let path = if suffix.is_empty() {
-                    base_path.clone()
-                } else {
-                    format!("{base_path}{suffix}")
-                };
-                walk_single_for_occupancy(occ, node, &path, combined, registry);
-            }
-        }
-        Combinator::Import(import_name) => {
+    let sym = node.symmetry;
+    for (local, suffix) in placements(sym) {
+        let combined = compose_placements(inherited, *local);
+        let path = if suffix.is_empty() {
+            base_path.clone()
+        } else {
+            format!("{base_path}{suffix}")
+        };
+        if node.import.is_some() {
             // Opaque import: claim the placement bounds as a single
             // region in this shape's own coordinate space.
-            let bounds = node.aabb(registry);
-            if let Some(bounds) = bounds {
-                let transformed = apply_placement_to_bounds(inherited, bounds);
-                claim_cells(occ, &transformed, &base_path);
+            if let Some(bounds) = node.aabb(registry) {
+                let transformed = apply_placement_to_bounds(combined, bounds);
+                claim_cells(occ, &transformed, &path);
             }
-        }
-        Combinator::None => {
-            walk_single_for_occupancy(occ, node, &base_path, inherited, registry);
+        } else {
+            walk_single_for_occupancy(occ, node, &path, combined, registry);
         }
     }
 }

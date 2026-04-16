@@ -12,6 +12,12 @@
         bounds: (4, -2, -4, 6, 0, 12),
         symmetry: MirrorX,
     ),
+    // (
+    //     name: "melee",
+    //     bounds: (4, -2, -4, 6, 0, 12),
+    //     shape:Box,
+    //     symmetry:MirrorX
+    // ),
     (
         name: "hover",
         shape: Box,

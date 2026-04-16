@@ -1,6 +1,6 @@
 /target
 Cargo.lock
-crash.log
+asset-creator.log
 .idea/
 /generated/
 /.claude/

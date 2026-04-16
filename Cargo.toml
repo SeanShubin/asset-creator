@@ -13,3 +13,5 @@ ron = "0.8"
 serde = { version = "1", features = ["derive"] }
 image = "0.25"
 noise = "0.9"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-appender = "0.2"

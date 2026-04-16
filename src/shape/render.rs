@@ -23,7 +23,7 @@ use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
     apply_placement_to_bounds, aabb_for_parts, compose_placements,
     identity_placement, placements, remap_bounds_for_parts,
-    Bounds, Combinator, Facing, Mirroring, Orientation, Placement, PrimitiveShape,
+    Bounds, Facing, Mirroring, Orientation, Placement, PrimitiveShape,
     Rotation, SignedAxis, SpecNode,
 };
 
@@ -659,31 +659,26 @@ fn walk_into_group(
     // Hidden nodes skip their own geometry and CSG but still walk
     // children so they appear in the parts tree.
     if is_hidden(spec, ctx) {
-        match spec.combinator() {
-            Combinator::Import(import_name) => {
-                walk_import(spec, import_name, inherited_placement, scale, group, ctx);
-            }
-            _ => {
-                for child in &spec.children {
-                    walk_into_group(child, inherited_placement, scale, group, false, ctx, all_subtracts);
-                }
+        // Walk children for tree structure even when hidden.
+        if let Some(ref import_name) = spec.import {
+            walk_import(spec, import_name, inherited_placement, scale, group, ctx);
+        } else {
+            for child in &spec.children {
+                walk_into_group(child, inherited_placement, scale, group, false, ctx, all_subtracts);
             }
         }
         return;
     }
 
-    match spec.combinator() {
-        Combinator::Symmetry(sym) => {
-            for (local, _suffix) in placements(sym) {
-                let combined = compose_placements(inherited_placement, *local);
-                walk_node_body(spec, combined, scale, group, ctx, all_subtracts);
-            }
-        }
-        Combinator::Import(import_name) => {
-            walk_import(spec, import_name, inherited_placement, scale, group, ctx);
-        }
-        Combinator::None => {
-            walk_node_body(spec, inherited_placement, scale, group, ctx, all_subtracts);
+    // Symmetry and import compose: expand symmetry placements, then
+    // process the import (or body) for each placement.
+    let sym = spec.symmetry;
+    for (local, _suffix) in placements(sym) {
+        let combined = compose_placements(inherited_placement, *local);
+        if let Some(ref import_name) = spec.import {
+            walk_import(spec, import_name, combined, scale, group, ctx);
+        } else {
+            walk_node_body(spec, combined, scale, group, ctx, all_subtracts);
         }
     }
 }
@@ -853,7 +848,16 @@ fn walk_import(
         warn!("Import '{}' has no computable AABB — skipping", import_name);
         return;
     };
-    let placement_bounds = import_node.aabb(ctx.registry).unwrap_or(native_aabb);
+    // Use the node's explicit bounds, or fall back to the imported
+    // shape's native AABB. Don't use aabb() here — it expands symmetry,
+    // but symmetry is handled by the caller invoking walk_import once
+    // per placement.
+    let placement_bounds = import_node.bounds.unwrap_or(native_aabb);
+
+    info!(
+        "import '{}': native={:?} placement={:?} parent_scale={:?}",
+        import_name, native_aabb, placement_bounds, parent_scale
+    );
 
     let remap_scale = Bounds::remap_scale(&native_aabb);
     let new_scale = (
