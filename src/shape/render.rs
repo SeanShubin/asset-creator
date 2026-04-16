@@ -99,7 +99,7 @@ pub fn resolve_tags_color(tags: &[String]) -> Color3 {
             _ => {}
         }
     }
-    color.unwrap_or(Color3(1, 1, 1))
+    color.unwrap_or(Color3(2, 2, 2))
 }
 
 /// Check whether the tag list includes "emissive" (case-insensitive).

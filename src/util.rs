@@ -14,12 +14,33 @@ pub struct Color3(pub u8, pub u8, pub u8);
 
 const COLOR_DIVISOR: f32 = 3.0;
 
+/// Convert an sRGB component (0.0–1.0) to linear space.
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Convert a linear component (0.0–1.0) to sRGB space.
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 impl Color3 {
+    /// Convert to linear RGB for Bevy vertex colors. The integer
+    /// 0–3 values are treated as sRGB (perceptually uniform), then
+    /// converted to linear space for correct rendering.
     pub fn to_array(self) -> [f32; 3] {
         [
-            self.0 as f32 / COLOR_DIVISOR,
-            self.1 as f32 / COLOR_DIVISOR,
-            self.2 as f32 / COLOR_DIVISOR,
+            srgb_to_linear(self.0 as f32 / COLOR_DIVISOR),
+            srgb_to_linear(self.1 as f32 / COLOR_DIVISOR),
+            srgb_to_linear(self.2 as f32 / COLOR_DIVISOR),
         ]
     }
 
@@ -30,9 +51,9 @@ impl Color3 {
 
     pub fn from_array(a: [f32; 3]) -> Self {
         Self(
-            (a[0] * COLOR_DIVISOR).round() as u8,
-            (a[1] * COLOR_DIVISOR).round() as u8,
-            (a[2] * COLOR_DIVISOR).round() as u8,
+            (linear_to_srgb(a[0]) * COLOR_DIVISOR).round() as u8,
+            (linear_to_srgb(a[1]) * COLOR_DIVISOR).round() as u8,
+            (linear_to_srgb(a[2]) * COLOR_DIVISOR).round() as u8,
         )
     }
 }
