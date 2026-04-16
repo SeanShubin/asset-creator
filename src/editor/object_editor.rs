@@ -146,10 +146,10 @@ struct SceneStats {
     collisions: usize,
 }
 
-/// Scene AABB and derived values for grid sizing and zoom.
+/// Scene AABB from the spec-level occupancy. Doesn't change when
+/// parts are hidden/shown — keeps zoom and grid stable.
 #[derive(Resource, Default)]
 struct SceneBounds {
-    fit_scale: f32,
     scene_min: Vec3,
     scene_max: Vec3,
 }
@@ -448,17 +448,16 @@ fn on_model_loaded(
     mut fit: ResMut<CameraFitState>,
     mut camera: Query<&mut Projection, (With<OrbitCamera>, Without<OrientationCell>)>,
     mut limits: ResMut<ZoomLimits>,
-    mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), (With<Mesh3d>, Without<OrientationCell>)>,
+    bounds: Res<SceneBounds>,
     viewport: Res<ViewportRect>,
     grid: Res<OrientationGridState>,
 ) {
     if !fit.needs_fit { return; }
     if grid.active { return; }
-    if mesh_aabbs.is_empty() { return; }
     if !viewport.is_renderable() { return; }
     fit.needs_fit = false;
 
-    let fit_scale = compute_fit_scale(&mesh_aabbs, viewport.logical_size);
+    let fit_scale = fit_scale_from_bounds(&bounds, viewport.logical_size);
     if fit_scale < 0.001 { return; }
 
     fit.fit_scale = fit_scale;
@@ -474,12 +473,11 @@ fn on_model_loaded(
 /// Runs on every reload: updates stats, fit_scale, and zoom limits without changing zoom.
 fn compute_stats(
     mut stats: ResMut<SceneStats>,
-    mut bounds: ResMut<SceneBounds>,
+    bounds: Res<SceneBounds>,
     mut limits: ResMut<ZoomLimits>,
     parts: Query<&ShapePart>,
     mesh_handles: Query<&Mesh3d>,
     mesh_assets: Res<Assets<Mesh>>,
-    mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), With<Mesh3d>>,
     viewport: Res<ViewportRect>,
 ) {
     if !stats.needs_update { return; }
@@ -487,9 +485,8 @@ fn compute_stats(
     stats.needs_update = false;
 
     if viewport.is_renderable() {
-        let fit_scale = compute_fit_scale(&mesh_aabbs, viewport.logical_size);
+        let fit_scale = fit_scale_from_bounds(&bounds, viewport.logical_size);
         if fit_scale > 0.001 {
-            bounds.fit_scale = fit_scale;
             update_zoom_limits(&mut limits, fit_scale);
         }
     }
@@ -513,27 +510,6 @@ fn compute_stats(
 /// the constraining dimension. Uses fixed projection angles (yaw=45, pitch=45) for
 /// deterministic results — the shape's own rotation is ignored; the fit is computed against
 /// its AABB as if it were a single box.
-fn compute_fit_scale<F: bevy::ecs::query::QueryFilter>(
-    mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), F>,
-    viewport_size: Vec2,
-) -> f32 {
-    if viewport_size.x <= 0.0 || viewport_size.y <= 0.0 { return 0.0; }
-
-    let (scene_min, scene_max) = compute_scene_aabb(mesh_aabbs);
-    let scene_size = scene_max - scene_min;
-
-    if scene_size.length() < 0.001 { return 0.0; }
-
-    let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
-    let proj_width = max_extent * ZOOM_PROJ_WIDTH_RATIO;
-    let proj_height = max_extent * ZOOM_PROJ_HEIGHT_RATIO;
-
-    let scale_for_width = proj_width * FIT_BORDER / viewport_size.x;
-    let scale_for_height = proj_height * FIT_BORDER / viewport_size.y;
-
-    scale_for_width.max(scale_for_height)
-}
-
 // =====================================================================
 // Viewport tracking
 // =====================================================================
@@ -617,15 +593,14 @@ fn sync_zoom_to_viewport(
     mut fit: ResMut<CameraFitState>,
     mut limits: ResMut<ZoomLimits>,
     mut camera: Query<&mut Projection, (With<OrbitCamera>, Without<OrientationCell>)>,
-    mesh_aabbs: Query<(&GlobalTransform, &bevy::render::primitives::Aabb), (With<Mesh3d>, Without<OrientationCell>)>,
+    bounds: Res<SceneBounds>,
 ) {
     if grid.active { return; }
     if fit.needs_fit { return; }
     if !viewport.is_renderable() { return; }
-    if mesh_aabbs.is_empty() { return; }
     if fit.fit_scale <= 0.0 { return; }
 
-    let new_fit = compute_fit_scale(&mesh_aabbs, viewport.logical_size);
+    let new_fit = fit_scale_from_bounds(&bounds, viewport.logical_size);
     if new_fit < 0.001 { return; }
     if (new_fit - fit.fit_scale).abs() < f32::EPSILON * fit.fit_scale.max(1.0) {
         return;
@@ -642,32 +617,28 @@ fn sync_zoom_to_viewport(
     }
 }
 
+/// Compute fit_scale from the spec-level scene bounds. These bounds
+/// come from the occupancy AABB and don't change when parts are
+/// hidden/shown, keeping zoom stable during visibility toggles.
+fn fit_scale_from_bounds(bounds: &SceneBounds, viewport_size: Vec2) -> f32 {
+    if viewport_size.x <= 0.0 || viewport_size.y <= 0.0 { return 0.0; }
+
+    let scene_size = bounds.scene_max - bounds.scene_min;
+    if scene_size.length() < 0.001 { return 0.0; }
+
+    let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
+    let proj_width = max_extent * ZOOM_PROJ_WIDTH_RATIO;
+    let proj_height = max_extent * ZOOM_PROJ_HEIGHT_RATIO;
+
+    let scale_for_width = proj_width * FIT_BORDER / viewport_size.x;
+    let scale_for_height = proj_height * FIT_BORDER / viewport_size.y;
+
+    scale_for_width.max(scale_for_height)
+}
+
 fn update_zoom_limits(limits: &mut ZoomLimits, fit_scale: f32) {
     limits.min = fit_scale * 100.0 / ZOOM_MAX_PCT;  // 200% → scale = fit/2
     limits.max = fit_scale * 100.0 / ZOOM_MIN_PCT;   // 10% → scale = fit*10
-}
-
-fn compute_scene_aabb<F: bevy::ecs::query::QueryFilter>(
-    mesh_aabbs: &Query<(&GlobalTransform, &bevy::render::primitives::Aabb), F>,
-) -> (Vec3, Vec3) {
-    let mut scene_min = Vec3::splat(f32::MAX);
-    let mut scene_max = Vec3::splat(f32::MIN);
-
-    for (gtf, aabb) in mesh_aabbs {
-        let world_center = gtf.transform_point(aabb.center.into());
-        let scale = gtf.compute_transform().scale;
-        let half_extents = Vec3::from(aabb.half_extents) * scale.abs();
-
-        scene_min = scene_min.min(world_center - half_extents);
-        scene_max = scene_max.max(world_center + half_extents);
-    }
-
-    if (scene_max - scene_min).length() < 0.01 {
-        scene_min -= Vec3::splat(0.5);
-        scene_max += Vec3::splat(0.5);
-    }
-
-    (scene_min, scene_max)
 }
 
 // =====================================================================

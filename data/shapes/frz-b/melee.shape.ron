@@ -3,7 +3,7 @@
         name: "body",
         shape: Box,
         bounds: (-2, -2, -4, 2, 2, 4),
-        tags: ["blue"],
+        tags: ["black"],
     ),
     (
         name: "blade",

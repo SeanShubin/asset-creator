@@ -23,8 +23,7 @@ use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
     apply_placement_to_bounds, aabb_for_parts, compose_placements,
     identity_placement, placements, remap_bounds_for_parts,
-    Bounds, Facing, Mirroring, Orientation, Placement, PrimitiveShape,
-    Rotation, SignedAxis, SpecNode,
+    Bounds, Orientation, Placement, PrimitiveShape, SpecNode,
 };
 
 // =====================================================================
@@ -101,71 +100,12 @@ pub fn resolve_tags_emissive(tags: &[String]) -> bool {
 // Orientation → Mat3 conversion
 // =====================================================================
 
+pub use super::csg::base_orientation_matrix;
+
 /// Convert a discrete `Orientation` tuple plus an accumulated placement
 /// from symmetry expansion into the final world→mesh matrix.
-pub fn orientation_to_mat3(orient: &Orientation, placement: Placement) -> Mat3 {
-    let base = base_orientation_matrix(orient);
-    apply_placement_to_mat3(placement, base)
-}
-
-pub fn base_orientation_matrix(orient: &Orientation) -> Mat3 {
-    let facing = facing_matrix(orient.facing());
-    let mirror = match orient.mirroring() {
-        Mirroring::NoMirror => Mat3::IDENTITY,
-        Mirroring::Mirror => Mat3::from_cols(Vec3::NEG_X, Vec3::Y, Vec3::Z),
-    };
-    let rotation = rotation_matrix(orient.rotation());
-    rotation * mirror * facing
-}
-
-fn facing_matrix(facing: Facing) -> Mat3 {
-    use std::f32::consts::FRAC_PI_2;
-    match facing {
-        Facing::Front => Mat3::IDENTITY,
-        Facing::Back => Mat3::from_quat(Quat::from_rotation_y(std::f32::consts::PI)),
-        Facing::Left => Mat3::from_quat(Quat::from_rotation_y(-FRAC_PI_2)),
-        Facing::Right => Mat3::from_quat(Quat::from_rotation_y(FRAC_PI_2)),
-        Facing::Top => Mat3::from_quat(Quat::from_rotation_x(-FRAC_PI_2)),
-        Facing::Bottom => Mat3::from_quat(Quat::from_rotation_x(FRAC_PI_2)),
-    }
-}
-
-fn rotation_matrix(rotation: Rotation) -> Mat3 {
-    use std::f32::consts::{FRAC_PI_2, PI};
-    match rotation {
-        Rotation::NoRotation => Mat3::IDENTITY,
-        Rotation::RotateClockwise => Mat3::from_quat(Quat::from_rotation_z(-FRAC_PI_2)),
-        Rotation::RotateHalf => Mat3::from_quat(Quat::from_rotation_z(PI)),
-        Rotation::RotateCounter => Mat3::from_quat(Quat::from_rotation_z(FRAC_PI_2)),
-    }
-}
-
-fn apply_placement_to_mat3(placement: Placement, m: Mat3) -> Mat3 {
-    let apply_to_col = |col: Vec3| -> Vec3 {
-        Vec3::new(
-            signed_axis_project(placement.0, col),
-            signed_axis_project(placement.1, col),
-            signed_axis_project(placement.2, col),
-        )
-    };
-    Mat3::from_cols(
-        apply_to_col(m.x_axis),
-        apply_to_col(m.y_axis),
-        apply_to_col(m.z_axis),
-    )
-}
-
-fn signed_axis_project(sa: SignedAxis, v: Vec3) -> f32 {
-    let component = match sa {
-        SignedAxis::PosX | SignedAxis::NegX => v.x,
-        SignedAxis::PosY | SignedAxis::NegY => v.y,
-        SignedAxis::PosZ | SignedAxis::NegZ => v.z,
-    };
-    if matches!(sa, SignedAxis::PosX | SignedAxis::PosY | SignedAxis::PosZ) {
-        component
-    } else {
-        -component
-    }
+fn orientation_to_mat3(orient: &Orientation, placement: Placement) -> Mat3 {
+    super::csg::orientation_to_mat3(orient, placement)
 }
 
 // =====================================================================

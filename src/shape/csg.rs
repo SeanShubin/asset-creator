@@ -18,12 +18,116 @@
 //! lookup returns *some* valid representation for any reachable
 //! bitmask — enough for rendering.
 
-use bevy::math::{Mat3, Vec3};
+use bevy::math::{Mat3, Quat, Vec3};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::render::base_orientation_matrix;
-use super::spec::{Facing, Mirroring, Orientation, PrimitiveShape, Rotation};
+use super::spec::{Bounds, Facing, Mirroring, Orientation, Placement, PrimitiveShape, Rotation, SignedAxis};
+
+// =====================================================================
+// Orientation → Mat3 conversion (cube symmetry math)
+// =====================================================================
+
+pub fn base_orientation_matrix(orient: &Orientation) -> Mat3 {
+    let facing = facing_matrix(orient.facing());
+    let mirror = match orient.mirroring() {
+        Mirroring::NoMirror => Mat3::IDENTITY,
+        Mirroring::Mirror => Mat3::from_cols(Vec3::NEG_X, Vec3::Y, Vec3::Z),
+    };
+    let rotation = rotation_matrix(orient.rotation());
+    rotation * mirror * facing
+}
+
+fn facing_matrix(facing: Facing) -> Mat3 {
+    use std::f32::consts::FRAC_PI_2;
+    match facing {
+        Facing::Front => Mat3::IDENTITY,
+        Facing::Back => Mat3::from_quat(Quat::from_rotation_y(std::f32::consts::PI)),
+        Facing::Left => Mat3::from_quat(Quat::from_rotation_y(-FRAC_PI_2)),
+        Facing::Right => Mat3::from_quat(Quat::from_rotation_y(FRAC_PI_2)),
+        Facing::Top => Mat3::from_quat(Quat::from_rotation_x(-FRAC_PI_2)),
+        Facing::Bottom => Mat3::from_quat(Quat::from_rotation_x(FRAC_PI_2)),
+    }
+}
+
+fn rotation_matrix(rotation: Rotation) -> Mat3 {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    match rotation {
+        Rotation::NoRotation => Mat3::IDENTITY,
+        Rotation::RotateClockwise => Mat3::from_quat(Quat::from_rotation_z(-FRAC_PI_2)),
+        Rotation::RotateHalf => Mat3::from_quat(Quat::from_rotation_z(PI)),
+        Rotation::RotateCounter => Mat3::from_quat(Quat::from_rotation_z(FRAC_PI_2)),
+    }
+}
+
+// =====================================================================
+// Cell-level queries
+// =====================================================================
+
+/// Is this cell fully inside the given oriented primitive? Used by the
+/// occupancy pass to determine which cells a subtract removes.
+pub fn is_cell_inside_primitive(
+    shape: PrimitiveShape,
+    orient: &Orientation,
+    placement: Placement,
+    prim_bounds: &Bounds,
+    cell: (i32, i32, i32),
+) -> bool {
+    if shape == PrimitiveShape::Box {
+        return true; // all cells in a Box's bounds are inside
+    }
+    let orient_mat = orientation_to_mat3(orient, placement);
+    let mn = prim_bounds.min();
+    let mx = prim_bounds.max();
+    let prim_center = Vec3::new(
+        (mn.0 + mx.0) as f32 / 2.0,
+        (mn.1 + mx.1) as f32 / 2.0,
+        (mn.2 + mx.2) as f32 / 2.0,
+    );
+    let prim_size = Vec3::new(
+        (mx.0 - mn.0) as f32,
+        (mx.1 - mn.1) as f32,
+        (mx.2 - mn.2) as f32,
+    );
+    // Check all 64 sample points. If all are inside, the cell is fully
+    // covered. This is conservative — partially covered cells remain
+    // occupied, which is correct for collision detection (avoids
+    // false negatives).
+    compute_signature_at_cell(shape, orient_mat, prim_center, prim_size, cell) == !0u64
+}
+
+pub fn orientation_to_mat3(orient: &Orientation, placement: Placement) -> Mat3 {
+    let base = base_orientation_matrix(orient);
+    apply_placement_to_mat3(placement, base)
+}
+
+fn apply_placement_to_mat3(placement: Placement, m: Mat3) -> Mat3 {
+    let apply_to_col = |col: Vec3| -> Vec3 {
+        Vec3::new(
+            signed_axis_project(placement.0, col),
+            signed_axis_project(placement.1, col),
+            signed_axis_project(placement.2, col),
+        )
+    };
+    Mat3::from_cols(
+        apply_to_col(m.x_axis),
+        apply_to_col(m.y_axis),
+        apply_to_col(m.z_axis),
+    )
+}
+
+fn signed_axis_project(sa: SignedAxis, v: Vec3) -> f32 {
+    let component = match sa {
+        SignedAxis::PosX | SignedAxis::NegX => v.x,
+        SignedAxis::PosY | SignedAxis::NegY => v.y,
+        SignedAxis::PosZ | SignedAxis::NegZ => v.z,
+    };
+    if matches!(sa, SignedAxis::PosX | SignedAxis::PosY | SignedAxis::PosZ) {
+        component
+    } else {
+        -component
+    }
+}
 
 const GRID_DIM: usize = 4;
 const SAMPLE_COUNT: usize = GRID_DIM * GRID_DIM * GRID_DIM;

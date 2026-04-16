@@ -1,15 +1,14 @@
-//! Pure-integer shape specification.
+//! Integer shape specification and occupancy.
 //!
-//! This module owns the authored data model: the `SpecNode` tree loaded from
-//! `.shape.ron` files and every operation that manipulates authored shape
-//! data. Everything here is integer. No `f32`, no `Mat3`, no `Transform`,
-//! no `Vec3`. The single float conversion for camera positioning
-//! (`Bounds::center_f32`) is deliberately isolated and used only by render
-//! and camera-fit code — it is not part of the spec pipeline.
+//! This module owns the authored data model: the `SpecNode` tree loaded
+//! from `.shape.ron` files, occupancy (cell-level collision detection),
+//! and AABB computation. All spatial data here is integer. Float
+//! conversions for camera positioning (`Bounds::center_f32`) and CSG
+//! cell-in-primitive checks (delegated to `super::csg`) are isolated
+//! escape hatches.
 //!
-//! The rendering layer (`super::render`) is the only consumer of `SpecNode`.
-//! Nothing here imports `super::render`, so data flows in one direction:
-//! file → spec → render → Bevy entities.
+//! Data flows: file → spec → render → Bevy entities. Nothing here
+//! imports `super::render`.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -658,11 +657,22 @@ pub struct Collision {
     pub cell: CellPos,
 }
 
+/// A subtract volume recorded during the occupancy walk. After all
+/// union cells are claimed, cells fully inside a subtract are removed.
+struct SubtractVolume {
+    shape: PrimitiveShape,
+    orient: Orientation,
+    placement: Placement,
+    bounds: Bounds,
+}
+
 /// Global cell-level index of a compiled shape. Every primitive instance
 /// (post-symmetry-expansion, post-import-remapping) contributes its
-/// integer cells to the index.
+/// integer cells to the index. Subtract primitives remove cells after
+/// the initial claim pass.
 pub struct Occupancy {
     cells: HashMap<CellPos, String>,
+    subtracts: Vec<SubtractVolume>,
     collisions: Vec<Collision>,
 }
 
@@ -670,6 +680,7 @@ impl Occupancy {
     fn new() -> Self {
         Self {
             cells: HashMap::new(),
+            subtracts: Vec::new(),
             collisions: Vec::new(),
         }
     }
@@ -734,7 +745,32 @@ pub fn collect_occupancy(parts: &[SpecNode], registry: &AssetRegistry) -> Occupa
     for part in parts {
         walk_for_occupancy(&mut occ, part, "", identity_placement(), registry);
     }
+    // Remove cells fully covered by subtract volumes.
+    apply_subtracts(&mut occ);
     occ
+}
+
+fn apply_subtracts(occ: &mut Occupancy) {
+    if occ.subtracts.is_empty() { return; }
+    let subtracts: Vec<SubtractVolume> = std::mem::take(&mut occ.subtracts);
+    occ.cells.retain(|&cell, _| {
+        for sub in &subtracts {
+            let mn = sub.bounds.min();
+            let mx = sub.bounds.max();
+            if cell.0 >= mn.0 && cell.0 < mx.0
+                && cell.1 >= mn.1 && cell.1 < mx.1
+                && cell.2 >= mn.2 && cell.2 < mx.2
+            {
+                if super::csg::is_cell_inside_primitive(sub.shape, &sub.orient, sub.placement, &sub.bounds, cell) {
+                    return false; // cell is subtracted
+                }
+            }
+        }
+        true // cell survives
+    });
+    // Collisions were recorded at claim time before subtracts were
+    // applied. Remove collisions for cells that no longer exist.
+    occ.collisions.retain(|c| occ.cells.contains_key(&c.cell));
 }
 
 fn walk_for_occupancy(
@@ -754,17 +790,86 @@ fn walk_for_occupancy(
         } else {
             format!("{base_path}{suffix}")
         };
-        if node.import.is_some() {
-            // Opaque import: claim the placement bounds as a single
-            // region in this shape's own coordinate space.
-            if let Some(bounds) = node.aabb(registry) {
-                let transformed = apply_placement_to_bounds(combined, bounds);
-                claim_cells(occ, &transformed, &path);
-            }
+        if let Some(ref import_name) = node.import {
+            walk_import_for_occupancy(occ, node, import_name, &path, combined, registry);
         } else {
             walk_single_for_occupancy(occ, node, &path, combined, registry);
         }
     }
+}
+
+fn walk_import_for_occupancy(
+    occ: &mut Occupancy,
+    import_node: &SpecNode,
+    import_name: &str,
+    parent_path: &str,
+    inherited: Placement,
+    registry: &AssetRegistry,
+) {
+    let Some(imported) = registry.get_shape(import_name) else {
+        // Import not in registry — fall back to claiming explicit bounds
+        // as an opaque region.
+        if let Some(bounds) = import_node.bounds {
+            let transformed = apply_placement_to_bounds(inherited, bounds);
+            claim_cells(occ, &transformed, parent_path);
+        }
+        return;
+    };
+    // Run occupancy on the imported shape independently, then merge
+    // its post-subtract cells into our occupancy, remapped to the
+    // parent's coordinate space.
+    let imported_occ = collect_occupancy(imported, registry);
+
+    let Some(native_aabb) = imported_occ.aabb() else { return };
+    let placement_bounds = import_node.bounds.unwrap_or(native_aabb);
+
+    // Remap each surviving cell from the imported shape's coordinate
+    // space to the parent's. The import fills placement_bounds; the
+    // imported shape's native extent is native_aabb. We map each cell
+    // from native to placement space.
+    let native_min = native_aabb.min();
+    let native_size = native_aabb.size();
+    let place_min = placement_bounds.min();
+    let place_size = placement_bounds.size();
+
+    for (&cell, _) in &imported_occ.cells {
+        // Map cell from imported coords to placement coords.
+        // Each axis: parent_cell = place_min + (cell - native_min) * place_size / native_size
+        // This must be integer. For axis-aligned imports where place_size is a
+        // multiple of native_size, this is exact. Otherwise we floor.
+        let remap_axis = |c: i32, n_min: i32, n_size: i32, p_min: i32, p_size: i32| -> (i32, i32) {
+            if n_size == 0 { return (p_min, p_min + 1); }
+            let lo = p_min + (c - n_min) * p_size / n_size;
+            let hi = p_min + (c + 1 - n_min) * p_size / n_size;
+            (lo, hi)
+        };
+
+        let (x_lo, x_hi) = remap_axis(cell.0, native_min.0, native_size.0, place_min.0, place_size.0);
+        let (y_lo, y_hi) = remap_axis(cell.1, native_min.1, native_size.1, place_min.1, place_size.1);
+        let (z_lo, z_hi) = remap_axis(cell.2, native_min.2, native_size.2, place_min.2, place_size.2);
+
+        for z in z_lo..z_hi {
+            for y in y_lo..y_hi {
+                for x in x_lo..x_hi {
+                    let parent_cell = (x, y, z);
+                    let transformed = apply_placement_to_cell(inherited, parent_cell);
+                    occ.claim(transformed, parent_path);
+                }
+            }
+        }
+    }
+}
+
+fn apply_placement_to_cell(placement: Placement, cell: (i32, i32, i32)) -> (i32, i32, i32) {
+    let resolve = |sa: SignedAxis| -> i32 {
+        let val = match sa.axis_index() {
+            0 => cell.0,
+            1 => cell.1,
+            _ => cell.2,
+        };
+        if sa.is_positive() { val } else { -val - 1 }
+    };
+    (resolve(placement.0), resolve(placement.1), resolve(placement.2))
 }
 
 fn walk_single_for_occupancy(
@@ -774,11 +879,16 @@ fn walk_single_for_occupancy(
     placement: Placement,
     registry: &AssetRegistry,
 ) {
-    // Subtract nodes carve geometry out of unions; they never occupy
-    // cells of their own, so they can't collide with anything.
-    if !node.subtract {
-        if let (Some(_), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
-            let transformed = apply_placement_to_bounds(placement, *bounds);
+    if let (Some(shape), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
+        let transformed = apply_placement_to_bounds(placement, *bounds);
+        if node.subtract {
+            occ.subtracts.push(SubtractVolume {
+                shape,
+                orient: node.orient,
+                placement,
+                bounds: transformed,
+            });
+        } else {
             claim_cells(occ, &transformed, path);
         }
     }
