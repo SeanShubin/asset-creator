@@ -4,10 +4,6 @@
         bounds: (-8, -2, -8, 8, 2, 8),
     ),
     (
-        import: "frz-b/sensor",
-        bounds: (-2, 1, -2, 2, 3, 2),
-    ),
-    (
         import: "frz-b/melee",
         bounds: (4, -2, -4, 6, 0, 12),
         symmetry: MirrorX,
@@ -16,7 +12,13 @@
         name: "hover",
         shape: Box,
         bounds: (2, -3, 2, 6, -2, 6),
-        tags: ["green"],
+        tags: ["green", "darken", "darken"],
         symmetry: MirrorXZ,
+    ),
+    (
+        name: "sensor",
+        shape: Box,
+        bounds: (-2, 1, -2, 2, 3, 2),
+        tags: ["blue", "darken"]
     ),
 ]
