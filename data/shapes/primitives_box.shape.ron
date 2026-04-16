@@ -1,5 +1,7 @@
-(
-    name: "box",
-    shape: Box,
-    bounds: (-1, -1, -1, 1, 1, 1),
-)
+[
+    (
+        name: "box",
+        shape: Box,
+        bounds: (-1, -1, -1, 1, 1, 1),
+    ),
+]

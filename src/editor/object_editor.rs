@@ -5,7 +5,7 @@ use bevy_egui::{EguiContexts, egui};
 use std::path::PathBuf;
 
 use crate::browser::{browser_ui, ActiveEditor};
-use crate::registry::AssetRegistry;
+use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{
     animate_shapes, base_orientation_matrix, collect_occupancy, compile, despawn_shape,
     spawn_shape, CompiledShape, Facing, FusedMesh, Mirroring, Orientation, RawMesh,
@@ -31,6 +31,7 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<CameraIntent>()
             .init_resource::<ViewportRect>()
             .init_resource::<SelectedPart>()
+            .init_resource::<HiddenParts>()
             .init_resource::<OrientationGridState>()
             .add_systems(Update, (
                 // Phase 1: detect what needs to change
@@ -191,6 +192,13 @@ struct SelectedPart {
     name_path: Vec<String>,
 }
 
+/// Names of parts the user has hidden in the parts tree. Passed to
+/// `compile` so hidden parts produce no geometry or CSG effects.
+#[derive(Resource, Default)]
+struct HiddenParts {
+    names: Vec<String>,
+}
+
 /// Active / pending state for the orientation preview.
 /// `active` is the steady state while the grid is on screen;
 /// `build_requested` / `teardown_requested` are one-frame flags set
@@ -221,6 +229,7 @@ fn handle_activation(
     mut reload: ResMut<ShapeReloadState>,
     mut fit: ResMut<CameraFitState>,
     mut orbit: ResMut<OrbitState>,
+    mut hidden: ResMut<HiddenParts>,
     mut commands: Commands,
     existing_editor: Query<Entity, With<ObjectEditorEntity>>,
     existing_shapes: Query<Entity, With<ShapeRoot>>,
@@ -237,12 +246,14 @@ fn handle_activation(
         despawn_all(&mut commands, &existing_editor, &existing_shapes);
         activation.spawned = false;
         activation.current_path = None;
+        hidden.names.clear();
     }
 
     // Switching between shapes — despawn old shape, keep scene
     if was_object && is_object {
         let roots: Vec<Entity> = existing_shapes.iter().collect();
         despawn_shape(&mut commands, &roots);
+        hidden.names.clear();
     }
 
     // Spawn scene if entering object editor for the first time
@@ -339,13 +350,13 @@ fn reload_shape(
     registry: Res<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
     grid_entities: Query<Entity, With<OrientationGridEntity>>,
+    hidden: Res<HiddenParts>,
 ) {
     if !reload.needs_reload { return; }
     reload.needs_reload = false;
 
-    // Reload invalidates any previous entity references and cancels
-    // the orientation preview — selection is cleared, grid is wiped.
     *selected = SelectedPart::default();
+
     if grid.active {
         for e in &grid_entities {
             commands.entity(e).despawn_recursive();
@@ -392,7 +403,8 @@ fn reload_shape(
         }
     }
 
-    spawn_shape(&mut commands, &mut meshes, &mut materials, shape_file, &registry);
+    let name = shape_name_from_path(path);
+    spawn_shape(&mut commands, &mut meshes, &mut materials, &name, shape_file, &registry, &hidden.names);
     stats.needs_update = true;
 }
 
@@ -730,7 +742,7 @@ fn build_orientation_grid(
     let Some(path) = &activation.current_path else { return };
     let Some(spec) = registry.get_shape_by_path(path) else { return };
 
-    let compiled = compile(spec, &registry);
+    let compiled = compile(spec, &registry, &[]);
     let Some(target) = find_compiled_by_path(&compiled, &selected.name_path) else {
         warn!("Orientation preview: selected part not found in compiled tree");
         return;
@@ -1253,6 +1265,8 @@ fn part_tree_ui(
     stats: Res<SceneStats>,
     mut selected: ResMut<SelectedPart>,
     mut grid: ResMut<OrientationGridState>,
+    mut hidden: ResMut<HiddenParts>,
+    mut reload: ResMut<ShapeReloadState>,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else { return };
     let mut toggles: Vec<(Entity, Visibility)> = Vec::new();
@@ -1282,8 +1296,22 @@ fn part_tree_ui(
         selected.name_path = name_path;
     }
 
-    for (entity, vis) in toggles {
-        commands.entity(entity).insert(vis);
+    if !toggles.is_empty() {
+        for &(entity, ref vis) in &toggles {
+            if let Ok((part, _, _)) = parts.get(entity) {
+                if let Some(ref name) = part.name {
+                    let hiding = *vis == Visibility::Hidden;
+                    if hiding {
+                        if !hidden.names.contains(name) {
+                            hidden.names.push(name.clone());
+                        }
+                    } else {
+                        hidden.names.retain(|n| n != name);
+                    }
+                }
+            }
+        }
+        reload.needs_reload = true;
     }
 }
 

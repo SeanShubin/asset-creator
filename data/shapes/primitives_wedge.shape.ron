@@ -1,5 +1,7 @@
-(
-    name: "wedge",
-    shape: Wedge,
-    bounds: (-1, -1, -1, 1, 1, 1),
-)
+[
+    (
+        name: "wedge",
+        shape: Wedge,
+        bounds: (-1, -1, -1, 1, 1, 1),
+    ),
+]

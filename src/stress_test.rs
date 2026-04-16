@@ -67,7 +67,7 @@ pub fn run(registry: &AssetRegistry) {
         // Compile the shape into its CompiledShape tree and report
         // summary metrics about the fused meshes.
         let t0 = std::time::Instant::now();
-        let compiled = compile(shape, registry);
+        let compiled = compile(shape, registry, &[]);
         let compile_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
         let mut total_parts = 0usize;

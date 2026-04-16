@@ -6,8 +6,8 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use std::path::{Path, PathBuf};
 
 use crate::editor::compute_camera_pose;
-use crate::registry::AssetRegistry;
-use crate::shape::{collect_occupancy, spawn_shape_with_layers};
+use crate::registry::{AssetRegistry, shape_name_from_path};
+use crate::shape::{collect_occupancy, compute_aabb_for_parts, spawn_shape_with_layers};
 
 const EXPORT_RENDER_LAYER: usize = 1;
 const RENDER_SIZE: u32 = 1024;
@@ -204,16 +204,17 @@ fn process_render_queue(
 
     let image_handle = create_render_target(&mut images);
     let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
-    let fit_scale = compute_fit_from_shape(shape);
-    let shape_center = shape.compute_aabb()
+    let fit_scale = compute_fit_from_parts(shape);
+    let shape_center = compute_aabb_for_parts(shape)
         .map(|b| { let c = b.center_f32(); Vec3::new(c.0, c.1, c.2) })
         .unwrap_or(Vec3::ZERO);
 
     let camera = spawn_export_camera(&mut commands, &image_handle, fit_scale, shape_center, &export_layer);
     let light = spawn_export_light(&mut commands, &export_layer);
+    let name = shape_name_from_path(&job.shape_path);
     let shape_root = spawn_shape_with_layers(
-        &mut commands, &mut meshes, &mut materials, shape, &registry,
-        Some(export_layer),
+        &mut commands, &mut meshes, &mut materials, &name, shape, &registry,
+        Some(export_layer), &[],
     );
 
     if let Some(parent) = job.output_path.parent() {
@@ -312,8 +313,8 @@ fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>)
     }
 }
 
-fn compute_fit_from_shape(shape: &crate::shape::SpecNode) -> f32 {
-    let aabb = shape.compute_aabb();
+fn compute_fit_from_parts(shape: &[crate::shape::SpecNode]) -> f32 {
+    let aabb = compute_aabb_for_parts(shape);
     let Some(aabb) = aabb else { return 0.01 };
 
     let center = aabb.center_f32();

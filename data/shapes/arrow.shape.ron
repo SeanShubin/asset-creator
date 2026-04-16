@@ -1,17 +1,14 @@
-(
-    name: "arrow",
-    children: [
-        (
-            name:"base",
-            shape: Box,
-            bounds: (-1, -2, -1, 1, 3, 1),
-        ),
-        (
-            name:"tip",
-            shape: Wedge,
-            bounds: (-3, 3, -1, 0, 6, 1),
-            orient: (Left, NoMirror, NoRotation),
-            symmetry: PairX,
-        )
-    ],
-)
+[
+    (
+        name: "base",
+        shape: Box,
+        bounds: (-1, -2, -1, 1, 3, 1),
+    ),
+    (
+        name: "tip",
+        shape: Wedge,
+        bounds: (-3, 3, -1, 0, 6, 1),
+        orient: (Left, NoMirror, NoRotation),
+        symmetry: PairX,
+    ),
+]

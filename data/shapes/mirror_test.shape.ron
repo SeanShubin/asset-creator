@@ -1,7 +1,9 @@
-(
-    name: "mirror_test",
-    shape: Box,
-    // bounds: (3, 3, 3, 4, 4, 4),
-    bounds: (-3, -3, -3, -4, -4, -4),
-    symmetry: Octants,
-)
+[
+    (
+        name: "mirror_test",
+        shape: Box,
+        // bounds: (3, 3, 3, 4, 4, 4),
+        bounds: (-3, -3, -3, -4, -4, -4),
+        symmetry: Octants,
+    ),
+]

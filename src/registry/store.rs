@@ -19,7 +19,7 @@ struct RegisteredAsset<T> {
 #[derive(Resource, Default)]
 pub struct AssetRegistry {
     surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
-    shapes: HashMap<String, RegisteredAsset<SpecNode>>,
+    shapes: HashMap<String, RegisteredAsset<Vec<SpecNode>>>,
     generation: u64,
     shape_generation: u64,
     errors: Vec<AssetError>,
@@ -66,7 +66,7 @@ impl AssetRegistry {
 
     // --- Shape accessors ---
 
-    pub fn get_shape(&self, name: &str) -> Option<&SpecNode> {
+    pub fn get_shape(&self, name: &str) -> Option<&[SpecNode]> {
         if let Some(r) = self.shapes.get(name) {
             return Some(&r.data);
         }
@@ -84,10 +84,10 @@ impl AssetRegistry {
         None
     }
 
-    pub fn get_shape_by_path(&self, path: &std::path::Path) -> Option<&SpecNode> {
+    pub fn get_shape_by_path(&self, path: &std::path::Path) -> Option<&[SpecNode]> {
         self.shapes.values()
             .find(|r| r.path == path)
-            .map(|r| &r.data)
+            .map(|r| r.data.as_slice())
     }
 
     pub fn shape_entries(&self) -> Vec<(String, PathBuf)> {
@@ -125,7 +125,7 @@ impl AssetRegistry {
     /// so downstream tests can exercise import resolution without
     /// touching the filesystem.
     #[cfg(test)]
-    pub fn test_insert_shape(&mut self, key: impl Into<String>, data: SpecNode) {
+    pub fn test_insert_shape(&mut self, key: impl Into<String>, data: Vec<SpecNode>) {
         self.shapes.insert(
             key.into(),
             RegisteredAsset {
@@ -301,7 +301,7 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
         }
     };
 
-    let shape: SpecNode = match crate::util::parse_ron(&contents) {
+    let parts: Vec<SpecNode> = match crate::util::parse_ron(&contents) {
         Ok(s) => s,
         Err(e) => {
             registry.set_error(path_str, format!("{e}"));
@@ -314,11 +314,18 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
     let key = shape_key_from_path(path);
 
     registry.shapes.insert(key, RegisteredAsset {
-        data: shape,
+        data: parts,
         path: path.to_path_buf(),
     });
 }
 
+
+/// Derive a human-readable shape name from a file path.
+/// e.g., "data/shapes/frz-b/assembly.shape.ron" → "frz-b/assembly"
+pub fn shape_name_from_path(path: &Path) -> String {
+    let key = shape_key_from_path(path);
+    key.strip_suffix(".shape.ron").unwrap_or(&key).to_string()
+}
 
 /// Compute the registry key for a shape file: relative path from data/shapes/.
 /// e.g., "data/shapes/wheel.shape.ron" → "wheel.shape.ron"

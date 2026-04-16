@@ -20,7 +20,8 @@ use crate::registry::AssetRegistry;
 // SpecNode — the authored shape tree
 // =====================================================================
 
-/// A node in the authored shape tree. A `.shape.ron` file IS a `SpecNode`.
+/// A node in the authored shape list. A `.shape.ron` file is a
+/// `Vec<SpecNode>` — a flat array of parts.
 #[derive(Deserialize, Clone, Debug)]
 pub struct SpecNode {
     #[serde(default)]
@@ -60,24 +61,6 @@ impl SpecNode {
             Combinator::Import(import)
         } else {
             Combinator::None
-        }
-    }
-
-    /// Compute the AABB enclosing this node and all descendants.
-    /// Integer arithmetic throughout. Symmetry expansion is handled by
-    /// applying each placement to the node's bounds and including the
-    /// result in the running min/max.
-    pub fn compute_aabb(&self) -> Option<Bounds> {
-        let mut min = (i32::MAX, i32::MAX, i32::MAX);
-        let mut max = (i32::MIN, i32::MIN, i32::MIN);
-        let mut found = false;
-
-        self.collect_bounds(identity_placement(), &mut min, &mut max, &mut found);
-
-        if found {
-            Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
-        } else {
-            None
         }
     }
 
@@ -127,6 +110,32 @@ impl SpecNode {
         for child in &mut self.children {
             child.remap_bounds(from, to);
         }
+    }
+}
+
+// =====================================================================
+// Free functions for operating over a flat parts list (Vec<SpecNode>)
+// =====================================================================
+
+/// Compute the AABB enclosing all parts and their descendants.
+pub fn compute_aabb_for_parts(parts: &[SpecNode]) -> Option<Bounds> {
+    let mut min = (i32::MAX, i32::MAX, i32::MAX);
+    let mut max = (i32::MIN, i32::MIN, i32::MIN);
+    let mut found = false;
+    for part in parts {
+        part.collect_bounds(identity_placement(), &mut min, &mut max, &mut found);
+    }
+    if found {
+        Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
+    } else {
+        None
+    }
+}
+
+/// Remap all bounds in every part from one coordinate space to another.
+pub fn remap_bounds_for_parts(parts: &mut [SpecNode], from: &Bounds, to: &Bounds) {
+    for part in parts {
+        part.remap_bounds(from, to);
     }
 }
 
@@ -660,9 +669,11 @@ impl Occupancy {
 /// authoring errors to the shape that actually caused them, and removes
 /// the need for scale tracking or rational comparison across import
 /// boundaries.
-pub fn collect_occupancy(spec: &SpecNode, _registry: &AssetRegistry) -> Occupancy {
+pub fn collect_occupancy(parts: &[SpecNode], _registry: &AssetRegistry) -> Occupancy {
     let mut occ = Occupancy::new();
-    walk_for_occupancy(&mut occ, spec, "", identity_placement());
+    for part in parts {
+        walk_for_occupancy(&mut occ, part, "", identity_placement());
+    }
     occ
 }
 
@@ -845,7 +856,7 @@ mod tests {
     fn faces_symmetry_produces_six_distinct_world_cells() {
         // Source: a box that covers +X face of a 3×3×3 grid.
         let spec = leaf_spec(Bounds(1, -1, -1, 3, 1, 1), Symmetry::Faces);
-        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         // AABB should span ±3 on all three axes (cell range).
         let aabb = occ.aabb().unwrap();
@@ -857,7 +868,7 @@ mod tests {
     fn edges_symmetry_produces_twelve_distinct_world_cells() {
         // Source: a +X-parallel edge cell at +Y+Z in the 3×3×3 grid.
         let spec = leaf_spec(Bounds(-1, 1, 1, 1, 3, 3), Symmetry::Edges);
-        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         let aabb = occ.aabb().unwrap();
         assert_eq!(aabb.min(), (-3, -3, -3));
@@ -867,7 +878,7 @@ mod tests {
     #[test]
     fn octants_symmetry_produces_eight_corners() {
         let spec = leaf_spec(Bounds(1, 1, 1, 3, 3, 3), Symmetry::Octants);
-        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         let aabb = occ.aabb().unwrap();
         assert_eq!(aabb.min(), (-3, -3, -3));
@@ -879,14 +890,14 @@ mod tests {
         // The motivating "sphere at origin mirrored across X" case:
         // both copies land on the same cells, so every cell is a collision.
         let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), Symmetry::PairX);
-        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 8);
     }
 
     #[test]
     fn off_origin_pair_x_does_not_collide() {
         let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), Symmetry::PairX);
-        let occ = collect_occupancy(&spec, &AssetRegistry::default());
+        let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         assert_eq!(occ.aabb(), Some(Bounds(-3, 0, 0, 3, 1, 1)));
     }
@@ -913,15 +924,11 @@ mod tests {
         shape_b_import.shape = None;
         shape_b_import.import = Some("dummy_b".into());
 
-        let mut container = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), Symmetry::Single);
-        container.name = Some("parent".into());
-        container.shape = None;
-        container.bounds = None;
-        container.children = vec![shape_a_import, shape_b_import];
+        let parts = vec![shape_a_import, shape_b_import];
 
         // No actual imports in the registry; the walker doesn't need
         // to resolve them — it just claims their placement bounds.
-        let occ = collect_occupancy(&container, &AssetRegistry::default());
+        let occ = collect_occupancy(&parts, &AssetRegistry::default());
         // Overlap region: x ∈ [2, 3], y ∈ [0, 3], z ∈ [0, 3] = 9 cells.
         assert_eq!(occ.collision_count(), 9);
     }
@@ -940,13 +947,9 @@ mod tests {
         let mut native = leaf_spec(Bounds(-5, 0, 0, -2, 3, 3), Symmetry::Single);
         native.name = Some("native".into());
 
-        let mut container = leaf_spec(Bounds(0, 0, 0, 1, 1, 1), Symmetry::Single);
-        container.name = Some("parent".into());
-        container.shape = None;
-        container.bounds = None;
-        container.children = vec![import_a, native];
+        let parts = vec![import_a, native];
 
-        let occ = collect_occupancy(&container, &AssetRegistry::default());
+        let occ = collect_occupancy(&parts, &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
     }
 }

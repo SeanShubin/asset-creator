@@ -1,17 +1,14 @@
-(
-    name: "sensor",
-    children: [
-        (
-            name: "sensor_top",
-            shape: Box,
-            bounds: (-1, 0, -1, 1, 1, 1),
-            tags: ["blue"],
-        ),
-        (
-            name: "sensor_base",
-            shape: Box,
-            bounds: (-1, -1, -1, 1, 0, 1),
-            tags: ["blue"],
-        )
-    ],
-)
+[
+    (
+        name: "sensor_top",
+        shape: Box,
+        bounds: (-1, 0, -1, 1, 1, 1),
+        tags: ["blue"],
+    ),
+    (
+        name: "sensor_base",
+        shape: Box,
+        bounds: (-1, -1, -1, 1, 0, 1),
+        tags: ["blue"],
+    ),
+]

@@ -3,28 +3,26 @@
 // AABB overlaps, so the CSG cuts are gone and the body is a solid block.
 // If cavities are wanted later they can be expressed by composing smaller
 // boxes around empty cells.
-(
-    name: "chassis",
-    children: [
-        (
-            name: "body",
-            shape: Box,
-            bounds: (-4, -1, -4, 4, 0, 4),
-            tags: ["red"],
-        ),
-        (
-            name: "corner",
-            shape: Wedge,
-            bounds: (-4, -1, 4, -2, 1, 2),
-            tags: ["green"],
-            orient: (Back, NoMirror, RotateClockwise),
-            subtract: true
-        ),
-        // (
-        //     name: "top",
-        //     shape: Box,
-        //     bounds: (-4, 0, -4, 4, 1, 4),
-        //     tags: ["red"],
-        // ),
-    ],
-)
+[
+    (
+        name: "body",
+        shape: Box,
+        bounds: (-4, -1, -4, 4, 0, 4),
+        tags: ["red"],
+    ),
+    (
+        name: "corner",
+        shape: Wedge,
+        bounds: (-4, -1, 4, -2, 0, 2),
+        tags: ["green"],
+        orient: (Back, NoMirror, RotateClockwise),
+        mirror: Foo,
+        subtract: true,
+    ),
+    // (
+    //     name: "top",
+    //     shape: Box,
+    //     bounds: (-4, 0, -4, 4, 1, 4),
+    //     tags: ["red"],
+    // ),
+]

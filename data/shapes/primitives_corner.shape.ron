@@ -1,6 +1,8 @@
-(
-    name: "corner",
-    shape: Corner,
-    bounds: (-1, -1, -1, 1, 1, 1),
-    tags: ["cyan"],
-)
+[
+    (
+        name: "corner",
+        shape: Corner,
+        bounds: (-1, -1, -1, 1, 1, 1),
+        tags: ["cyan"],
+    ),
+]

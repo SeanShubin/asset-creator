@@ -28,29 +28,36 @@ pub fn spawn_shape(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    shape: &SpecNode,
+    name: &str,
+    parts: &[SpecNode],
     registry: &AssetRegistry,
+    hidden: &[String],
 ) -> Entity {
-    spawn_shape_with_layers(commands, meshes, materials, shape, registry, None)
+    spawn_shape_with_layers(commands, meshes, materials, name, parts, registry, None, hidden)
 }
 
 pub fn spawn_shape_with_layers(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
-    shape: &SpecNode,
+    name: &str,
+    parts: &[SpecNode],
     registry: &AssetRegistry,
     render_layers: Option<RenderLayers>,
+    hidden: &[String],
 ) -> Entity {
-    validate_names(shape, "");
+    validate_parts(parts);
 
-    let compiled = compile(shape, registry);
+    let compiled = compile(parts, registry, hidden);
+    let animations: Vec<_> = parts.iter()
+        .flat_map(|p| p.animations.iter().cloned())
+        .collect();
     let root_tf = Transform::IDENTITY;
     let mut root_cmd = commands.spawn((
         ShapeRoot,
-        ShapePart { name: shape.name.clone() },
+        ShapePart { name: Some(name.to_string()) },
         BaseTransform(root_tf),
-        ShapeAnimator::new(shape.animations.clone()),
+        ShapeAnimator::new(animations),
         root_tf,
         Visibility::default(),
     ));
@@ -59,8 +66,6 @@ pub fn spawn_shape_with_layers(
     }
     let root = root_cmd.id();
 
-    // The compiled root's own meshes + children are spawned under the
-    // ShapeRoot entity.
     attach_compiled(
         commands,
         meshes,
@@ -69,39 +74,45 @@ pub fn spawn_shape_with_layers(
         &compiled,
         &render_layers,
         /* is_root */ true,
+        hidden,
     );
 
     root
 }
 
-fn validate_names(node: &SpecNode, path: &str) {
-    let node_path = match &node.name {
-        Some(name) => {
-            if path.is_empty() {
-                name.clone()
-            } else {
-                format!("{path}/{name}")
+fn validate_parts(parts: &[SpecNode]) {
+    let mut seen = std::collections::HashSet::new();
+    for part in parts {
+        if let Some(ref name) = part.name {
+            if !seen.insert(name.clone()) {
+                warn!("Duplicate part name '{}'", name);
             }
+        } else if part.shape.is_some() {
+            warn!("Unnamed shape part — every shape should have a name");
         }
-        None => {
-            if node.shape.is_some() {
-                warn!("Unnamed shape at path '{path}' — every shape should have a name");
-            }
-            path.to_string()
-        }
-    };
+    }
+    for part in parts {
+        validate_names(part, part.name.as_deref().unwrap_or(""));
+    }
+}
 
+fn validate_names(node: &SpecNode, path: &str) {
     let mut seen = std::collections::HashSet::new();
     for child in &node.children {
         if let Some(ref name) = child.name {
             if !seen.insert(name.clone()) {
-                warn!("Duplicate child name '{}' at path '{}'", name, node_path);
+                warn!("Duplicate child name '{}' at path '{}'", name, path);
             }
         }
     }
 
     for child in &node.children {
-        validate_names(child, &node_path);
+        let child_path = match &child.name {
+            Some(name) if path.is_empty() => name.clone(),
+            Some(name) => format!("{path}/{name}"),
+            None => path.to_string(),
+        };
+        validate_names(child, &child_path);
     }
 }
 
@@ -123,19 +134,20 @@ fn attach_compiled(
     compiled: &CompiledShape,
     render_layers: &Option<RenderLayers>,
     is_root: bool,
+    hidden: &[String],
 ) {
-    // The root of the compiled tree IS the ShapeRoot entity already;
-    // attach its meshes and children directly. For non-root compiled
-    // parts we spawn our own ShapePart entity as a child of `parent`.
     let entity = if is_root {
         parent
     } else {
+        let is_hidden = compiled.name.as_ref()
+            .is_some_and(|n| hidden.iter().any(|h| h == n));
+        let vis = if is_hidden { Visibility::Hidden } else { Visibility::default() };
         let part_entity = commands
             .spawn((
                 ShapePart { name: compiled.name.clone() },
                 BaseTransform(compiled.local_transform),
                 compiled.local_transform,
-                Visibility::default(),
+                vis,
             ))
             .id();
         commands.entity(parent).add_child(part_entity);
@@ -156,6 +168,7 @@ fn attach_compiled(
             child,
             render_layers,
             /* is_root */ false,
+            hidden,
         );
     }
 }
@@ -172,9 +185,6 @@ fn attach_fused_mesh(
         return;
     }
 
-    // Vertex colors in the mesh carry the per-cell authored color.
-    // The material base is white so the vertex colors show through;
-    // emissive shapes copy that same white-base and enable emissive.
     let base_color = Color::WHITE;
     let cull_mode = if fused.contains_mirrored {
         None

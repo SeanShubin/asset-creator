@@ -15,8 +15,9 @@ pub use render::{base_orientation_matrix, compile, CompiledShape, FusedMesh};
 pub use meshes::RawMesh;
 #[allow(unused_imports)]
 pub use spec::{
-    collect_occupancy, identity_placement, Bounds, Collision,
-    Facing, Mirroring, Occupancy, Orientation, Placement, Rotation, SpecNode, Symmetry,
+    collect_occupancy, compute_aabb_for_parts, identity_placement, Bounds,
+    Collision, Facing, Mirroring, Occupancy, Orientation, Placement, Rotation,
+    SpecNode, Symmetry,
 };
 
 /// Plugin placeholder for shape-system invariants. Currently empty

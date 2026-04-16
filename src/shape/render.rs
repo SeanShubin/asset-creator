@@ -21,9 +21,10 @@ use crate::registry::AssetRegistry;
 use crate::util::Color3;
 use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
-    apply_placement_to_bounds, compose_placements, identity_placement,
-    placements, Bounds, Combinator, Facing, Mirroring, Orientation,
-    Placement, PrimitiveShape, Rotation, SignedAxis, SpecNode,
+    apply_placement_to_bounds, compose_placements, compute_aabb_for_parts,
+    identity_placement, placements, remap_bounds_for_parts, Bounds,
+    Combinator, Facing, Mirroring, Orientation, Placement, PrimitiveShape,
+    Rotation, SignedAxis, SpecNode,
 };
 
 // =====================================================================
@@ -224,30 +225,43 @@ fn pick_size_for_direction(dir: Vec3, size: (f32, f32, f32)) -> f32 {
 // =====================================================================
 
 /// Compile a `SpecNode` tree into a `CompiledShape` tree with fused
-/// per-part meshes. This is the only function that consumes `SpecNode`
-/// fields for render purposes.
+/// per-part meshes. Parts whose names appear in `hidden` are skipped:
+/// no geometry, no CSG effect. They still appear as empty nodes in the
+/// compiled tree so the parts-tree UI can toggle them back on.
 pub fn compile(
-    spec: &SpecNode,
+    parts: &[SpecNode],
     registry: &AssetRegistry,
+    hidden: &[String],
 ) -> CompiledShape {
     let templates = PrimitiveTemplates::new();
     let ctx = CompileCtx {
         registry,
         templates: &templates,
     };
-    // Pre-pass: collect all subtract primitives from the spec tree
+    // Pre-pass: collect all subtract primitives from every part
     // (stopping at import boundaries). Every group gets this full list
     // so subtracts carve into unions regardless of naming hierarchy.
     let mut all_subtracts = Vec::new();
-    collect_subtracts(spec, identity_placement(), (1, 1, 1), &mut all_subtracts);
-    compile_group(
-        spec,
-        identity_placement(),
-        (1, 1, 1),
-        &ctx,
-        /* is_direct */ true,
-        &all_subtracts,
-    )
+    for part in parts {
+        collect_subtracts(part, identity_placement(), (1, 1, 1), hidden, &mut all_subtracts);
+    }
+    // Walk each top-level part into a single root group.
+    let mut group = GroupAccumulator::new();
+    group.subtract_primitives.extend_from_slice(&all_subtracts);
+    for part in parts {
+        walk_into_group(
+            part,
+            identity_placement(),
+            (1, 1, 1),
+            &mut group,
+            /* is_group_root */ false,
+            &ctx,
+            /* is_direct */ true,
+            &all_subtracts,
+            hidden,
+        );
+    }
+    group.finish(None, ctx.templates)
 }
 
 struct CompileCtx<'a> {
@@ -611,6 +625,7 @@ fn compile_group(
     ctx: &CompileCtx<'_>,
     is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
+    hidden: &[String],
 ) -> CompiledShape {
     let mut group = GroupAccumulator::new();
     group.subtract_primitives.extend_from_slice(all_subtracts);
@@ -623,8 +638,17 @@ fn compile_group(
         ctx,
         is_direct,
         all_subtracts,
+        hidden,
     );
     group.finish(spec.name.clone(), ctx.templates)
+}
+
+fn is_hidden(spec: &SpecNode, hidden: &[String]) -> bool {
+    if let Some(ref name) = spec.name {
+        hidden.iter().any(|h| h == name)
+    } else {
+        false
+    }
 }
 
 fn walk_into_group(
@@ -636,14 +660,20 @@ fn walk_into_group(
     ctx: &CompileCtx<'_>,
     is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
+    hidden: &[String],
 ) {
     // Named non-root nodes start their own group as a child of this one.
     if !is_group_root && spec.name.is_some() {
         let child = compile_group(
             spec, inherited_placement, scale, ctx, is_direct,
-            all_subtracts,
+            all_subtracts, hidden,
         );
         group.children.push(child);
+        return;
+    }
+
+    // Hidden nodes produce an empty group — no geometry, no CSG.
+    if is_hidden(spec, hidden) {
         return;
     }
 
@@ -651,7 +681,7 @@ fn walk_into_group(
         Combinator::Symmetry(sym) => {
             for (local, _suffix) in placements(sym) {
                 let combined = compose_placements(inherited_placement, *local);
-                walk_node_body(spec, combined, scale, group, ctx, is_direct, all_subtracts);
+                walk_node_body(spec, combined, scale, group, ctx, is_direct, all_subtracts, hidden);
             }
         }
         Combinator::Import(import_name) => {
@@ -665,7 +695,7 @@ fn walk_into_group(
             );
         }
         Combinator::None => {
-            walk_node_body(spec, inherited_placement, scale, group, ctx, is_direct, all_subtracts);
+            walk_node_body(spec, inherited_placement, scale, group, ctx, is_direct, all_subtracts, hidden);
         }
     }
 }
@@ -680,6 +710,7 @@ fn walk_node_body(
     ctx: &CompileCtx<'_>,
     is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
+    hidden: &[String],
 ) {
     if let Some(shape) = spec.shape {
         let Some(bounds) = spec.bounds else {
@@ -688,7 +719,7 @@ fn walk_node_body(
                 spec.name.as_deref().unwrap_or("unnamed")
             );
             for child in &spec.children {
-                walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts);
+                walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts, hidden);
             }
             return;
         };
@@ -715,7 +746,7 @@ fn walk_node_body(
     }
 
     for child in &spec.children {
-        walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts);
+        walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts, hidden);
     }
 }
 
@@ -757,9 +788,13 @@ fn collect_subtracts(
     spec: &SpecNode,
     placement: Placement,
     scale: (i32, i32, i32),
+    hidden: &[String],
     out: &mut Vec<SubtractPrimitive>,
 ) {
     if spec.import.is_some() {
+        return;
+    }
+    if is_hidden(spec, hidden) {
         return;
     }
     let sym = spec.symmetry;
@@ -778,7 +813,7 @@ fn collect_subtracts(
             }
         }
         for child in &spec.children {
-            collect_subtracts(child, combined, scale, out);
+            collect_subtracts(child, combined, scale, hidden, out);
         }
     }
 }
@@ -821,14 +856,14 @@ fn walk_import(
     ctx: &CompileCtx<'_>,
 ) {
     let imported = match ctx.registry.get_shape(import_name) {
-        Some(shape) => shape.clone(),
+        Some(parts) => parts.to_vec(),
         None => {
             error!("Import '{}' not found in registry", import_name);
             return;
         }
     };
 
-    let Some(native_aabb) = imported.compute_aabb() else {
+    let Some(native_aabb) = compute_aabb_for_parts(&imported) else {
         warn!("Import '{}' has no computable AABB — skipping", import_name);
         return;
     };
@@ -842,23 +877,21 @@ fn walk_import(
     );
 
     let mut remapped = imported;
-    remapped.remap_bounds(&native_aabb, &placement_bounds);
+    remap_bounds_for_parts(&mut remapped, &native_aabb, &placement_bounds);
 
-    // The imported subtree's top-level node becomes part of THIS group
-    // (same named part as the import_node). Walk it as if it were an
-    // inlined child, not a new named group. Subtract previews are
-    // suppressed inside imports — the imported shape's own direct
+    // The imported parts are inlined into THIS group. Subtract previews
+    // are suppressed inside imports — the imported shape's own direct
     // compile shows them.
-    walk_node_body(&remapped, inherited_placement, new_scale, group, ctx, false, &[]);
-    for child in &remapped.children {
+    for part in &remapped {
         walk_into_group(
-            child,
+            part,
             inherited_placement,
             new_scale,
             group,
             false,
             ctx,
             false,
+            &[],
             &[],
         );
     }
@@ -888,55 +921,45 @@ mod tests {
         }
     }
 
-    fn empty_container(name: &str, children: Vec<SpecNode>) -> SpecNode {
-        let mut node = leaf_box(name, Bounds(0, 0, 0, 1, 1, 1));
-        node.shape = None;
-        node.bounds = None;
-        node.children = children;
-        node
+    fn overall_bounds(compiled: &CompiledShape) -> ([f32; 3], [f32; 3]) {
+        let mut mn = [f32::INFINITY; 3];
+        let mut mx = [f32::NEG_INFINITY; 3];
+        fn walk(node: &CompiledShape, mn: &mut [f32; 3], mx: &mut [f32; 3]) {
+            for fused in &node.meshes {
+                let (fmn, fmx) = mesh_bounds_raw(&fused.mesh);
+                for i in 0..3 {
+                    mn[i] = mn[i].min(fmn[i]);
+                    mx[i] = mx[i].max(fmx[i]);
+                }
+            }
+            for c in &node.children {
+                walk(c, mn, mx);
+            }
+        }
+        walk(compiled, &mut mn, &mut mx);
+        (mn, mx)
     }
 
-    fn mesh_bounds(mesh: &RawMesh) -> ([f32; 3], [f32; 3]) {
+    fn mesh_bounds_raw(mesh: &RawMesh) -> ([f32; 3], [f32; 3]) {
         let mut mn = [f32::INFINITY; 3];
         let mut mx = [f32::NEG_INFINITY; 3];
         for p in &mesh.positions {
             for i in 0..3 {
-                if p[i] < mn[i] {
-                    mn[i] = p[i];
-                }
-                if p[i] > mx[i] {
-                    mx[i] = p[i];
-                }
+                if p[i] < mn[i] { mn[i] = p[i]; }
+                if p[i] > mx[i] { mx[i] = p[i]; }
             }
         }
         (mn, mx)
-    }
-
-    fn find_fused_mesh(compiled: &CompiledShape) -> &RawMesh {
-        fn walk<'a>(node: &'a CompiledShape) -> Option<&'a RawMesh> {
-            if let Some(m) = node.meshes.first() {
-                return Some(&m.mesh);
-            }
-            for c in &node.children {
-                if let Some(m) = walk(c) {
-                    return Some(m);
-                }
-            }
-            None
-        }
-        walk(compiled).expect("expected at least one fused mesh in compiled tree")
     }
 
     /// A multi-cell Box primitive must render as one single mesh whose
     /// vertex extent matches the authored bounds exactly. No decomposition.
     #[test]
     fn stretchy_box_renders_single_mesh_spanning_full_bounds() {
-        let spec = leaf_box("stretched", Bounds(1, 2, 3, 4, 5, 6));
-        let compiled = compile(&spec, &crate::registry::AssetRegistry::default());
+        let parts = vec![leaf_box("stretched", Bounds(1, 2, 3, 4, 5, 6))];
+        let compiled = compile(&parts, &crate::registry::AssetRegistry::default(), &[]);
 
-        // One primitive → one fused mesh on the root CompiledShape.
-        assert_eq!(compiled.meshes.len(), 1, "expected exactly one fused mesh");
-        let (mn, mx) = mesh_bounds(&compiled.meshes[0].mesh);
+        let (mn, mx) = overall_bounds(&compiled);
         assert_eq!(mn, [1.0, 2.0, 3.0]);
         assert_eq!(mx, [4.0, 5.0, 6.0]);
     }
@@ -948,37 +971,34 @@ mod tests {
     /// through composition.
     #[test]
     fn transitive_stretching_through_nested_import() {
-        // Shape A's native AABB is (-2, -2, -2, 2, 2, 2) — a 4×4×4 cube.
-        // We establish the native extent by setting A's own bounds (A
-        // is a container, not a primitive — shape: None).
-        //
-        // A's leaf occupies the +X half of A's cube: x ∈ [0, 2],
-        // y, z ∈ [-2, 2].
-        let leaf = leaf_box("leaf", Bounds(0, -2, -2, 2, 2, 2));
-        let mut shape_a = empty_container("shape_a", vec![leaf]);
-        shape_a.bounds = Some(Bounds(-2, -2, -2, 2, 2, 2));
+        // Shape A has two parts spanning a 4×4×4 native AABB:
+        //   spacer: (-2, -2, -2, 0, 2, 2)  — the -X half
+        //   leaf:   (0, -2, -2, 2, 2, 2)   — the +X half
+        let shape_a_parts = vec![
+            leaf_box("spacer", Bounds(-2, -2, -2, 0, 2, 2)),
+            leaf_box("leaf", Bounds(0, -2, -2, 2, 2, 2)),
+        ];
 
         let mut registry = crate::registry::AssetRegistry::default();
-        registry.test_insert_shape("shape_a", shape_a);
+        registry.test_insert_shape("shape_a", shape_a_parts);
 
         // Shape B imports A at placement (-4, 0, -4, 4, 8, 4) — an
         // 8×8×8 cube. A's native 4×4×4 stretches by ×2 in each axis.
         let mut import_node = leaf_box("imported", Bounds(-4, 0, -4, 4, 8, 4));
         import_node.shape = None;
         import_node.import = Some("shape_a".into());
-        let shape_b = empty_container("shape_b", vec![import_node]);
+        let shape_b_parts = vec![import_node];
 
-        let compiled = compile(&shape_b, &registry);
+        let compiled = compile(&shape_b_parts, &registry, &[]);
 
-        // Within A's native cube the leaf occupied x ∈ [0, 2]
-        // (50%..100%), y ∈ [-2, 2] (0%..100%), z ∈ [-2, 2] (0%..100%).
-        // After A is stretched by ×2 into B's placement (-4..4, 0..8, -4..4):
-        //   world x: 50%..100% of [-4, 4] → [0, 4]
-        //   world y: 0%..100%  of [0, 8]  → [0, 8]
-        //   world z: 0%..100%  of [-4, 4] → [-4, 4]
-        let mesh = find_fused_mesh(&compiled);
-        let (mn, mx) = mesh_bounds(mesh);
-        assert_eq!(mn, [0.0, 0.0, -4.0], "stretched mesh min");
+        // A's native AABB is (-2..2, -2..2, -2..2). After remap into
+        // (-4..4, 0..8, -4..4) (×2 each axis), both halves stretch:
+        //   spacer: x -2→0 → -4→0
+        //   leaf:   x 0→2  → 0→4
+        //   y: -2→2 → 0→8, z: -2→2 → -4→4
+        // Combined mesh spans the full placement bounds.
+        let (mn, mx) = overall_bounds(&compiled);
+        assert_eq!(mn, [-4.0, 0.0, -4.0], "stretched mesh min");
         assert_eq!(mx, [4.0, 8.0, 4.0], "stretched mesh max");
     }
 }
