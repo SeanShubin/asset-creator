@@ -19,4 +19,12 @@
         symmetry: MirrorXZ,
         subtract: true,
     ),
+    (
+        name: "weapons_bay",
+        shape: Box,
+        bounds: (-3, -1, -2, -2, 0, 4),
+        tags: ["blue"],
+        symmetry: MirrorX,
+        subtract: true,
+    ),
 ]
