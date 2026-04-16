@@ -56,13 +56,12 @@ impl SpecNode {
     /// an explicit name use the last path segment of the import path
     /// (e.g. `"frz-b/chassis"` → `"chassis"`). Name and import are
     /// mutually exclusive.
-    pub fn effective_name(&self) -> Option<String> {
+    pub fn effective_name(&self) -> Option<&str> {
         if let Some(ref name) = self.name {
-            return Some(name.clone());
+            return Some(name.as_str());
         }
         if let Some(ref import) = self.import {
-            let last = import.rsplit('/').next().unwrap_or(import);
-            return Some(last.to_string());
+            return Some(import.rsplit('/').next().unwrap_or(import));
         }
         None
     }
@@ -145,6 +144,20 @@ pub fn compute_aabb_for_parts(parts: &[SpecNode]) -> Option<Bounds> {
     } else {
         None
     }
+}
+
+/// Resolve the placement bounds for an import node: use the explicit
+/// bounds if specified, otherwise fall back to the imported shape's
+/// native AABB from the registry.
+pub fn resolve_import_bounds(
+    node: &SpecNode,
+    import_name: &str,
+    registry: &AssetRegistry,
+) -> Option<Bounds> {
+    node.bounds.or_else(|| {
+        registry.get_shape(import_name)
+            .and_then(|parts| compute_aabb_for_parts(parts))
+    })
 }
 
 /// Remap all bounds in every part from one coordinate space to another.
@@ -415,6 +428,7 @@ pub struct AnimState {
 /// All copies are signed permutations of the coordinate axes — elements
 /// of the cube symmetry group B₃ (order 48). The variants here are the
 /// most commonly useful subsets for cell-grid authoring.
+#[allow(non_camel_case_types)]
 #[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Symmetry {
     /// Identity only: 1 copy.
@@ -729,7 +743,7 @@ fn walk_for_occupancy(
     inherited: Placement,
     registry: &AssetRegistry,
 ) {
-    let base_path = append_path(parent_path, node.effective_name().as_deref());
+    let base_path = append_path(parent_path, node.effective_name());
 
     match node.combinator() {
         Combinator::Symmetry(sym) => {
@@ -745,12 +759,8 @@ fn walk_for_occupancy(
         }
         Combinator::Import(import_name) => {
             // Opaque import: claim the placement bounds as a single
-            // region in this shape's own coordinate space. When bounds
-            // are not specified, use the imported shape's native AABB.
-            let bounds = node.bounds.or_else(|| {
-                registry.get_shape(import_name)
-                    .and_then(|parts| compute_aabb_for_parts(parts))
-            });
+            // region in this shape's own coordinate space.
+            let bounds = resolve_import_bounds(node, import_name, registry);
             if let Some(bounds) = bounds {
                 let transformed = apply_placement_to_bounds(inherited, bounds);
                 claim_cells(occ, &transformed, &base_path);

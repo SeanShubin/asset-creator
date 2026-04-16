@@ -1297,11 +1297,11 @@ fn part_tree_ui(
     }
 
     if !toggles.is_empty() {
+        let snapshot = hidden.names.clone();
         for &(entity, ref vis) in &toggles {
             if let Ok((part, _, _)) = parts.get(entity) {
                 if let Some(ref name) = part.name {
-                    let hiding = *vis == Visibility::Hidden;
-                    if hiding {
+                    if *vis == Visibility::Hidden {
                         if !hidden.names.contains(name) {
                             hidden.names.push(name.clone());
                         }
@@ -1311,7 +1311,9 @@ fn part_tree_ui(
                 }
             }
         }
-        reload.needs_reload = true;
+        if hidden.names != snapshot {
+            reload.needs_reload = true;
+        }
     }
 }
 

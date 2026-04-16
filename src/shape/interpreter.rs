@@ -91,7 +91,7 @@ fn validate_parts(parts: &[SpecNode]) {
             );
         }
         if let Some(name) = part.effective_name() {
-            if !seen.insert(name.clone()) {
+            if !seen.insert(name.to_string()) {
                 error!("Duplicate part name '{}'", name);
             }
         } else if part.shape.is_some() {
@@ -99,7 +99,7 @@ fn validate_parts(parts: &[SpecNode]) {
         }
     }
     for part in parts {
-        validate_names(part, &part.effective_name().unwrap_or_default());
+        validate_names(part, part.effective_name().unwrap_or(""));
     }
 }
 
@@ -115,16 +115,16 @@ fn validate_names(node: &SpecNode, path: &str) {
             );
         }
         if let Some(name) = child.effective_name() {
-            if !seen.insert(name.clone()) {
+            if !seen.insert(name.to_string()) {
                 error!("Duplicate child name '{}' at path '{}'", name, path);
             }
         }
     }
 
     for child in &node.children {
-        let child_name = child.effective_name().unwrap_or_default();
+        let child_name = child.effective_name().unwrap_or("");
         let child_path = if path.is_empty() {
-            child_name
+            child_name.to_string()
         } else if child_name.is_empty() {
             path.to_string()
         } else {

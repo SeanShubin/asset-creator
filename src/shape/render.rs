@@ -22,8 +22,8 @@ use crate::util::Color3;
 use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
     apply_placement_to_bounds, compose_placements, compute_aabb_for_parts,
-    identity_placement, placements, remap_bounds_for_parts, Bounds,
-    Combinator, Facing, Mirroring, Orientation, Placement, PrimitiveShape,
+    identity_placement, placements, remap_bounds_for_parts, resolve_import_bounds,
+    Bounds, Combinator, Facing, Mirroring, Orientation, Placement, PrimitiveShape,
     Rotation, SignedAxis, SpecNode,
 };
 
@@ -237,6 +237,8 @@ pub fn compile(
     let ctx = CompileCtx {
         registry,
         templates: &templates,
+        hidden,
+        is_direct: true,
     };
     // Pre-pass: collect all subtract primitives from every part
     // (stopping at import boundaries). Every group gets this full list
@@ -254,11 +256,9 @@ pub fn compile(
             identity_placement(),
             (1, 1, 1),
             &mut group,
-            /* is_group_root */ false,
+            false,
             &ctx,
-            /* is_direct */ true,
             &all_subtracts,
-            hidden,
         );
     }
     group.finish(None, ctx.templates)
@@ -267,6 +267,8 @@ pub fn compile(
 struct CompileCtx<'a> {
     registry: &'a AssetRegistry,
     templates: &'a PrimitiveTemplates,
+    hidden: &'a [String],
+    is_direct: bool,
 }
 
 struct PrimitiveTemplates {
@@ -623,29 +625,17 @@ fn compile_group(
     inherited_placement: Placement,
     scale: (i32, i32, i32),
     ctx: &CompileCtx<'_>,
-    is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
-    hidden: &[String],
 ) -> CompiledShape {
     let mut group = GroupAccumulator::new();
     group.subtract_primitives.extend_from_slice(all_subtracts);
-    walk_into_group(
-        spec,
-        inherited_placement,
-        scale,
-        &mut group,
-        /* is_group_root */ true,
-        ctx,
-        is_direct,
-        all_subtracts,
-        hidden,
-    );
-    group.finish(spec.effective_name(), ctx.templates)
+    walk_into_group(spec, inherited_placement, scale, &mut group, true, ctx, all_subtracts);
+    group.finish(spec.effective_name().map(str::to_string), ctx.templates)
 }
 
-fn is_hidden(spec: &SpecNode, hidden: &[String]) -> bool {
+fn is_hidden(spec: &SpecNode, ctx: &CompileCtx<'_>) -> bool {
     if let Some(name) = spec.effective_name() {
-        hidden.iter().any(|h| h == &name)
+        ctx.hidden.iter().any(|h| h == name)
     } else {
         false
     }
@@ -658,31 +648,24 @@ fn walk_into_group(
     group: &mut GroupAccumulator,
     is_group_root: bool,
     ctx: &CompileCtx<'_>,
-    is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
-    hidden: &[String],
 ) {
-    // Named non-root nodes start their own group as a child of this one.
     if !is_group_root && spec.effective_name().is_some() {
-        let child = compile_group(
-            spec, inherited_placement, scale, ctx, is_direct,
-            all_subtracts, hidden,
-        );
+        let child = compile_group(spec, inherited_placement, scale, ctx, all_subtracts);
         group.children.push(child);
         return;
     }
 
     // Hidden nodes skip their own geometry and CSG but still walk
-    // children so they appear in the parts tree. Non-hidden children
-    // of a hidden parent compile normally with full geometry.
-    if is_hidden(spec, hidden) {
+    // children so they appear in the parts tree.
+    if is_hidden(spec, ctx) {
         match spec.combinator() {
             Combinator::Import(import_name) => {
-                walk_import(spec, import_name, inherited_placement, scale, group, ctx, hidden);
+                walk_import(spec, import_name, inherited_placement, scale, group, ctx);
             }
             _ => {
                 for child in &spec.children {
-                    walk_into_group(child, inherited_placement, scale, group, false, ctx, is_direct, all_subtracts, hidden);
+                    walk_into_group(child, inherited_placement, scale, group, false, ctx, all_subtracts);
                 }
             }
         }
@@ -693,22 +676,14 @@ fn walk_into_group(
         Combinator::Symmetry(sym) => {
             for (local, _suffix) in placements(sym) {
                 let combined = compose_placements(inherited_placement, *local);
-                walk_node_body(spec, combined, scale, group, ctx, is_direct, all_subtracts, hidden);
+                walk_node_body(spec, combined, scale, group, ctx, all_subtracts);
             }
         }
         Combinator::Import(import_name) => {
-            walk_import(
-                spec,
-                import_name,
-                inherited_placement,
-                scale,
-                group,
-                ctx,
-                hidden,
-            );
+            walk_import(spec, import_name, inherited_placement, scale, group, ctx);
         }
         Combinator::None => {
-            walk_node_body(spec, inherited_placement, scale, group, ctx, is_direct, all_subtracts, hidden);
+            walk_node_body(spec, inherited_placement, scale, group, ctx, all_subtracts);
         }
     }
 }
@@ -721,18 +696,16 @@ fn walk_node_body(
     scale: (i32, i32, i32),
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
-    is_direct: bool,
     all_subtracts: &[SubtractPrimitive],
-    hidden: &[String],
 ) {
     if let Some(shape) = spec.shape {
         let Some(bounds) = spec.bounds else {
             warn!(
                 "Shape '{}' has no bounds — skipping geometry",
-                spec.effective_name().as_deref().unwrap_or("unnamed")
+                spec.effective_name().unwrap_or("unnamed")
             );
             for child in &spec.children {
-                walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts, hidden);
+                walk_into_group(child, placement, scale, group, false, ctx, all_subtracts);
             }
             return;
         };
@@ -741,7 +714,7 @@ fn walk_node_body(
         if size.0 == 0 || size.1 == 0 || size.2 == 0 {
             error!(
                 "'{}' has zero-size bounds ({},{},{}) — skipping",
-                spec.effective_name().as_deref().unwrap_or("unnamed"),
+                spec.effective_name().unwrap_or("unnamed"),
                 size.0,
                 size.1,
                 size.2
@@ -750,7 +723,7 @@ fn walk_node_body(
         }
 
         if spec.subtract {
-            if is_direct {
+            if ctx.is_direct {
                 add_preview_primitive(shape, &bounds, placement, scale, spec.orient, spec, group);
             }
         } else {
@@ -759,7 +732,7 @@ fn walk_node_body(
     }
 
     for child in &spec.children {
-        walk_into_group(child, placement, scale, group, false, ctx, is_direct, all_subtracts, hidden);
+        walk_into_group(child, placement, scale, group, false, ctx, all_subtracts);
     }
 }
 
@@ -807,7 +780,7 @@ fn collect_subtracts(
     if spec.import.is_some() {
         return;
     }
-    if is_hidden(spec, hidden) {
+    if spec.effective_name().is_some_and(|n| hidden.iter().any(|h| h == n)) {
         return;
     }
     let sym = spec.symmetry;
@@ -867,7 +840,6 @@ fn walk_import(
     parent_scale: (i32, i32, i32),
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
-    hidden: &[String],
 ) {
     let imported = match ctx.registry.get_shape(import_name) {
         Some(parts) => parts.to_vec(),
@@ -881,7 +853,9 @@ fn walk_import(
         warn!("Import '{}' has no computable AABB — skipping", import_name);
         return;
     };
-    let placement_bounds = import_node.bounds.unwrap_or(native_aabb);
+    let Some(placement_bounds) = resolve_import_bounds(import_node, import_name, ctx.registry) else {
+        return;
+    };
 
     let remap_scale = Bounds::remap_scale(&native_aabb);
     let new_scale = (
@@ -897,12 +871,17 @@ fn walk_import(
     // sibling unions within the same import.
     let mut import_subtracts = Vec::new();
     for part in &remapped {
-        collect_subtracts(part, inherited_placement, new_scale, hidden, &mut import_subtracts);
+        collect_subtracts(part, inherited_placement, new_scale, ctx.hidden, &mut import_subtracts);
     }
 
     // The imported parts are inlined into THIS group. Subtract previews
     // are suppressed inside imports — the imported shape's own direct
     // compile shows them.
+    // Imports suppress subtract previews and use their own subtract list.
+    let import_ctx = CompileCtx {
+        is_direct: false,
+        ..*ctx
+    };
     for part in &remapped {
         walk_into_group(
             part,
@@ -910,10 +889,8 @@ fn walk_import(
             new_scale,
             group,
             false,
-            ctx,
-            false,
+            &import_ctx,
             &import_subtracts,
-            hidden,
         );
     }
 }
