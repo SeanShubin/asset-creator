@@ -66,23 +66,6 @@ impl SpecNode {
     }
 
 
-    /// Compute the AABB of this node. Handles all node types:
-    /// explicit bounds, imports (resolved from registry), symmetry
-    /// expansion, and children — callers never need to know which case
-    /// applies.
-    #[allow(dead_code)]
-    pub fn aabb(&self, registry: &AssetRegistry) -> Option<Bounds> {
-        let mut min = (i32::MAX, i32::MAX, i32::MAX);
-        let mut max = (i32::MIN, i32::MIN, i32::MIN);
-        let mut found = false;
-        self.collect_bounds(identity_placement(), &mut min, &mut max, &mut found, registry);
-        if found {
-            Some(Bounds(min.0, min.1, min.2, max.0, max.1, max.2))
-        } else {
-            None
-        }
-    }
-
     fn collect_bounds(
         &self,
         inherited: Placement,

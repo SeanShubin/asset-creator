@@ -20,7 +20,7 @@ struct RegisteredAsset<T: Clone> {
 pub struct AssetRegistry {
     surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
     shapes: HashMap<String, RegisteredAsset<Vec<SpecNode>>>,
-    generation: u64,
+    surface_generation: u64,
     shape_generation: u64,
     errors: Vec<AssetError>,
 }
@@ -53,7 +53,7 @@ impl AssetRegistry {
     }
 
     pub fn surface_generation(&self) -> u64 {
-        self.generation
+        self.surface_generation
     }
 
     pub fn upsert_surface(&mut self, name: String, data: SurfaceDef, path: PathBuf) {
@@ -392,7 +392,7 @@ fn poll_file_changes(
     }
 
     if surface_changed {
-        registry.generation += 1;
+        registry.surface_generation += 1;
     }
     if shape_changed {
         registry.shape_generation += 1;
@@ -400,11 +400,13 @@ fn poll_file_changes(
 }
 
 fn is_surface_file(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "ron")
-        && path.to_string_lossy().contains("surface")
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".surface.ron"))
 }
 
 fn is_shape_file(path: &Path) -> bool {
-    path.extension().is_some_and(|ext| ext == "ron")
-        && path.to_string_lossy().contains("shapes")
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".shape.ron"))
 }

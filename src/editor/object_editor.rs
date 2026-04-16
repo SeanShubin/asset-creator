@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::browser::{browser_ui, ActiveEditor};
 use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{
-    animate_shapes, base_orientation_matrix, collect_occupancy, compile, despawn_shape,
+    base_orientation_matrix, collect_occupancy, compile, despawn_shape,
     production_stats, spawn_shape, CompiledShape, Facing, FusedMesh, Mirroring, Orientation,
     RawMesh, Rotation, ShapeAnimator, ShapePart, ShapeRoot,
 };
@@ -62,7 +62,6 @@ impl Plugin for ObjectEditorPlugin {
                     orbit_camera::apply_orbit.run_if(is_object_active),
                     orbit_camera::apply_zoom.run_if(is_object_active),
                 ).chain(),
-                animate_shapes.run_if(is_object_active),
                 update_light.run_if(is_object_active),
                 // UI must run before viewport tracking so egui's
                 // available_rect reflects the panels for this frame.
@@ -1271,7 +1270,6 @@ fn part_tree_ui(
     roots: Query<Entity, With<ShapeRoot>>,
     parts: Query<(&ShapePart, Option<&Children>, &Visibility)>,
     mut animators: Query<&mut ShapeAnimator>,
-    mut commands: Commands,
     mut orbit: ResMut<OrbitState>,
     mut camera: Query<&mut Projection, With<OrbitCamera>>,
     fit: Res<CameraFitState>,

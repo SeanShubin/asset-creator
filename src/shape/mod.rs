@@ -7,7 +7,7 @@ mod spec;
 
 use bevy::prelude::*;
 
-pub use animation::{animate_shapes, ShapeAnimator};
+pub use animation::ShapeAnimator;
 pub use interpreter::{
     despawn_shape, spawn_shape, spawn_shape_with_layers, ShapePart, ShapeRoot,
 };
@@ -26,5 +26,7 @@ pub use spec::{
 pub struct ShapePlugin;
 
 impl Plugin for ShapePlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, animation::animate_shapes);
+    }
 }

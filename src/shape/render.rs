@@ -187,6 +187,7 @@ pub fn compile(
 ) -> CompiledShape {
     let templates = PrimitiveTemplates::new();
     let ctx = CompileCtx {
+        flatten: false,
         registry,
         templates: &templates,
         hidden,
@@ -232,6 +233,7 @@ pub fn production_stats(
 ) -> ProductionStats {
     let templates = PrimitiveTemplates::new();
     let ctx = CompileCtx {
+        flatten: true,
         registry,
         templates: &templates,
         hidden: &[],
@@ -241,15 +243,15 @@ pub fn production_stats(
     for part in parts {
         collect_subtracts(part, identity_placement(), (1, 1, 1), &[], &mut all_subtracts);
     }
-    // Walk everything into a single flat group — no named sub-groups.
     let mut group = GroupAccumulator::new();
     group.subtract_primitives.extend_from_slice(&all_subtracts);
     for part in parts {
-        walk_into_group_flat(
+        walk_into_group(
             part,
             identity_placement(),
             (1, 1, 1),
             &mut group,
+            false,
             &ctx,
             &all_subtracts,
         );
@@ -267,91 +269,15 @@ pub fn production_stats(
     ProductionStats { triangles, draw_calls }
 }
 
-/// Walk a spec node into a group without creating child groups for
-/// named nodes. Used by production_stats to flatten everything.
-fn walk_into_group_flat(
-    spec: &SpecNode,
-    inherited_placement: Placement,
-    scale: (i32, i32, i32),
-    group: &mut GroupAccumulator,
-    ctx: &CompileCtx<'_>,
-    all_subtracts: &[SubtractPrimitive],
-) {
-    if is_hidden(spec, ctx) {
-        return;
-    }
-
-    let sym = spec.symmetry;
-    for (local, _suffix) in placements(sym) {
-        let combined = compose_placements(inherited_placement, *local);
-        if let Some(ref import_name) = spec.import {
-            walk_import_flat(spec, import_name, combined, scale, group, ctx);
-        } else {
-            walk_node_body_flat(spec, combined, scale, group, ctx, all_subtracts);
-        }
-    }
-}
-
-fn walk_node_body_flat(
-    spec: &SpecNode,
-    placement: Placement,
-    scale: (i32, i32, i32),
-    group: &mut GroupAccumulator,
-    ctx: &CompileCtx<'_>,
-    all_subtracts: &[SubtractPrimitive],
-) {
-    if let Some(shape) = spec.shape {
-        if let Some(bounds) = spec.bounds {
-            let size = bounds.size();
-            if size.0 != 0 && size.1 != 0 && size.2 != 0 {
-                if !spec.subtract {
-                    add_union_primitive(shape, &bounds, placement, scale, spec.orient, spec, group);
-                }
-            }
-        }
-    }
-    for child in &spec.children {
-        walk_into_group_flat(child, placement, scale, group, ctx, all_subtracts);
-    }
-}
-
-fn walk_import_flat(
-    import_node: &SpecNode,
-    import_name: &str,
-    inherited_placement: Placement,
-    parent_scale: (i32, i32, i32),
-    group: &mut GroupAccumulator,
-    ctx: &CompileCtx<'_>,
-) {
-    let imported = match ctx.registry.get_shape(import_name) {
-        Some(parts) => parts.to_vec(),
-        None => return,
-    };
-    let Some(native_aabb) = aabb_for_parts(&imported, ctx.registry) else { return };
-    let placement_bounds = import_node.bounds.unwrap_or(native_aabb);
-    let remap_scale = Bounds::remap_scale(&native_aabb);
-    let new_scale = (
-        parent_scale.0 * remap_scale.0,
-        parent_scale.1 * remap_scale.1,
-        parent_scale.2 * remap_scale.2,
-    );
-    let mut remapped = imported;
-    remap_bounds_for_parts(&mut remapped, &native_aabb, &placement_bounds, ctx.registry);
-
-    let mut import_subtracts = Vec::new();
-    for part in &remapped {
-        collect_subtracts(part, inherited_placement, new_scale, ctx.hidden, &mut import_subtracts);
-    }
-    for part in &remapped {
-        walk_into_group_flat(part, inherited_placement, new_scale, group, ctx, &import_subtracts);
-    }
-}
 
 struct CompileCtx<'a> {
     registry: &'a AssetRegistry,
     templates: &'a PrimitiveTemplates,
     hidden: &'a [String],
     is_direct: bool,
+    /// When true, all nodes are walked into one flat group — no
+    /// named child groups are created. Used by production_stats.
+    flatten: bool,
 }
 
 struct PrimitiveTemplates {
@@ -986,7 +912,8 @@ fn walk_into_group(
     ctx: &CompileCtx<'_>,
     all_subtracts: &[SubtractPrimitive],
 ) {
-    if !is_group_root && spec.effective_name().is_some() {
+    // Named non-root nodes create child groups (unless flattening).
+    if !ctx.flatten && !is_group_root && spec.effective_name().is_some() {
         let child = compile_group(spec, inherited_placement, scale, ctx, all_subtracts);
         group.children.push(child);
         return;
@@ -995,7 +922,7 @@ fn walk_into_group(
     // Hidden nodes skip their own geometry and CSG but still walk
     // children so they appear in the parts tree.
     if is_hidden(spec, ctx) {
-        // Walk children for tree structure even when hidden.
+        if ctx.flatten { return; }
         if let Some(ref import_name) = spec.import {
             walk_import(spec, import_name, inherited_placement, scale, group, ctx);
         } else {
@@ -1055,10 +982,10 @@ fn walk_node_body(
 
         if spec.subtract {
             if ctx.is_direct {
-                add_preview_primitive(shape, &bounds, placement, scale, spec.orient, spec, group);
+                add_primitive(shape, &bounds, placement, scale, spec.orient, spec, &mut group.preview_primitives);
             }
         } else {
-            add_union_primitive(shape, &bounds, placement, scale, spec.orient, spec, group);
+            add_primitive(shape, &bounds, placement, scale, spec.orient, spec, &mut group.union_primitives);
         }
     }
 
@@ -1071,23 +998,22 @@ fn walk_node_body(
 /// decide whether to render it as one multi-cell mesh or decompose
 /// into unit cells, based on whether any sibling Subtract claims
 /// cells inside its extent.
-fn add_union_primitive(
+fn add_primitive(
     shape: PrimitiveShape,
     bounds: &Bounds,
     placement: Placement,
     scale: (i32, i32, i32),
     orient: Orientation,
     spec: &SpecNode,
-    group: &mut GroupAccumulator,
+    target: &mut Vec<UnionPrimitive>,
 ) {
     let world_bounds = apply_placement_to_bounds(placement, *bounds);
     let orient_mat = orientation_to_mat3(&orient, placement);
     let is_mirrored = orient_mat.determinant() < 0.0;
-
     let color = resolve_tags_color(&spec.tags);
     let emissive = resolve_tags_emissive(&spec.tags);
 
-    group.union_primitives.push(UnionPrimitive {
+    target.push(UnionPrimitive {
         shape,
         world_bounds,
         orient_mat,
@@ -1135,34 +1061,6 @@ fn collect_subtracts(
     }
 }
 
-/// Record a subtract primitive as a translucent preview mesh so the
-/// author can see the subtractive volume. Uses the authored color;
-/// alpha is applied at fusion time.
-fn add_preview_primitive(
-    shape: PrimitiveShape,
-    bounds: &Bounds,
-    placement: Placement,
-    scale: (i32, i32, i32),
-    orient: Orientation,
-    spec: &SpecNode,
-    group: &mut GroupAccumulator,
-) {
-    let world_bounds = apply_placement_to_bounds(placement, *bounds);
-    let orient_mat = orientation_to_mat3(&orient, placement);
-    let is_mirrored = orient_mat.determinant() < 0.0;
-
-    let color = resolve_tags_color(&spec.tags);
-
-    group.preview_primitives.push(UnionPrimitive {
-        shape,
-        world_bounds,
-        orient_mat,
-        color,
-        emissive: false,
-        is_mirrored,
-        scale,
-    });
-}
 
 fn walk_import(
     import_node: &SpecNode,
@@ -1189,11 +1087,6 @@ fn walk_import(
     // but symmetry is handled by the caller invoking walk_import once
     // per placement.
     let placement_bounds = import_node.bounds.unwrap_or(native_aabb);
-
-    info!(
-        "import '{}': native={:?} placement={:?} parent_scale={:?}",
-        import_name, native_aabb, placement_bounds, parent_scale
-    );
 
     let remap_scale = Bounds::remap_scale(&native_aabb);
     let new_scale = (
@@ -1389,15 +1282,5 @@ mod tests {
         assert_eq!(stats.draw_calls, 1);
     }
 
-    fn count_triangles(compiled: &CompiledShape) -> usize {
-        let mut count = 0;
-        for fused in &compiled.meshes {
-            count += fused.mesh.indices.len() / 3;
-        }
-        for child in &compiled.children {
-            count += count_triangles(child);
-        }
-        count
-    }
 }
 
