@@ -45,6 +45,7 @@ pub struct CompiledShape {
     pub local_transform: Transform,
     pub meshes: Vec<FusedMesh>,
     pub children: Vec<CompiledShape>,
+    pub subtract: bool,
 }
 
 /// A single fused mesh for one material configuration. Cells with the
@@ -261,7 +262,7 @@ pub fn compile(
             &all_subtracts,
         );
     }
-    group.finish(None, ctx.templates)
+    group.finish(None, false, ctx.templates)
 }
 
 struct CompileCtx<'a> {
@@ -348,7 +349,7 @@ impl GroupAccumulator {
         }
     }
 
-    fn finish(self, name: Option<String>, templates: &PrimitiveTemplates) -> CompiledShape {
+    fn finish(self, name: Option<String>, subtract: bool, templates: &PrimitiveTemplates) -> CompiledShape {
         // Per-cell subtract signature: for each cell any subtract
         // primitive touches, compute the actual subtract volume by
         // sampling at the cell's world position. Multiple subtracts
@@ -539,6 +540,7 @@ impl GroupAccumulator {
             local_transform: Transform::IDENTITY,
             meshes,
             children: self.children,
+            subtract,
         }
     }
 }
@@ -630,7 +632,7 @@ fn compile_group(
     let mut group = GroupAccumulator::new();
     group.subtract_primitives.extend_from_slice(all_subtracts);
     walk_into_group(spec, inherited_placement, scale, &mut group, true, ctx, all_subtracts);
-    group.finish(spec.effective_name().map(str::to_string), ctx.templates)
+    group.finish(spec.effective_name().map(str::to_string), spec.subtract, ctx.templates)
 }
 
 fn is_hidden(spec: &SpecNode, ctx: &CompileCtx<'_>) -> bool {

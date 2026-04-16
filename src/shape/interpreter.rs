@@ -12,6 +12,7 @@ use super::spec::SpecNode;
 #[derive(Component, Clone, Debug)]
 pub struct ShapePart {
     pub name: Option<String>,
+    pub subtract: bool,
 }
 
 #[derive(Component, Clone, Debug)]
@@ -55,7 +56,7 @@ pub fn spawn_shape_with_layers(
     let root_tf = Transform::IDENTITY;
     let mut root_cmd = commands.spawn((
         ShapeRoot,
-        ShapePart { name: Some(name.to_string()) },
+        ShapePart { name: Some(name.to_string()), subtract: false },
         BaseTransform(root_tf),
         ShapeAnimator::new(animations),
         root_tf,
@@ -162,7 +163,7 @@ fn attach_compiled(
         let vis = if is_hidden { Visibility::Hidden } else { Visibility::Visible };
         let part_entity = commands
             .spawn((
-                ShapePart { name: compiled.name.clone() },
+                ShapePart { name: compiled.name.clone(), subtract: compiled.subtract },
                 BaseTransform(compiled.local_transform),
                 compiled.local_transform,
                 vis,

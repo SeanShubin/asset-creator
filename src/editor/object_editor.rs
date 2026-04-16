@@ -32,6 +32,7 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<ViewportRect>()
             .init_resource::<SelectedPart>()
             .init_resource::<HiddenParts>()
+            .init_resource::<CollidingParts>()
             .init_resource::<OrientationGridState>()
             .add_systems(Update, (
                 // Phase 1: detect what needs to change
@@ -199,6 +200,13 @@ struct HiddenParts {
     names: Vec<String>,
 }
 
+/// Names of parts involved in cell collisions. Populated during
+/// shape reload from occupancy data.
+#[derive(Resource, Default)]
+struct CollidingParts {
+    names: Vec<String>,
+}
+
 /// Active / pending state for the orientation preview.
 /// `active` is the steady state while the grid is on screen;
 /// `build_requested` / `teardown_requested` are one-frame flags set
@@ -351,6 +359,7 @@ fn reload_shape(
     existing: Query<Entity, With<ShapeRoot>>,
     grid_entities: Query<Entity, With<OrientationGridEntity>>,
     hidden: Res<HiddenParts>,
+    mut colliding: ResMut<CollidingParts>,
 ) {
     if !reload.needs_reload { return; }
     reload.needs_reload = false;
@@ -400,6 +409,17 @@ fn reload_shape(
         }
         if occupancy.collisions().len() > 10 {
             warn!("  ... and {} more", occupancy.collisions().len() - 10);
+        }
+    }
+
+    // Collect the names of parts involved in collisions for tree coloring.
+    colliding.names.clear();
+    for c in occupancy.collisions() {
+        for path in [&c.first_path, &c.second_path] {
+            let leaf = path.rsplit('/').next().unwrap_or(path);
+            if !colliding.names.iter().any(|n| n == leaf) {
+                colliding.names.push(leaf.to_string());
+            }
         }
     }
 
@@ -1267,6 +1287,7 @@ fn part_tree_ui(
     mut grid: ResMut<OrientationGridState>,
     mut hidden: ResMut<HiddenParts>,
     mut reload: ResMut<ShapeReloadState>,
+    colliding: Res<CollidingParts>,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else { return };
     let mut toggles: Vec<(Entity, Visibility)> = Vec::new();
@@ -1286,7 +1307,7 @@ fn part_tree_ui(
         for root in &roots {
             draw_tree_node(
                 ui, root, &parts, &mut toggles, &mut new_selection,
-                selected.entity, 0, &[], &[],
+                selected.entity, 0, &[], &[], &colliding,
             );
         }
     });
@@ -1463,6 +1484,7 @@ fn draw_tree_node(
     depth: usize,
     ancestors: &[Entity],
     name_path: &[String],
+    colliding: &CollidingParts,
 ) {
     let Ok((part, children, _vis)) = parts.get(entity) else { return };
 
@@ -1476,10 +1498,17 @@ fn draw_tree_node(
     };
     let is_selected = selected_entity == Some(entity);
 
+    // Color: blue for subtractive, red for colliding, default otherwise.
+    let label_color = if part.subtract {
+        Some(egui::Color32::from_rgb(100, 140, 255))
+    } else if part.name.as_ref().is_some_and(|n| colliding.names.iter().any(|c| c == n)) {
+        Some(egui::Color32::from_rgb(255, 80, 80))
+    } else {
+        None
+    };
+
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        // Visibility toggle lives on the tri-state icon. Clicking the
-        // row body selects the part without affecting visibility.
         if !indent.is_empty() {
             ui.label(indent);
         }
@@ -1494,7 +1523,12 @@ fn draw_tree_node(
                 toggles.push((e, new_vis));
             }
         }
-        if ui.selectable_label(is_selected, label).clicked() {
+        let label_widget = if let Some(color) = label_color {
+            egui::RichText::new(label).color(color)
+        } else {
+            egui::RichText::new(label)
+        };
+        if ui.selectable_label(is_selected, label_widget).clicked() {
             // name_path holds the path to this node's PARENT; append
             // this node's own name (skipping the root, which is
             // represented by the empty path).
@@ -1525,7 +1559,7 @@ fn draw_tree_node(
             if parts.get(child).is_ok() {
                 draw_tree_node(
                     ui, child, parts, toggles, new_selection, selected_entity,
-                    depth + 1, &path, &child_name_path,
+                    depth + 1, &path, &child_name_path, colliding,
                 );
             }
         }
