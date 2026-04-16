@@ -7,7 +7,7 @@
 //
 // - 6 face cells via one Box + Symmetry::Faces  -> 6 copies (+/-X, +/-Y, +/-Z faces)
 // - 12 edge cells via one Wedge + Symmetry::Edges -> 12 copies (4 per axis)
-// - 8 corner cells via one Corner + Symmetry::Octants -> 8 copies (all octants)
+// - 8 corner cells via one Corner + Symmetry::MirrorXYZ -> 8 copies (all octants)
 //
 // Total: 3 authored parts, 26 rendered cells, no collisions.
 [
@@ -27,6 +27,6 @@
         name: "corner",
         shape: Corner,
         bounds: (1, 1, 1, 3, 3, 3),
-        symmetry: Octants,
+        symmetry: MirrorXYZ,
     ),
 ]

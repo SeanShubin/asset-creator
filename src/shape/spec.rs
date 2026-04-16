@@ -405,20 +405,26 @@ pub enum Symmetry {
     /// Identity only: 1 copy.
     #[default]
     Single,
-    /// Mirror across the x=0 plane: 2 copies (±X).
-    PairX,
-    /// Mirror across the y=0 plane: 2 copies (±Y).
-    PairY,
-    /// Mirror across the z=0 plane: 2 copies (±Z).
-    PairZ,
-    /// Mirror across x=0 and y=0: 4 copies in the XY plane.
-    QuadXY,
-    /// Mirror across x=0 and z=0: 4 copies in the XZ plane.
-    QuadXZ,
-    /// Mirror across y=0 and z=0: 4 copies in the YZ plane.
-    QuadYZ,
-    /// Mirror across all three axis planes: 8 copies (all octants).
-    Octants,
+    /// Mirror across the x=0 plane: 2 copies.
+    MirrorX,
+    /// Mirror across the y=0 plane: 2 copies.
+    MirrorY,
+    /// Mirror across the z=0 plane: 2 copies.
+    MirrorZ,
+    /// Mirror across x=0 and y=0: 4 copies.
+    MirrorXY,
+    /// Mirror across x=0 and z=0: 4 copies.
+    MirrorXZ,
+    /// Mirror across y=0 and z=0: 4 copies.
+    MirrorYZ,
+    /// Mirror across all three axis planes: 8 copies.
+    MirrorXYZ,
+    /// Mirror across x=0, then rotate 90° around Y: 4 copies.
+    MirrorX_SpinY,
+    /// Mirror across y=0, then rotate 90° around Z: 4 copies.
+    MirrorY_SpinZ,
+    /// Mirror across z=0, then rotate 90° around X: 4 copies.
+    MirrorZ_SpinX,
     /// The 6 face cells of a cube — one copy on each of ±X, ±Y, ±Z faces.
     Faces,
     /// The 12 edge cells of a cube — 4 edges parallel to each axis.
@@ -445,37 +451,37 @@ pub fn placements(symmetry: Symmetry) -> &'static [(Placement, &'static str)] {
     use SignedAxis::*;
     match symmetry {
         Symmetry::Single => &[(Placement(PosX, PosY, PosZ), "")],
-        Symmetry::PairX => &[
+        Symmetry::MirrorX => &[
             (Placement(PosX, PosY, PosZ), ""),
             (Placement(NegX, PosY, PosZ), "_mx"),
         ],
-        Symmetry::PairY => &[
+        Symmetry::MirrorY => &[
             (Placement(PosX, PosY, PosZ), ""),
             (Placement(PosX, NegY, PosZ), "_my"),
         ],
-        Symmetry::PairZ => &[
+        Symmetry::MirrorZ => &[
             (Placement(PosX, PosY, PosZ), ""),
             (Placement(PosX, PosY, NegZ), "_mz"),
         ],
-        Symmetry::QuadXY => &[
+        Symmetry::MirrorXY => &[
             (Placement(PosX, PosY, PosZ), ""),
             (Placement(NegX, PosY, PosZ), "_mx"),
             (Placement(PosX, NegY, PosZ), "_my"),
             (Placement(NegX, NegY, PosZ), "_mxy"),
         ],
-        Symmetry::QuadXZ => &[
+        Symmetry::MirrorXZ => &[
             (Placement(PosX, PosY, PosZ), ""),
             (Placement(NegX, PosY, PosZ), "_mx"),
             (Placement(PosX, PosY, NegZ), "_mz"),
             (Placement(NegX, PosY, NegZ), "_mxz"),
         ],
-        Symmetry::QuadYZ => &[
+        Symmetry::MirrorYZ => &[
             (Placement(PosX, PosY, PosZ), ""),
             (Placement(PosX, NegY, PosZ), "_my"),
             (Placement(PosX, PosY, NegZ), "_mz"),
             (Placement(PosX, NegY, NegZ), "_myz"),
         ],
-        Symmetry::Octants => &[
+        Symmetry::MirrorXYZ => &[
             (Placement(PosX, PosY, PosZ), ""),
             (Placement(NegX, PosY, PosZ), "_mx"),
             (Placement(PosX, NegY, PosZ), "_my"),
@@ -484,6 +490,30 @@ pub fn placements(symmetry: Symmetry) -> &'static [(Placement, &'static str)] {
             (Placement(NegX, PosY, NegZ), "_mxz"),
             (Placement(PosX, NegY, NegZ), "_myz"),
             (Placement(NegX, NegY, NegZ), "_mxyz"),
+        ],
+        Symmetry::MirrorX_SpinY => &[
+            // Mirror across x=0, then rotate both copies 90° around Y.
+            // Produces 4 copies on the ±X and ±Z sides.
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(NegX, PosY, PosZ), "_mx"),
+            (Placement(PosZ, PosY, NegX), "_sy"),
+            (Placement(PosZ, PosY, PosX), "_mx_sy"),
+        ],
+        Symmetry::MirrorY_SpinZ => &[
+            // Mirror across y=0, then rotate both copies 90° around Z.
+            // Produces 4 copies on the ±Y and ±X sides.
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(PosX, NegY, PosZ), "_my"),
+            (Placement(NegY, PosX, PosZ), "_sz"),
+            (Placement(PosY, PosX, PosZ), "_my_sz"),
+        ],
+        Symmetry::MirrorZ_SpinX => &[
+            // Mirror across z=0, then rotate both copies 90° around X.
+            // Produces 4 copies on the ±Z and ±Y sides.
+            (Placement(PosX, PosY, PosZ), ""),
+            (Placement(PosX, PosY, NegZ), "_mz"),
+            (Placement(PosX, NegZ, PosY), "_sx"),
+            (Placement(PosX, PosZ, PosY), "_mz_sx"),
         ],
         Symmetry::Faces => &[
             // Six face cells. Designed for a source box sitting on the
@@ -824,13 +854,16 @@ mod tests {
         // Every variant's placement table must have unique entries.
         for sym in [
             Symmetry::Single,
-            Symmetry::PairX,
-            Symmetry::PairY,
-            Symmetry::PairZ,
-            Symmetry::QuadXY,
-            Symmetry::QuadXZ,
-            Symmetry::QuadYZ,
-            Symmetry::Octants,
+            Symmetry::MirrorX,
+            Symmetry::MirrorY,
+            Symmetry::MirrorZ,
+            Symmetry::MirrorXY,
+            Symmetry::MirrorXZ,
+            Symmetry::MirrorYZ,
+            Symmetry::MirrorXYZ,
+            Symmetry::MirrorX_SpinY,
+            Symmetry::MirrorY_SpinZ,
+            Symmetry::MirrorZ_SpinX,
             Symmetry::Faces,
             Symmetry::Edges,
         ] {
@@ -846,8 +879,11 @@ mod tests {
             }
         }
         assert_eq!(placements(Symmetry::Single).len(), 1);
-        assert_eq!(placements(Symmetry::PairX).len(), 2);
-        assert_eq!(placements(Symmetry::Octants).len(), 8);
+        assert_eq!(placements(Symmetry::MirrorX).len(), 2);
+        assert_eq!(placements(Symmetry::MirrorXYZ).len(), 8);
+        assert_eq!(placements(Symmetry::MirrorX_SpinY).len(), 4);
+        assert_eq!(placements(Symmetry::MirrorY_SpinZ).len(), 4);
+        assert_eq!(placements(Symmetry::MirrorZ_SpinX).len(), 4);
         assert_eq!(placements(Symmetry::Faces).len(), 6);
         assert_eq!(placements(Symmetry::Edges).len(), 12);
     }
@@ -877,7 +913,7 @@ mod tests {
 
     #[test]
     fn octants_symmetry_produces_eight_corners() {
-        let spec = leaf_spec(Bounds(1, 1, 1, 3, 3, 3), Symmetry::Octants);
+        let spec = leaf_spec(Bounds(1, 1, 1, 3, 3, 3), Symmetry::MirrorXYZ);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         let aabb = occ.aabb().unwrap();
@@ -889,14 +925,14 @@ mod tests {
     fn centered_pair_x_collides_with_itself() {
         // The motivating "sphere at origin mirrored across X" case:
         // both copies land on the same cells, so every cell is a collision.
-        let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), Symmetry::PairX);
+        let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), Symmetry::MirrorX);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 8);
     }
 
     #[test]
     fn off_origin_pair_x_does_not_collide() {
-        let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), Symmetry::PairX);
+        let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), Symmetry::MirrorX);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         assert_eq!(occ.aabb(), Some(Bounds(-3, 0, 0, 3, 1, 1)));

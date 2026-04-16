@@ -5,22 +5,7 @@
 // boxes around empty cells.
 [
     (
-        name: "body",
-        shape: Box,
-        bounds: (-4, -1, -4, 4, 0, 4),
-        tags: ["red"],
-    ),
-    (
-        name: "corner",
-        shape: Wedge,
-        bounds: (-4, -1, 4, -2, 0, 2),
-        tags: ["green"],
-        orient: (Back, NoMirror, RotateClockwise),
-        symmetry: MirrorXZ,
-        subtract: true,
-    ),
-    (
-        name: "top-edges",
+        name: "edges",
         shape: Wedge,
         bounds: (-4, 0, -2, -2, 1, 2),
         tags: ["red"],
@@ -28,7 +13,7 @@
         symmetry: MirrorX_SpinY
     ),
     (
-        name: "top-corners",
+        name: "corners",
         shape: Corner,
         bounds: (-4, 0, 2, -2, 1, 4),
         tags: ["red"],
@@ -36,13 +21,13 @@
         symmetry: MirrorXZ
     ),
     (
-        name: "top-center",
+        name: "center",
         shape: Box,
         bounds: (-2, 0, -2, 2, 1, 2),
         tags: ["red"],
     ),
     (
-        name: "top-center-hole",
+        name: "hole",
         shape: Box,
         bounds: (-1, 0, -1, 1, 1, 1),
         tags: ["blue"],

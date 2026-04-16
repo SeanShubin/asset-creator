@@ -1,0 +1,22 @@
+// Polyhedral chassis. Previously used Cylinder + Dome with CSG Subtract
+// for weapon and sensor bays; the cell-level architecture requires no
+// AABB overlaps, so the CSG cuts are gone and the body is a solid block.
+// If cavities are wanted later they can be expressed by composing smaller
+// boxes around empty cells.
+[
+    (
+        name: "body",
+        shape: Box,
+        bounds: (-4, -1, -4, 4, 0, 4),
+        tags: ["red"],
+    ),
+    (
+        name: "corner",
+        shape: Wedge,
+        bounds: (-4, -1, 4, -2, 0, 2),
+        tags: ["green"],
+        orient: (Back, NoMirror, RotateClockwise),
+        symmetry: MirrorXZ,
+        subtract: true,
+    ),
+]
