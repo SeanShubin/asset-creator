@@ -1440,16 +1440,20 @@ fn draw_tree_node(
     let label = part.name.as_deref().unwrap_or("(unnamed)");
     let indent = "  ".repeat(depth);
     let icon = match state {
-        TriState::Visible => "[+]",
-        TriState::Hidden => "[-]",
-        TriState::Mixed => "[~]",
+        TriState::Visible => "+",
+        TriState::Hidden  => "-",
+        TriState::Mixed   => "~",
     };
     let is_selected = selected_entity == Some(entity);
 
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         // Visibility toggle lives on the tri-state icon. Clicking the
         // row body selects the part without affecting visibility.
-        if ui.small_button(icon).clicked() {
+        if !indent.is_empty() {
+            ui.label(indent);
+        }
+        if ui.selectable_label(false, icon).clicked() {
             let new_vis = match state {
                 TriState::Hidden => Visibility::Inherited,
                 _ => Visibility::Hidden,
@@ -1465,7 +1469,7 @@ fn draw_tree_node(
                 }
             }
         }
-        if ui.selectable_label(is_selected, format!("{indent}{label}")).clicked() {
+        if ui.selectable_label(is_selected, label).clicked() {
             // name_path holds the path to this node's PARENT; append
             // this node's own name (skipping the root, which is
             // represented by the empty path).

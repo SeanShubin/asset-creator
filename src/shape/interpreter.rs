@@ -181,7 +181,14 @@ fn attach_fused_mesh(
     } else {
         Some(bevy::render::render_resource::Face::Back)
     };
-    let material = if fused.emissive {
+    let material = if fused.subtract_preview {
+        materials.add(StandardMaterial {
+            base_color,
+            alpha_mode: AlphaMode::Blend,
+            cull_mode,
+            ..default()
+        })
+    } else if fused.emissive {
         materials.add(StandardMaterial {
             base_color,
             emissive: Color::WHITE.into(),

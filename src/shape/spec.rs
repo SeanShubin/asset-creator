@@ -152,7 +152,7 @@ pub enum Combinator<'a> {
 // Primitives
 // =====================================================================
 
-#[derive(Deserialize, Clone, Copy, Debug)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PrimitiveShape {
     Box,
     Wedge,
@@ -719,9 +719,13 @@ fn walk_single_for_occupancy(
     path: &str,
     placement: Placement,
 ) {
-    if let (Some(_), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
-        let transformed = apply_placement_to_bounds(placement, *bounds);
-        claim_cells(occ, &transformed, path);
+    // Subtract nodes carve geometry out of unions; they never occupy
+    // cells of their own, so they can't collide with anything.
+    if !node.subtract {
+        if let (Some(_), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
+            let transformed = apply_placement_to_bounds(placement, *bounds);
+            claim_cells(occ, &transformed, path);
+        }
     }
     for child in &node.children {
         walk_for_occupancy(occ, child, path, placement);

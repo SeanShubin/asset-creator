@@ -58,6 +58,11 @@ pub struct FusedMesh {
     /// negative-determinant orientation (a mirrored copy). Controls
     /// face culling mode at spawn time.
     pub contains_mirrored: bool,
+    /// True for subtract-primitive preview meshes. The interpreter
+    /// renders these with `AlphaMode::Blend` so they appear as
+    /// translucent overlays showing what volume is being carved.
+    /// Only emitted when the shape is compiled directly (not via import).
+    pub subtract_preview: bool,
 }
 
 // =====================================================================
@@ -266,20 +271,25 @@ pub fn compile(
     spec: &SpecNode,
     registry: &AssetRegistry,
 ) -> CompiledShape {
-    // Pre-compute the primitive templates once per compile to avoid
-    // rebuilding them for every cell.
     let templates = PrimitiveTemplates::new();
     let ctx = CompileCtx {
         registry,
         templates: &templates,
     };
     let colors = spec.palette.clone();
+    // Pre-pass: collect all subtract primitives from the spec tree
+    // (stopping at import boundaries). Every group gets this full list
+    // so subtracts carve into unions regardless of naming hierarchy.
+    let mut all_subtracts = Vec::new();
+    collect_subtracts(spec, identity_placement(), (1, 1, 1), &mut all_subtracts);
     compile_group(
         spec,
         identity_placement(),
         (1, 1, 1),
         &colors,
         &ctx,
+        /* is_direct */ true,
+        &all_subtracts,
     )
 }
 
@@ -329,37 +339,67 @@ struct UnionPrimitive {
     scale: (i32, i32, i32),
 }
 
+/// A Subtract primitive recorded at accumulation time. Same fields as
+/// `UnionPrimitive` minus the color (subtracts don't contribute color)
+/// and emissive flag. Preserved through fusion so we can do per-cell
+/// CSG against every union primitive that shares its cells.
+#[derive(Clone)]
+struct SubtractPrimitive {
+    shape: PrimitiveShape,
+    world_bounds: Bounds,
+    orient_mat: Mat3,
+    scale: (i32, i32, i32),
+}
+
 /// Accumulator for primitives belonging to one group (one compiled part).
 struct GroupAccumulator {
     union_primitives: Vec<UnionPrimitive>,
-    /// Subtract contributions collected as raw bounds; converted to
-    /// a cell set at fusion time.
-    subtract_bounds: Vec<(Bounds, Placement, (i32, i32, i32))>,
+    subtract_primitives: Vec<SubtractPrimitive>,
+    /// Subtract primitives recorded for translucent preview rendering.
+    /// Only populated when the shape is compiled directly (not via import).
+    preview_primitives: Vec<UnionPrimitive>,
     children: Vec<CompiledShape>,
 }
 
 /// Identity of an integer world cell, used to match Union/Subtract
-/// overlaps. Union cells whose position matches a Subtract position
-/// get dropped before fusion.
+/// overlaps per cell.
 type CellKey = (i32, i32, i32);
 
 impl GroupAccumulator {
     fn new() -> Self {
         Self {
             union_primitives: Vec::new(),
-            subtract_bounds: Vec::new(),
+            subtract_primitives: Vec::new(),
+            preview_primitives: Vec::new(),
             children: Vec::new(),
         }
     }
 
     fn finish(self, name: Option<String>, templates: &PrimitiveTemplates) -> CompiledShape {
-        // Turn subtract_bounds into a world-cell set.
-        let mut subtract_cells: std::collections::HashSet<CellKey> =
-            std::collections::HashSet::new();
-        for (bounds, placement, scale) in &self.subtract_bounds {
-            let transformed = apply_placement_to_bounds(*placement, *bounds);
-            enumerate_world_cells(&transformed, *scale, |cell| {
-                subtract_cells.insert(cell);
+        // Per-cell subtract signature: for each cell any subtract
+        // primitive touches, compute the actual subtract volume by
+        // sampling at the cell's world position. Multiple subtracts
+        // at the same cell are OR'd together.
+        let mut subtract_cells: std::collections::HashMap<CellKey, u64> =
+            std::collections::HashMap::new();
+        for sub in &self.subtract_primitives {
+            let mn = sub.world_bounds.min();
+            let mx = sub.world_bounds.max();
+            let prim_center = Vec3::new(
+                (mn.0 + mx.0) as f32 / (2.0 * sub.scale.0 as f32),
+                (mn.1 + mx.1) as f32 / (2.0 * sub.scale.1 as f32),
+                (mn.2 + mx.2) as f32 / (2.0 * sub.scale.2 as f32),
+            );
+            let prim_half_size = Vec3::new(
+                (mx.0 - mn.0) as f32 / sub.scale.0 as f32,
+                (mx.1 - mn.1) as f32 / sub.scale.1 as f32,
+                (mx.2 - mn.2) as f32 / sub.scale.2 as f32,
+            );
+            enumerate_world_cells(&sub.world_bounds, sub.scale, |cell| {
+                let sig = super::csg::compute_signature_at_cell(
+                    sub.shape, sub.orient_mat, prim_center, prim_half_size, cell,
+                );
+                *subtract_cells.entry(cell).or_default() |= sig;
             });
         }
 
@@ -369,12 +409,12 @@ impl GroupAccumulator {
         let mut normal_mirrored = false;
 
         for prim in &self.union_primitives {
-            // If the primitive's cells don't intersect the subtract
-            // set, render it as a single multi-cell mesh — preserving
-            // the authored multi-cell shape (a 2x2x2 Wedge becomes one
-            // big wedge, not 8 stacked unit wedges). If any of its
-            // cells ARE subtracted, decompose into unit cells and drop
-            // the subtracted ones.
+            // If the primitive's cells don't intersect any subtract,
+            // render as a single multi-cell mesh — preserving authored
+            // stretchy primitives. Otherwise decompose into unit cells
+            // and run per-cell CSG (Option A semantics: the result must
+            // be expressible as a primitive or nothing; anything else
+            // is an authoring error).
             let target = if prim.emissive {
                 &mut emissive_mesh
             } else {
@@ -383,7 +423,7 @@ impl GroupAccumulator {
             let (cr, cg, cb) = prim.color.to_rgb();
             let rgba = [cr, cg, cb, 1.0];
 
-            let needs_decompose = primitive_overlaps_subtract(prim, &subtract_cells);
+            let needs_decompose = primitive_touches_subtracts(prim, &subtract_cells);
             if !needs_decompose {
                 let mesh_tf = compute_mesh_transform(
                     prim.shape,
@@ -393,9 +433,6 @@ impl GroupAccumulator {
                 );
                 target.append_transformed(templates.get(prim.shape), &mesh_tf, rgba);
             } else {
-                // Per-cell decomposition: walk world cells, skip any
-                // that are in the subtract set, render the rest as
-                // unit primitives.
                 let mn = prim.world_bounds.min();
                 let mx = prim.world_bounds.max();
                 let wmin = (
@@ -411,21 +448,60 @@ impl GroupAccumulator {
                 for z in wmin.2..wmax.2 {
                     for y in wmin.1..wmax.1 {
                         for x in wmin.0..wmax.0 {
-                            if subtract_cells.contains(&(x, y, z)) {
-                                continue;
-                            }
+                            let cell = (x, y, z);
                             let cell_bounds = Bounds(x, y, z, x + 1, y + 1, z + 1);
-                            let mesh_tf = compute_mesh_transform(
-                                prim.shape,
-                                &cell_bounds,
-                                &prim.orient_mat,
-                                (1, 1, 1),
-                            );
-                            target.append_transformed(
-                                templates.get(prim.shape),
-                                &mesh_tf,
-                                rgba,
-                            );
+
+                            let sub_sig = subtract_cells.get(&cell).copied().unwrap_or(0);
+                            if sub_sig == 0 {
+                                // No subtract here — render the
+                                // union's unit primitive as-is.
+                                let mesh_tf = compute_mesh_transform(
+                                    prim.shape,
+                                    &cell_bounds,
+                                    &prim.orient_mat,
+                                    (1, 1, 1),
+                                );
+                                target.append_transformed(
+                                    templates.get(prim.shape),
+                                    &mesh_tf,
+                                    rgba,
+                                );
+                            } else {
+                                let result = super::csg::cell_subtract_with_sig(
+                                    (prim.shape, prim.orient_mat),
+                                    sub_sig,
+                                );
+                                match result {
+                                    super::csg::CellResult::Empty => {
+                                        // Fully carved — skip.
+                                    }
+                                    super::csg::CellResult::Keep {
+                                        shape: rs,
+                                        orient_mat: rm,
+                                    } => {
+                                        let mesh_tf = compute_mesh_transform(
+                                            rs, &cell_bounds, &rm, (1, 1, 1),
+                                        );
+                                        target.append_transformed(
+                                            templates.get(rs),
+                                            &mesh_tf,
+                                            rgba,
+                                        );
+                                    }
+                                    super::csg::CellResult::NotRepresentable {
+                                        result_signature,
+                                    } => {
+                                        error!(
+                                            "subtract result at cell {:?} for '{}' is not a primitive \
+                                             (minuend={:?}, signature={:016x})",
+                                            cell,
+                                            name.as_deref().unwrap_or("unnamed"),
+                                            prim.shape,
+                                            result_signature
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -446,6 +522,7 @@ impl GroupAccumulator {
                 mesh: normal_mesh,
                 emissive: false,
                 contains_mirrored: normal_mirrored,
+                subtract_preview: false,
             });
         }
         if !emissive_mesh.is_empty() {
@@ -453,6 +530,34 @@ impl GroupAccumulator {
                 mesh: emissive_mesh,
                 emissive: true,
                 contains_mirrored: emissive_mirrored,
+                subtract_preview: false,
+            });
+        }
+
+        // Subtract preview: translucent overlay of subtract primitives
+        // so the author can see what volume is being carved.
+        let mut preview_mesh = RawMesh::default();
+        let mut preview_mirrored = false;
+        for prim in &self.preview_primitives {
+            let (cr, cg, cb) = prim.color.to_rgb();
+            let rgba = [cr, cg, cb, 0.3];
+            let mesh_tf = compute_mesh_transform(
+                prim.shape,
+                &prim.world_bounds,
+                &prim.orient_mat,
+                prim.scale,
+            );
+            preview_mesh.append_transformed(templates.get(prim.shape), &mesh_tf, rgba);
+            if prim.is_mirrored {
+                preview_mirrored = true;
+            }
+        }
+        if !preview_mesh.is_empty() {
+            meshes.push(FusedMesh {
+                mesh: preview_mesh,
+                emissive: false,
+                contains_mirrored: preview_mirrored,
+                subtract_preview: true,
             });
         }
 
@@ -465,12 +570,11 @@ impl GroupAccumulator {
     }
 }
 
-/// Test whether any integer cell inside the primitive's world bounds
-/// is claimed by the subtract set. If none are, the primitive can be
-/// rendered as a single multi-cell mesh.
-fn primitive_overlaps_subtract(
+/// True if any cell this union primitive occupies has at least one
+/// subtract primitive touching it.
+fn primitive_touches_subtracts(
     prim: &UnionPrimitive,
-    subtract_cells: &std::collections::HashSet<CellKey>,
+    subtract_cells: &std::collections::HashMap<CellKey, u64>,
 ) -> bool {
     if subtract_cells.is_empty() {
         return false;
@@ -490,7 +594,7 @@ fn primitive_overlaps_subtract(
     for z in wmin.2..wmax.2 {
         for y in wmin.1..wmax.1 {
             for x in wmin.0..wmax.0 {
-                if subtract_cells.contains(&(x, y, z)) {
+                if subtract_cells.contains_key(&(x, y, z)) {
                     return true;
                 }
             }
@@ -549,8 +653,11 @@ fn compile_group(
     scale: (i32, i32, i32),
     inherited_colors: &ColorMap,
     ctx: &CompileCtx<'_>,
+    is_direct: bool,
+    all_subtracts: &[SubtractPrimitive],
 ) -> CompiledShape {
     let mut group = GroupAccumulator::new();
+    group.subtract_primitives.extend_from_slice(all_subtracts);
     walk_into_group(
         spec,
         inherited_placement,
@@ -559,6 +666,8 @@ fn compile_group(
         &mut group,
         /* is_group_root */ true,
         ctx,
+        is_direct,
+        all_subtracts,
     );
     group.finish(spec.name.clone(), ctx.templates)
 }
@@ -571,6 +680,8 @@ fn walk_into_group(
     group: &mut GroupAccumulator,
     is_group_root: bool,
     ctx: &CompileCtx<'_>,
+    is_direct: bool,
+    all_subtracts: &[SubtractPrimitive],
 ) {
     let colors = if spec.palette.is_empty() {
         inherited_colors.clone()
@@ -580,7 +691,10 @@ fn walk_into_group(
 
     // Named non-root nodes start their own group as a child of this one.
     if !is_group_root && spec.name.is_some() {
-        let child = compile_group(spec, inherited_placement, scale, &colors, ctx);
+        let child = compile_group(
+            spec, inherited_placement, scale, &colors, ctx, is_direct,
+            all_subtracts,
+        );
         group.children.push(child);
         return;
     }
@@ -589,9 +703,7 @@ fn walk_into_group(
         Combinator::Symmetry(sym) => {
             for (local, _suffix) in placements(sym) {
                 let combined = compose_placements(inherited_placement, *local);
-                // Walk the same node's non-symmetric body (its bounds,
-                // shape, and children) for each placement.
-                walk_node_body(spec, combined, scale, &colors, group, ctx);
+                walk_node_body(spec, combined, scale, &colors, group, ctx, is_direct, all_subtracts);
             }
         }
         Combinator::Import(import_name) => {
@@ -606,7 +718,7 @@ fn walk_into_group(
             );
         }
         Combinator::None => {
-            walk_node_body(spec, inherited_placement, scale, &colors, group, ctx);
+            walk_node_body(spec, inherited_placement, scale, &colors, group, ctx, is_direct, all_subtracts);
         }
     }
 }
@@ -620,6 +732,8 @@ fn walk_node_body(
     colors: &ColorMap,
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
+    is_direct: bool,
+    all_subtracts: &[SubtractPrimitive],
 ) {
     if let Some(shape) = spec.shape {
         let Some(bounds) = spec.bounds else {
@@ -628,7 +742,7 @@ fn walk_node_body(
                 spec.name.as_deref().unwrap_or("unnamed")
             );
             for child in &spec.children {
-                walk_into_group(child, placement, scale, colors, group, false, ctx);
+                walk_into_group(child, placement, scale, colors, group, false, ctx, is_direct, all_subtracts);
             }
             return;
         };
@@ -646,12 +760,11 @@ fn walk_node_body(
         }
 
         if spec.subtract {
-            // Record the bounds so finish() can remove overlapping
-            // union cells. The orient/shape of a subtract child is
-            // irrelevant — only its cell set matters.
-            group
-                .subtract_bounds
-                .push((bounds, placement, scale));
+            if is_direct {
+                add_preview_primitive(
+                    shape, &bounds, placement, scale, spec.orient, colors, spec, group,
+                );
+            }
         } else {
             add_union_primitive(
                 shape, &bounds, placement, scale, spec.orient, colors, spec, group,
@@ -660,7 +773,7 @@ fn walk_node_body(
     }
 
     for child in &spec.children {
-        walk_into_group(child, placement, scale, colors, group, false, ctx);
+        walk_into_group(child, placement, scale, colors, group, false, ctx, is_direct, all_subtracts);
     }
 }
 
@@ -705,6 +818,73 @@ fn add_union_primitive(
     });
 }
 
+/// Pre-pass: collect all subtract primitives from the spec tree,
+/// respecting symmetry expansion but stopping at import boundaries.
+/// The result is a flat list shared by every group in the compile.
+fn collect_subtracts(
+    spec: &SpecNode,
+    placement: Placement,
+    scale: (i32, i32, i32),
+    out: &mut Vec<SubtractPrimitive>,
+) {
+    if spec.import.is_some() {
+        return;
+    }
+    let sym = spec.symmetry;
+    for (local, _) in placements(sym) {
+        let combined = compose_placements(placement, *local);
+        if spec.subtract {
+            if let (Some(shape), Some(bounds)) = (spec.shape, spec.bounds) {
+                let world_bounds = apply_placement_to_bounds(combined, bounds);
+                let orient_mat = orientation_to_mat3(&spec.orient, combined);
+                out.push(SubtractPrimitive {
+                    shape,
+                    world_bounds,
+                    orient_mat,
+                    scale,
+                });
+            }
+        }
+        for child in &spec.children {
+            collect_subtracts(child, combined, scale, out);
+        }
+    }
+}
+
+/// Record a subtract primitive as a translucent preview mesh so the
+/// author can see the subtractive volume. Uses the authored color;
+/// alpha is applied at fusion time.
+fn add_preview_primitive(
+    shape: PrimitiveShape,
+    bounds: &Bounds,
+    placement: Placement,
+    scale: (i32, i32, i32),
+    orient: Orientation,
+    colors: &ColorMap,
+    spec: &SpecNode,
+    group: &mut GroupAccumulator,
+) {
+    let world_bounds = apply_placement_to_bounds(placement, *bounds);
+    let orient_mat = orientation_to_mat3(&orient, placement);
+    let is_mirrored = orient_mat.determinant() < 0.0;
+
+    let color = spec
+        .color
+        .as_ref()
+        .map(|name| resolve_color(name, colors))
+        .unwrap_or(Color3(1, 1, 1));
+
+    group.preview_primitives.push(UnionPrimitive {
+        shape,
+        world_bounds,
+        orient_mat,
+        color,
+        emissive: false,
+        is_mirrored,
+        scale,
+    });
+}
+
 fn walk_import(
     import_node: &SpecNode,
     import_name: &str,
@@ -742,8 +922,10 @@ fn walk_import(
 
     // The imported subtree's top-level node becomes part of THIS group
     // (same named part as the import_node). Walk it as if it were an
-    // inlined child, not a new named group.
-    walk_node_body(&remapped, inherited_placement, new_scale, &import_colors, group, ctx);
+    // inlined child, not a new named group. Subtract previews are
+    // suppressed inside imports — the imported shape's own direct
+    // compile shows them.
+    walk_node_body(&remapped, inherited_placement, new_scale, &import_colors, group, ctx, false, &[]);
     for child in &remapped.children {
         walk_into_group(
             child,
@@ -753,6 +935,8 @@ fn walk_import(
             group,
             false,
             ctx,
+            false,
+            &[],
         );
     }
 }
