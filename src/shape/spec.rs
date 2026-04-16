@@ -70,6 +70,7 @@ impl SpecNode {
     /// explicit bounds, imports (resolved from registry), symmetry
     /// expansion, and children — callers never need to know which case
     /// applies.
+    #[allow(dead_code)]
     pub fn aabb(&self, registry: &AssetRegistry) -> Option<Bounds> {
         let mut min = (i32::MAX, i32::MAX, i32::MAX);
         let mut max = (i32::MIN, i32::MIN, i32::MIN);

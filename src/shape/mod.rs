@@ -11,7 +11,7 @@ pub use animation::{animate_shapes, ShapeAnimator};
 pub use interpreter::{
     despawn_shape, spawn_shape, spawn_shape_with_layers, ShapePart, ShapeRoot,
 };
-pub use render::{base_orientation_matrix, compile, CompiledShape, FusedMesh};
+pub use render::{base_orientation_matrix, compile, production_stats, CompiledShape, FusedMesh};
 pub use meshes::RawMesh;
 #[allow(unused_imports)]
 pub use spec::{

@@ -9,7 +9,7 @@ pub fn parse_ron<T: serde::de::DeserializeOwned>(ron_str: &str) -> Result<T, ron
 
 /// RGB color with integer components in 0-3 range.
 /// Converted to float via value / 3.0 (0=0%, 1=33%, 2=67%, 3=100%).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Color3(pub u8, pub u8, pub u8);
 
 const COLOR_DIVISOR: f32 = 3.0;

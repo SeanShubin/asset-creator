@@ -8,8 +8,8 @@ use crate::browser::{browser_ui, ActiveEditor};
 use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{
     animate_shapes, base_orientation_matrix, collect_occupancy, compile, despawn_shape,
-    spawn_shape, CompiledShape, Facing, FusedMesh, Mirroring, Orientation, RawMesh,
-    Rotation, ShapeAnimator, ShapePart, ShapeRoot,
+    production_stats, spawn_shape, CompiledShape, Facing, FusedMesh, Mirroring, Orientation,
+    RawMesh, Rotation, ShapeAnimator, ShapePart, ShapeRoot,
 };
 use super::orbit_camera::{self, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
 
@@ -137,13 +137,15 @@ impl ViewportRect {
 struct SceneStats {
     needs_update: bool,
     parts: usize,
-    triangles: usize,
-    draw_calls: usize,
+    triangles: Option<usize>,
+    draw_calls: Option<usize>,
     /// Number of cell-level collisions detected in the current shape.
     /// Zero is the clean state; non-zero means two or more primitives
     /// claim the same integer cell. In the editor this is informational;
     /// non-interactive tools treat it as a hard error.
     collisions: usize,
+    /// Receiver for background production stats computation.
+    stats_receiver: Option<std::sync::Mutex<std::sync::mpsc::Receiver<(usize, usize, f64)>>>,
 }
 
 /// Scene AABB from the spec-level occupancy. Doesn't change when
@@ -476,12 +478,26 @@ fn compute_stats(
     bounds: Res<SceneBounds>,
     mut limits: ResMut<ZoomLimits>,
     parts: Query<&ShapePart>,
-    mesh_handles: Query<&Mesh3d>,
-    mesh_assets: Res<Assets<Mesh>>,
+    activation: Res<EditorActivation>,
+    registry: Res<AssetRegistry>,
     viewport: Res<ViewportRect>,
 ) {
+    // Poll for background stats result.
+    if let Some(ref rx_mutex) = stats.stats_receiver {
+        let result = rx_mutex.lock().unwrap().try_recv().ok();
+        if let Some((triangles, draw_calls, elapsed_ms)) = result {
+            let frames = elapsed_ms / 16.7;
+            info!("production stats: {triangles} tris, {draw_calls} draws ({elapsed_ms:.1}ms, ~{frames:.1} frames)");
+            stats.triangles = Some(triangles);
+            stats.draw_calls = Some(draw_calls);
+        }
+    }
+    // Clean up receiver after successful receive (separate borrow scope).
+    if stats.triangles.is_some() && stats.stats_receiver.is_some() {
+        stats.stats_receiver = None;
+    }
+
     if !stats.needs_update { return; }
-    if mesh_handles.is_empty() { return; }
     stats.needs_update = false;
 
     if viewport.is_renderable() {
@@ -492,18 +508,24 @@ fn compute_stats(
     }
 
     stats.parts = parts.iter().count();
-    stats.draw_calls = mesh_handles.iter().count();
 
-    let mut triangle_count = 0;
-    for mesh_handle in &mesh_handles {
-        if let Some(mesh) = mesh_assets.get(&mesh_handle.0) {
-            if let Some(indices) = mesh.indices() {
-                triangle_count += indices.len() / 3;
-            }
+    // Kick off production stats on a background thread.
+    if let Some(path) = &activation.current_path {
+        if let Some(shape) = registry.get_shape_by_path(path) {
+            stats.triangles = None;
+            stats.draw_calls = None;
+            let parts_owned = shape.to_vec();
+            let registry_owned = registry.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            stats.stats_receiver = Some(std::sync::Mutex::new(rx));
+            std::thread::spawn(move || {
+                let t0 = std::time::Instant::now();
+                let prod = production_stats(&parts_owned, &registry_owned);
+                let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let _ = tx.send((prod.triangles, prod.draw_calls, elapsed_ms));
+            });
         }
     }
-
-    stats.triangles = triangle_count;
 }
 
 /// Compute the orthographic scale at which the AABB fills the viewport with ~5% border on
@@ -1385,9 +1407,11 @@ fn camera_controls(
     });
 
     ui.separator();
+    let tris = stats.triangles.map_or("...".to_string(), |t| t.to_string());
+    let draws = stats.draw_calls.map_or("...".to_string(), |d| d.to_string());
     ui.label(format!(
         "Parts: {}  Tris: {}  Draws: {}  Collisions: {}",
-        stats.parts, stats.triangles, stats.draw_calls, stats.collisions
+        stats.parts, tris, draws, stats.collisions
     ));
 }
 

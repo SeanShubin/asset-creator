@@ -205,6 +205,137 @@ pub fn compile(
     group.finish(None, false, ctx.templates)
 }
 
+/// Production stats: triangle and draw call counts for the fully
+/// fused shape with no named-group boundaries.
+pub struct ProductionStats {
+    pub triangles: usize,
+    pub draw_calls: usize,
+}
+
+/// Compute production-quality stats for a shape. Resolves the entire
+/// shape into a flat cell list (ignoring named groups), fuses adjacent
+/// boxes, and counts the resulting triangles and draw calls.
+pub fn production_stats(
+    parts: &[SpecNode],
+    registry: &AssetRegistry,
+) -> ProductionStats {
+    let templates = PrimitiveTemplates::new();
+    let ctx = CompileCtx {
+        registry,
+        templates: &templates,
+        hidden: &[],
+        is_direct: false,
+    };
+    let mut all_subtracts = Vec::new();
+    for part in parts {
+        collect_subtracts(part, identity_placement(), (1, 1, 1), &[], &mut all_subtracts);
+    }
+    // Walk everything into a single flat group — no named sub-groups.
+    let mut group = GroupAccumulator::new();
+    group.subtract_primitives.extend_from_slice(&all_subtracts);
+    for part in parts {
+        walk_into_group_flat(
+            part,
+            identity_placement(),
+            (1, 1, 1),
+            &mut group,
+            &ctx,
+            &all_subtracts,
+        );
+    }
+    let resolved = fuse_boxes(group.resolve(None));
+
+    let mut has_normal = false;
+    let mut has_emissive = false;
+    for cell in &resolved {
+        if cell.emissive { has_emissive = true; } else { has_normal = true; }
+    }
+    let draw_calls = has_normal as usize + has_emissive as usize;
+    let triangles = count_triangles_with_face_culling(&resolved);
+
+    ProductionStats { triangles, draw_calls }
+}
+
+/// Walk a spec node into a group without creating child groups for
+/// named nodes. Used by production_stats to flatten everything.
+fn walk_into_group_flat(
+    spec: &SpecNode,
+    inherited_placement: Placement,
+    scale: (i32, i32, i32),
+    group: &mut GroupAccumulator,
+    ctx: &CompileCtx<'_>,
+    all_subtracts: &[SubtractPrimitive],
+) {
+    if is_hidden(spec, ctx) {
+        return;
+    }
+
+    let sym = spec.symmetry;
+    for (local, _suffix) in placements(sym) {
+        let combined = compose_placements(inherited_placement, *local);
+        if let Some(ref import_name) = spec.import {
+            walk_import_flat(spec, import_name, combined, scale, group, ctx);
+        } else {
+            walk_node_body_flat(spec, combined, scale, group, ctx, all_subtracts);
+        }
+    }
+}
+
+fn walk_node_body_flat(
+    spec: &SpecNode,
+    placement: Placement,
+    scale: (i32, i32, i32),
+    group: &mut GroupAccumulator,
+    ctx: &CompileCtx<'_>,
+    all_subtracts: &[SubtractPrimitive],
+) {
+    if let Some(shape) = spec.shape {
+        if let Some(bounds) = spec.bounds {
+            let size = bounds.size();
+            if size.0 != 0 && size.1 != 0 && size.2 != 0 {
+                if !spec.subtract {
+                    add_union_primitive(shape, &bounds, placement, scale, spec.orient, spec, group);
+                }
+            }
+        }
+    }
+    for child in &spec.children {
+        walk_into_group_flat(child, placement, scale, group, ctx, all_subtracts);
+    }
+}
+
+fn walk_import_flat(
+    import_node: &SpecNode,
+    import_name: &str,
+    inherited_placement: Placement,
+    parent_scale: (i32, i32, i32),
+    group: &mut GroupAccumulator,
+    ctx: &CompileCtx<'_>,
+) {
+    let imported = match ctx.registry.get_shape(import_name) {
+        Some(parts) => parts.to_vec(),
+        None => return,
+    };
+    let Some(native_aabb) = aabb_for_parts(&imported, ctx.registry) else { return };
+    let placement_bounds = import_node.bounds.unwrap_or(native_aabb);
+    let remap_scale = Bounds::remap_scale(&native_aabb);
+    let new_scale = (
+        parent_scale.0 * remap_scale.0,
+        parent_scale.1 * remap_scale.1,
+        parent_scale.2 * remap_scale.2,
+    );
+    let mut remapped = imported;
+    remap_bounds_for_parts(&mut remapped, &native_aabb, &placement_bounds, ctx.registry);
+
+    let mut import_subtracts = Vec::new();
+    for part in &remapped {
+        collect_subtracts(part, inherited_placement, new_scale, ctx.hidden, &mut import_subtracts);
+    }
+    for part in &remapped {
+        walk_into_group_flat(part, inherited_placement, new_scale, group, ctx, &import_subtracts);
+    }
+}
+
 struct CompileCtx<'a> {
     registry: &'a AssetRegistry,
     templates: &'a PrimitiveTemplates,
@@ -423,7 +554,7 @@ impl GroupAccumulator {
         resolved
     }
 
-    /// Turn resolved primitives into fused meshes.
+    /// Turn resolved primitives into fused meshes (editor path, no fusion).
     fn finish(self, name: Option<String>, subtract: bool, templates: &PrimitiveTemplates) -> CompiledShape {
         let resolved = self.resolve(name.as_deref());
 
@@ -470,6 +601,269 @@ impl GroupAccumulator {
             meshes,
             children: self.children,
             subtract,
+        }
+    }
+}
+
+/// Merge adjacent unit-cell Box primitives with the same color and
+/// emissive flag into larger rectangular prisms. Eliminates internal
+/// faces — 8 unit boxes composing a 2×2×2 cube become one box (12
+/// triangles instead of 96). Non-box shapes and multi-cell primitives
+/// pass through unchanged.
+fn fuse_boxes(cells: Vec<ResolvedPrimitive>) -> Vec<ResolvedPrimitive> {
+    let mut result = Vec::new();
+    let mut box_groups: std::collections::HashMap<(Color3, bool), Vec<(i32, i32, i32)>> =
+        std::collections::HashMap::new();
+
+    for cell in cells {
+        let is_unit_box = cell.shape == PrimitiveShape::Box
+            && !cell.subtract_preview
+            && cell.scale == (1, 1, 1)
+            && {
+                let s = cell.bounds.size();
+                s.0 == 1 && s.1 == 1 && s.2 == 1
+            };
+
+        if is_unit_box {
+            let mn = cell.bounds.min();
+            box_groups
+                .entry((cell.color, cell.emissive))
+                .or_default()
+                .push(mn);
+        } else {
+            result.push(cell);
+        }
+    }
+
+    for ((color, emissive), positions) in box_groups {
+        for bounds in greedy_merge(positions) {
+            result.push(ResolvedPrimitive {
+                shape: PrimitiveShape::Box,
+                bounds,
+                orient_mat: Mat3::IDENTITY,
+                scale: (1, 1, 1),
+                color,
+                emissive,
+                is_mirrored: false,
+                subtract_preview: false,
+            });
+        }
+    }
+
+    result
+}
+
+/// Greedy 3D box merge. Takes a set of unit-cell positions and returns
+/// the smallest set of axis-aligned rectangular prisms that cover them
+/// exactly.
+fn greedy_merge(positions: Vec<(i32, i32, i32)>) -> Vec<Bounds> {
+    let mut occupied: std::collections::HashSet<(i32, i32, i32)> = positions.into_iter().collect();
+    let mut result = Vec::new();
+
+    // Process cells in sorted order for deterministic results.
+    let mut sorted: Vec<(i32, i32, i32)> = occupied.iter().copied().collect();
+    sorted.sort_by(|a, b| a.2.cmp(&b.2).then(a.1.cmp(&b.1)).then(a.0.cmp(&b.0)));
+
+    for start in sorted {
+        if !occupied.contains(&start) {
+            continue; // already claimed
+        }
+
+        // Extend along X as far as possible.
+        let mut x_end = start.0 + 1;
+        while occupied.contains(&(x_end, start.1, start.2)) {
+            x_end += 1;
+        }
+
+        // Extend along Y: every row in the Y range must have the full X run.
+        let mut y_end = start.1 + 1;
+        'y: loop {
+            for x in start.0..x_end {
+                if !occupied.contains(&(x, y_end, start.2)) {
+                    break 'y;
+                }
+            }
+            y_end += 1;
+        }
+
+        // Extend along Z: every layer must have the full XY rectangle.
+        let mut z_end = start.2 + 1;
+        'z: loop {
+            for y in start.1..y_end {
+                for x in start.0..x_end {
+                    if !occupied.contains(&(x, y, z_end)) {
+                        break 'z;
+                    }
+                }
+            }
+            z_end += 1;
+        }
+
+        // Claim all cells in the merged prism.
+        for z in start.2..z_end {
+            for y in start.1..y_end {
+                for x in start.0..x_end {
+                    occupied.remove(&(x, y, z));
+                }
+            }
+        }
+
+        result.push(Bounds(start.0, start.1, start.2, x_end, y_end, z_end));
+    }
+
+    result
+}
+
+/// The six axis-aligned face directions. For each direction, the
+/// offset to the neighbor cell and the face index in the primitive.
+const FACE_DIRS: [(i32, i32, i32); 6] = [
+    ( 0,  1,  0), // +Y
+    ( 0, -1,  0), // -Y
+    ( 0,  0,  1), // +Z
+    ( 0,  0, -1), // -Z
+    ( 1,  0,  0), // +X
+    (-1,  0,  0), // -X
+];
+
+/// Returns a bitmask where bit i is set if the primitive has a full
+/// axis-aligned face in direction i, accounting for orientation.
+fn face_coverage(shape: PrimitiveShape, orient_mat: &Mat3) -> u8 {
+    if shape == PrimitiveShape::Box {
+        return 0b111111;
+    }
+    let identity_faces: &[(usize, usize)] = match shape {
+        PrimitiveShape::Wedge => &[(1, 2), (3, 2), (4, 1), (5, 1)],
+        PrimitiveShape::Corner => &[(1, 1), (3, 1), (5, 1)],
+        PrimitiveShape::Box => unreachable!(),
+    };
+    let mut mask = 0u8;
+    for &(face_idx, _) in identity_faces {
+        let (dx, dy, dz) = FACE_DIRS[face_idx];
+        let world = *orient_mat * Vec3::new(dx as f32, dy as f32, dz as f32);
+        for (i, &(fx, fy, fz)) in FACE_DIRS.iter().enumerate() {
+            if world.dot(Vec3::new(fx as f32, fy as f32, fz as f32)) > 0.9 {
+                mask |= 1 << i;
+                break;
+            }
+        }
+    }
+    mask
+}
+
+/// Count triangles after face culling. Shared axis-aligned faces
+/// between adjacent primitives are removed from both sides.
+fn count_triangles_with_face_culling(resolved: &[ResolvedPrimitive]) -> usize {
+    // Pass 1: build spatial lookup of all occupied cells with face coverage.
+    let mut cells: std::collections::HashMap<(i32,i32,i32), u8> =
+        std::collections::HashMap::new();
+
+    for prim in resolved {
+        if prim.subtract_preview { continue; }
+        let mn = prim.bounds.min();
+        let mx = prim.bounds.max();
+        let coverage = face_coverage(prim.shape, &prim.orient_mat);
+        for z in mn.2..mx.2 {
+            for y in mn.1..mx.1 {
+                for x in mn.0..mx.0 {
+                    *cells.entry((x, y, z)).or_insert(0) |= coverage;
+                }
+            }
+        }
+    }
+
+    // Pass 2: count surviving faces.
+    let mut total = 0;
+    for prim in resolved {
+        if prim.subtract_preview { continue; }
+        let mn = prim.bounds.min();
+        let mx = prim.bounds.max();
+        let is_multi_cell_box = prim.shape == PrimitiveShape::Box
+            && (mx.0 - mn.0 > 1 || mx.1 - mn.1 > 1 || mx.2 - mn.2 > 1);
+
+        if is_multi_cell_box {
+            // Fused box: 6 faces. Each face is one quad (2 tris).
+            // Cull only if ALL neighbor cells along the face boundary
+            // have a covering face on the opposite side.
+            total += count_fused_box_faces(&cells, mn, (mx.0, mx.1, mx.2));
+        } else {
+            // Unit cell: count per-face, plus non-axis faces (slopes).
+            total += count_unit_cell_faces(prim, &cells);
+        }
+    }
+
+    total
+}
+
+fn count_fused_box_faces(
+    cells: &std::collections::HashMap<(i32,i32,i32), u8>,
+    mn: (i32, i32, i32),
+    mx: (i32, i32, i32),
+) -> usize {
+    let mut tris = 0;
+    // +Y face: neighbors at y=mx.1
+    if !(mn.0..mx.0).all(|x| (mn.2..mx.2).all(|z| cells.get(&(x, mx.1, z)).is_some_and(|&m| m & (1 << 1) != 0))) { tris += 2; }
+    // -Y face: neighbors at y=mn.1-1
+    if !(mn.0..mx.0).all(|x| (mn.2..mx.2).all(|z| cells.get(&(x, mn.1-1, z)).is_some_and(|&m| m & (1 << 0) != 0))) { tris += 2; }
+    // +Z face: neighbors at z=mx.2
+    if !(mn.0..mx.0).all(|x| (mn.1..mx.1).all(|y| cells.get(&(x, y, mx.2)).is_some_and(|&m| m & (1 << 3) != 0))) { tris += 2; }
+    // -Z face: neighbors at z=mn.2-1
+    if !(mn.0..mx.0).all(|x| (mn.1..mx.1).all(|y| cells.get(&(x, y, mn.2-1)).is_some_and(|&m| m & (1 << 2) != 0))) { tris += 2; }
+    // +X face: neighbors at x=mx.0
+    if !(mn.1..mx.1).all(|y| (mn.2..mx.2).all(|z| cells.get(&(mx.0, y, z)).is_some_and(|&m| m & (1 << 5) != 0))) { tris += 2; }
+    // -X face: neighbors at x=mn.0-1
+    if !(mn.1..mx.1).all(|y| (mn.2..mx.2).all(|z| cells.get(&(mn.0-1, y, z)).is_some_and(|&m| m & (1 << 4) != 0))) { tris += 2; }
+    tris
+}
+
+fn count_unit_cell_faces(prim: &ResolvedPrimitive, cells: &std::collections::HashMap<(i32,i32,i32), u8>) -> usize {
+    let pos = prim.bounds.min();
+    let (axis_tris, non_axis_tris) = compute_face_tris(prim.shape, &prim.orient_mat);
+    let mut tris = non_axis_tris;
+    for (i, &(dx, dy, dz)) in FACE_DIRS.iter().enumerate() {
+        if axis_tris[i] == 0 { continue; }
+        let neighbor = (pos.0 + dx, pos.1 + dy, pos.2 + dz);
+        let opposite = i ^ 1;
+        let covered = cells.get(&neighbor).is_some_and(|&m| m & (1 << opposite) != 0);
+        if !covered {
+            tris += axis_tris[i];
+        }
+    }
+    tris
+}
+
+/// For a given shape and orientation, return (per-face triangle counts, non-axis triangle count).
+fn compute_face_tris(shape: PrimitiveShape, orient_mat: &Mat3) -> ([usize; 6], usize) {
+    match shape {
+        PrimitiveShape::Box => ([2; 6], 0),
+        PrimitiveShape::Wedge => {
+            let mut ft = [0usize; 6];
+            // Identity: bottom(-Y)=2, back(-Z)=2, right(+X)=1, left(-X)=1
+            for &(face_idx, tris) in &[(1usize, 2usize), (3, 2), (4, 1), (5, 1)] {
+                let (dx, dy, dz) = FACE_DIRS[face_idx];
+                let world = *orient_mat * Vec3::new(dx as f32, dy as f32, dz as f32);
+                for (i, &(fx, fy, fz)) in FACE_DIRS.iter().enumerate() {
+                    if world.dot(Vec3::new(fx as f32, fy as f32, fz as f32)) > 0.9 {
+                        ft[i] = tris;
+                        break;
+                    }
+                }
+            }
+            (ft, 2) // slope
+        }
+        PrimitiveShape::Corner => {
+            let mut ft = [0usize; 6];
+            // Identity: bottom(-Y)=1, back(-Z)=1, left(-X)=1
+            for &(face_idx, tris) in &[(1usize, 1usize), (3, 1), (5, 1)] {
+                let (dx, dy, dz) = FACE_DIRS[face_idx];
+                let world = *orient_mat * Vec3::new(dx as f32, dy as f32, dz as f32);
+                for (i, &(fx, fy, fz)) in FACE_DIRS.iter().enumerate() {
+                    if world.dot(Vec3::new(fx as f32, fy as f32, fz as f32)) > 0.9 {
+                        ft[i] = tris;
+                        break;
+                    }
+                }
+            }
+            (ft, 1) // diagonal
         }
     }
 }
@@ -931,6 +1325,68 @@ mod tests {
         let (mn, mx) = overall_bounds(&compiled);
         assert_eq!(mn, [-4.0, 0.0, -4.0], "stretched mesh min");
         assert_eq!(mx, [4.0, 8.0, 4.0], "stretched mesh max");
+    }
+
+    #[test]
+    fn greedy_merge_fuses_adjacent_cells_into_one_box() {
+        // 2×2×2 cube of unit cells → one box.
+        let mut cells = Vec::new();
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    cells.push((x, y, z));
+                }
+            }
+        }
+        let merged = greedy_merge(cells);
+        assert_eq!(merged.len(), 1, "8 unit cells should merge into 1 box");
+        assert_eq!(merged[0], Bounds(0, 0, 0, 2, 2, 2));
+    }
+
+    #[test]
+    fn greedy_merge_keeps_disjoint_cells_separate() {
+        let cells = vec![(0, 0, 0), (5, 5, 5)];
+        let merged = greedy_merge(cells);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn eight_unit_boxes_production_stats_twelve_triangles() {
+        // 8 unit boxes composing a 2×2×2 cube: production path fuses
+        // them into one box = 12 triangles, 1 draw call.
+        let mut parts = Vec::new();
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    parts.push(SpecNode {
+                        name: Some(format!("b_{x}_{y}_{z}")),
+                        shape: Some(PrimitiveShape::Box),
+                        bounds: Some(Bounds(x, y, z, x + 1, y + 1, z + 1)),
+                        orient: Orientation::default(),
+                        tags: vec!["red".into()],
+                        import: None,
+                        children: vec![],
+                        symmetry: Symmetry::Single,
+                        subtract: false,
+                        animations: vec![],
+                    });
+                }
+            }
+        }
+        let stats = production_stats(&parts, &crate::registry::AssetRegistry::default());
+        assert_eq!(stats.triangles, 12, "8 unit boxes should fuse into 12 triangles");
+        assert_eq!(stats.draw_calls, 1);
+    }
+
+    fn count_triangles(compiled: &CompiledShape) -> usize {
+        let mut count = 0;
+        for fused in &compiled.meshes {
+            count += fused.mesh.indices.len() / 3;
+        }
+        for child in &compiled.children {
+            count += count_triangles(child);
+        }
+        count
     }
 }
 

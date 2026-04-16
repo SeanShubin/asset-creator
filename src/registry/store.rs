@@ -11,12 +11,12 @@ use super::watcher::FileWatcher;
 // =====================================================================
 
 #[derive(Clone, Debug)]
-struct RegisteredAsset<T> {
+struct RegisteredAsset<T: Clone> {
     data: T,
     path: PathBuf,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct AssetRegistry {
     surfaces: HashMap<String, RegisteredAsset<SurfaceDef>>,
     shapes: HashMap<String, RegisteredAsset<Vec<SpecNode>>>,
