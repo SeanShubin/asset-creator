@@ -279,6 +279,21 @@ struct GroupAccumulator {
 /// overlaps per cell.
 type CellKey = (i32, i32, i32);
 
+/// A primitive after CSG resolution. Either a whole multi-cell
+/// primitive (not affected by any subtract) or a single post-CSG
+/// cell. This is the boundary between integer logic (what survives)
+/// and float logic (turn it into a mesh).
+struct ResolvedPrimitive {
+    shape: PrimitiveShape,
+    bounds: Bounds,
+    orient_mat: Mat3,
+    scale: (i32, i32, i32),
+    color: Color3,
+    emissive: bool,
+    is_mirrored: bool,
+    subtract_preview: bool,
+}
+
 impl GroupAccumulator {
     fn new() -> Self {
         Self {
@@ -289,11 +304,11 @@ impl GroupAccumulator {
         }
     }
 
-    fn finish(self, name: Option<String>, subtract: bool, templates: &PrimitiveTemplates) -> CompiledShape {
-        // Per-cell subtract signature: for each cell any subtract
-        // primitive touches, compute the actual subtract volume by
-        // sampling at the cell's world position. Multiple subtracts
-        // at the same cell are OR'd together.
+    /// Resolve CSG: determine which primitives survive subtraction and
+    /// what shape they become. Multi-cell primitives that don't touch
+    /// any subtract are preserved whole. Primitives overlapping a
+    /// subtract are decomposed into unit cells with per-cell CSG.
+    fn resolve(&self, name: Option<&str>) -> Vec<ResolvedPrimitive> {
         let mut subtract_cells: std::collections::HashMap<CellKey, u64> =
             std::collections::HashMap::new();
         for sub in &self.subtract_primitives {
@@ -317,35 +332,20 @@ impl GroupAccumulator {
             });
         }
 
-        let mut emissive_mesh = RawMesh::default();
-        let mut normal_mesh = RawMesh::default();
-        let mut emissive_mirrored = false;
-        let mut normal_mirrored = false;
+        let mut resolved = Vec::new();
 
         for prim in &self.union_primitives {
-            // If the primitive's cells don't intersect any subtract,
-            // render as a single multi-cell mesh — preserving authored
-            // stretchy primitives. Otherwise decompose into unit cells
-            // and run per-cell CSG (Option A semantics: the result must
-            // be expressible as a primitive or nothing; anything else
-            // is an authoring error).
-            let target = if prim.emissive {
-                &mut emissive_mesh
-            } else {
-                &mut normal_mesh
-            };
-            let (cr, cg, cb) = prim.color.to_rgb();
-            let rgba = [cr, cg, cb, 1.0];
-
-            let needs_decompose = primitive_touches_subtracts(prim, &subtract_cells);
-            if !needs_decompose {
-                let mesh_tf = compute_mesh_transform(
-                    prim.shape,
-                    &prim.world_bounds,
-                    &prim.orient_mat,
-                    prim.scale,
-                );
-                target.append_transformed(templates.get(prim.shape), &mesh_tf, rgba);
+            if !primitive_touches_subtracts(prim, &subtract_cells) {
+                resolved.push(ResolvedPrimitive {
+                    shape: prim.shape,
+                    bounds: prim.world_bounds,
+                    orient_mat: prim.orient_mat,
+                    scale: prim.scale,
+                    color: prim.color,
+                    emissive: prim.emissive,
+                    is_mirrored: prim.is_mirrored,
+                    subtract_preview: false,
+                });
             } else {
                 let mn = prim.world_bounds.min();
                 let mx = prim.world_bounds.max();
@@ -363,55 +363,39 @@ impl GroupAccumulator {
                     for y in wmin.1..wmax.1 {
                         for x in wmin.0..wmax.0 {
                             let cell = (x, y, z);
-                            let cell_bounds = Bounds(x, y, z, x + 1, y + 1, z + 1);
-
                             let sub_sig = subtract_cells.get(&cell).copied().unwrap_or(0);
                             if sub_sig == 0 {
-                                // No subtract here — render the
-                                // union's unit primitive as-is.
-                                let mesh_tf = compute_mesh_transform(
-                                    prim.shape,
-                                    &cell_bounds,
-                                    &prim.orient_mat,
-                                    (1, 1, 1),
-                                );
-                                target.append_transformed(
-                                    templates.get(prim.shape),
-                                    &mesh_tf,
-                                    rgba,
-                                );
+                                resolved.push(ResolvedPrimitive {
+                                    shape: prim.shape,
+                                    bounds: Bounds(x, y, z, x + 1, y + 1, z + 1),
+                                    orient_mat: prim.orient_mat,
+                                    scale: (1, 1, 1),
+                                    color: prim.color,
+                                    emissive: prim.emissive,
+                                    is_mirrored: prim.is_mirrored,
+                                    subtract_preview: false,
+                                });
                             } else {
-                                let result = super::csg::cell_subtract_with_sig(
-                                    (prim.shape, prim.orient_mat),
-                                    sub_sig,
-                                );
-                                match result {
-                                    super::csg::CellResult::Empty => {
-                                        // Fully carved — skip.
+                                match super::csg::cell_subtract_with_sig(
+                                    (prim.shape, prim.orient_mat), sub_sig,
+                                ) {
+                                    super::csg::CellResult::Empty => {}
+                                    super::csg::CellResult::Keep { shape, orient_mat } => {
+                                        resolved.push(ResolvedPrimitive {
+                                            shape,
+                                            bounds: Bounds(x, y, z, x + 1, y + 1, z + 1),
+                                            orient_mat,
+                                            scale: (1, 1, 1),
+                                            color: prim.color,
+                                            emissive: prim.emissive,
+                                            is_mirrored: prim.is_mirrored,
+                                            subtract_preview: false,
+                                        });
                                     }
-                                    super::csg::CellResult::Keep {
-                                        shape: rs,
-                                        orient_mat: rm,
-                                    } => {
-                                        let mesh_tf = compute_mesh_transform(
-                                            rs, &cell_bounds, &rm, (1, 1, 1),
-                                        );
-                                        target.append_transformed(
-                                            templates.get(rs),
-                                            &mesh_tf,
-                                            rgba,
-                                        );
-                                    }
-                                    super::csg::CellResult::NotRepresentable {
-                                        result_signature,
-                                    } => {
+                                    super::csg::CellResult::NotRepresentable { result_signature } => {
                                         error!(
-                                            "subtract result at cell {:?} for '{}' is not a primitive \
-                                             (minuend={:?}, signature={:016x})",
-                                            cell,
-                                            name.as_deref().unwrap_or("unnamed"),
-                                            prim.shape,
-                                            result_signature
+                                            "subtract result at cell ({},{},{}) for '{}' not representable (sig={:016x})",
+                                            x, y, z, name.unwrap_or("unnamed"), result_signature
                                         );
                                     }
                                 }
@@ -420,59 +404,64 @@ impl GroupAccumulator {
                     }
                 }
             }
+        }
 
-            if prim.is_mirrored {
-                if prim.emissive {
-                    emissive_mirrored = true;
-                } else {
-                    normal_mirrored = true;
-                }
+        // Subtract previews.
+        for prim in &self.preview_primitives {
+            resolved.push(ResolvedPrimitive {
+                shape: prim.shape,
+                bounds: prim.world_bounds,
+                orient_mat: prim.orient_mat,
+                scale: prim.scale,
+                color: prim.color,
+                emissive: false,
+                is_mirrored: prim.is_mirrored,
+                subtract_preview: true,
+            });
+        }
+
+        resolved
+    }
+
+    /// Turn resolved primitives into fused meshes.
+    fn finish(self, name: Option<String>, subtract: bool, templates: &PrimitiveTemplates) -> CompiledShape {
+        let resolved = self.resolve(name.as_deref());
+
+        let mut emissive_mesh = RawMesh::default();
+        let mut normal_mesh = RawMesh::default();
+        let mut preview_mesh = RawMesh::default();
+        let mut emissive_mirrored = false;
+        let mut normal_mirrored = false;
+        let mut preview_mirrored = false;
+
+        for cell in &resolved {
+            let mesh_tf = compute_mesh_transform(cell.shape, &cell.bounds, &cell.orient_mat, cell.scale);
+            let (cr, cg, cb) = cell.color.to_rgb();
+
+            if cell.subtract_preview {
+                let rgba = [cr, cg, cb, 0.3];
+                preview_mesh.append_transformed(templates.get(cell.shape), &mesh_tf, rgba);
+                if cell.is_mirrored { preview_mirrored = true; }
+            } else if cell.emissive {
+                let rgba = [cr, cg, cb, 1.0];
+                emissive_mesh.append_transformed(templates.get(cell.shape), &mesh_tf, rgba);
+                if cell.is_mirrored { emissive_mirrored = true; }
+            } else {
+                let rgba = [cr, cg, cb, 1.0];
+                normal_mesh.append_transformed(templates.get(cell.shape), &mesh_tf, rgba);
+                if cell.is_mirrored { normal_mirrored = true; }
             }
         }
 
         let mut meshes = Vec::new();
         if !normal_mesh.is_empty() {
-            meshes.push(FusedMesh {
-                mesh: normal_mesh,
-                emissive: false,
-                contains_mirrored: normal_mirrored,
-                subtract_preview: false,
-            });
+            meshes.push(FusedMesh { mesh: normal_mesh, emissive: false, contains_mirrored: normal_mirrored, subtract_preview: false });
         }
         if !emissive_mesh.is_empty() {
-            meshes.push(FusedMesh {
-                mesh: emissive_mesh,
-                emissive: true,
-                contains_mirrored: emissive_mirrored,
-                subtract_preview: false,
-            });
-        }
-
-        // Subtract preview: translucent overlay of subtract primitives
-        // so the author can see what volume is being carved.
-        let mut preview_mesh = RawMesh::default();
-        let mut preview_mirrored = false;
-        for prim in &self.preview_primitives {
-            let (cr, cg, cb) = prim.color.to_rgb();
-            let rgba = [cr, cg, cb, 0.3];
-            let mesh_tf = compute_mesh_transform(
-                prim.shape,
-                &prim.world_bounds,
-                &prim.orient_mat,
-                prim.scale,
-            );
-            preview_mesh.append_transformed(templates.get(prim.shape), &mesh_tf, rgba);
-            if prim.is_mirrored {
-                preview_mirrored = true;
-            }
+            meshes.push(FusedMesh { mesh: emissive_mesh, emissive: true, contains_mirrored: emissive_mirrored, subtract_preview: false });
         }
         if !preview_mesh.is_empty() {
-            meshes.push(FusedMesh {
-                mesh: preview_mesh,
-                emissive: false,
-                contains_mirrored: preview_mirrored,
-                subtract_preview: true,
-            });
+            meshes.push(FusedMesh { mesh: preview_mesh, emissive: false, contains_mirrored: preview_mirrored, subtract_preview: true });
         }
 
         CompiledShape {
