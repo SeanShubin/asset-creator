@@ -944,7 +944,7 @@ fn walk_into_group(
     }
 
     let sym = spec.symmetry;
-    for (local, _suffix) in &placements(sym, spec.bounds) {
+    for (local, _suffix) in &placements(sym, spec.bounds, spec.shape, spec.orient) {
         let combined = compose_placements(inherited_placement, *local);
         if let Some(ref import_name) = spec.import {
             walk_import(spec, import_name, combined, scale, group, ctx, &node_path);
@@ -1050,7 +1050,7 @@ fn collect_subtracts(
         return;
     }
     let sym = spec.symmetry;
-    for (local, _) in &placements(sym, spec.bounds) {
+    for (local, _) in &placements(sym, spec.bounds, spec.shape, spec.orient) {
         let combined = compose_placements(placement, *local);
         if spec.subtract {
             if let (Some(shape), Some(bounds)) = (spec.shape, spec.bounds) {

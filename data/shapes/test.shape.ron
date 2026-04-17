@@ -11,17 +11,31 @@
         symmetry: Faces
     ),
     (
-        name:"edge",
+        name:"edge1",
         shape:Wedge,
-        bounds: (-5, 1, -1, -1, 5, 1),
+        bounds: (-5, 1, -1, -4, 4, 1),
+        orient: (Left, NoMirror, NoRotation),
+        symmetry: Edges
+    ),
+    (
+        name:"edge2",
+        shape:Wedge,
+        bounds: (-4, 4, -1, -1, 5, 1),
         orient: (Left, NoMirror, NoRotation),
         symmetry: Edges
     ),
     (
         name:"corner",
         shape:Corner,
-        bounds: (-5, 1, 1, -1, 5, 5),
+        bounds: (-4, 4, 1, -1, 5, 4),
         orient: (Left, NoMirror, NoRotation),
-        symmetry: MirrorXYZ
+         // symmetry: Edges
     )
+    // (
+    //     name:"corner",
+    //     shape:Corner,
+    //     bounds: (-5, 1, 1, -1, 5, 5),
+    //     orient: (Left, NoMirror, NoRotation),
+    //     symmetry: MirrorXYZ
+    // )
 ]

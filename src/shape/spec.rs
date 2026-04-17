@@ -74,7 +74,7 @@ impl SpecNode {
         found: &mut bool,
         registry: &AssetRegistry,
     ) {
-        for (local, _) in &placements(self.symmetry, self.bounds) {
+        for (local, _) in &placements(self.symmetry, self.bounds, self.shape, self.orient) {
             let combined = compose_placements(inherited, *local);
             self.collect_bounds_single(combined, min, max, found, registry);
         }
@@ -458,15 +458,23 @@ pub const fn identity_placement() -> Placement {
 
 /// Return the list of `(placement, name_suffix)` pairs for a given
 /// symmetry. For Faces and Edges, all 24 cube rotations are generated
-/// and deduplicated by the resulting bounds — making them axis-order-
-/// independent. `bounds` is required for Faces/Edges deduplication.
-pub fn placements(symmetry: Symmetry, bounds: Option<Bounds>) -> Vec<(Placement, String)> {
+/// and deduplicated by signature + bounds — axis-order-independent and
+/// handedness-aware. Shape and orient are needed for signature-based
+/// dedup; pass None for shape if the node has no primitive.
+pub fn placements(
+    symmetry: Symmetry,
+    bounds: Option<Bounds>,
+    shape: Option<PrimitiveShape>,
+    orient: Orientation,
+) -> Vec<(Placement, String)> {
     use SignedAxis::*;
     match symmetry {
         Symmetry::Faces | Symmetry::Edges => {
-            return rotational_placements(bounds.expect(
-                "Faces/Edges symmetry requires bounds for deduplication"
-            ));
+            return rotational_placements(
+                bounds.expect("Faces/Edges symmetry requires bounds for deduplication"),
+                shape.unwrap_or(PrimitiveShape::Box),
+                orient,
+            );
         }
         _ => {}
     }
@@ -570,28 +578,35 @@ fn cube_rotations() -> Vec<Placement> {
 }
 
 /// Generate placements for Faces/Edges by applying all 24 cube
-/// rotations to the source bounds and deduplicating by result.
-/// Axis-order-independent: works regardless of which axis the source
-/// shape's offset is along.
-fn rotational_placements(bounds: Bounds) -> Vec<(Placement, String)> {
+/// rotations and deduplicating by (bounds, signature). The signature
+/// captures the actual geometry — a Box deduplicates by bounds alone
+/// (all orientations look the same), while a Wedge keeps mirrored
+/// copies that produce genuinely different geometry.
+fn rotational_placements(
+    bounds: Bounds,
+    shape: PrimitiveShape,
+    orient: Orientation,
+) -> Vec<(Placement, String)> {
     let rotations = cube_rotations();
-    let mut result: Vec<(Placement, Bounds)> = Vec::new();
+    let mut result: Vec<(Placement, Bounds, u64)> = Vec::new();
 
     for rot in &rotations {
         let transformed = apply_placement_to_bounds(*rot, bounds);
-        // Canonicalize bounds so mirrored versions match.
         let canon = Bounds(
             transformed.min().0, transformed.min().1, transformed.min().2,
             transformed.max().0, transformed.max().1, transformed.max().2,
         );
-        if !result.iter().any(|(_, b)| *b == canon) {
-            result.push((*rot, canon));
+        let orient_mat = super::csg::orientation_to_mat3(&orient, *rot);
+        let sig = super::csg::compute_signature(shape, orient_mat);
+
+        if !result.iter().any(|(_, b, s)| *b == canon && *s == sig) {
+            result.push((*rot, canon, sig));
         }
     }
 
     result.into_iter()
         .enumerate()
-        .map(|(i, (p, _))| {
+        .map(|(i, (p, _, _))| {
             let suffix = if i == 0 { String::new() } else { format!("_{i}") };
             (p, suffix)
         })
@@ -792,7 +807,7 @@ fn walk_for_occupancy(
     let base_path = append_path(parent_path, node.effective_name());
 
     let sym = node.symmetry;
-    for (local, suffix) in &placements(sym, node.bounds) {
+    for (local, suffix) in &placements(sym, node.bounds, node.shape, node.orient) {
         let combined = compose_placements(inherited, *local);
         let path = if suffix.is_empty() {
             base_path.clone()
@@ -1017,7 +1032,12 @@ mod tests {
                 Symmetry::Edges => Some(Bounds(-1, 1, 1, 1, 3, 3)),
                 _ => None,
             };
-            let ps = placements(sym, test_bounds);
+            let (test_shape, test_orient) = match sym {
+                Symmetry::Faces => (Some(PrimitiveShape::Box), Orientation::default()),
+                Symmetry::Edges => (Some(PrimitiveShape::Wedge), Orientation::default()),
+                _ => (None, Orientation::default()),
+            };
+            let ps = placements(sym, test_bounds, test_shape, test_orient);
             let mut seen = std::collections::HashSet::new();
             for (p, _) in &ps {
                 assert!(
@@ -1028,15 +1048,16 @@ mod tests {
                 );
             }
         }
-        assert_eq!(placements(Symmetry::Single, None).len(), 1);
-        assert_eq!(placements(Symmetry::MirrorX, None).len(), 2);
-        assert_eq!(placements(Symmetry::MirrorXYZ, None).len(), 8);
-        assert_eq!(placements(Symmetry::MirrorX_SpinY, None).len(), 4);
-        assert_eq!(placements(Symmetry::MirrorY_SpinZ, None).len(), 4);
-        assert_eq!(placements(Symmetry::MirrorZ_SpinX, None).len(), 4);
-        // Faces/Edges count depends on bounds (dedup by result).
-        assert_eq!(placements(Symmetry::Faces, Some(Bounds(1, -1, -1, 3, 1, 1))).len(), 6);
-        assert_eq!(placements(Symmetry::Edges, Some(Bounds(-1, 1, 1, 1, 3, 3))).len(), 12);
+        let d = Orientation::default();
+        assert_eq!(placements(Symmetry::Single, None, None, d).len(), 1);
+        assert_eq!(placements(Symmetry::MirrorX, None, None, d).len(), 2);
+        assert_eq!(placements(Symmetry::MirrorXYZ, None, None, d).len(), 8);
+        assert_eq!(placements(Symmetry::MirrorX_SpinY, None, None, d).len(), 4);
+        assert_eq!(placements(Symmetry::MirrorY_SpinZ, None, None, d).len(), 4);
+        assert_eq!(placements(Symmetry::MirrorZ_SpinX, None, None, d).len(), 4);
+        // Faces/Edges count depends on bounds + shape (signature dedup).
+        assert_eq!(placements(Symmetry::Faces, Some(Bounds(1, -1, -1, 3, 1, 1)), Some(PrimitiveShape::Box), d).len(), 6);
+        assert_eq!(placements(Symmetry::Edges, Some(Bounds(-1, 1, 1, 1, 3, 3)), Some(PrimitiveShape::Wedge), d).len(), 12);
     }
 
     #[test]
