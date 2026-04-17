@@ -19,13 +19,13 @@
     ),
     (
         name: "edge",
-        shape: Wedge,
+        faces: [MinY, MinZ],
         bounds: (-1, 1, 1, 1, 3, 3),
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ],
     ),
     (
         name: "corner",
-        shape: Corner,
+        corner: [MinX, MinY, MinZ],
         bounds: (1, 1, 1, 3, 3, 3),
         symmetry: [MirrorX, MirrorY, MirrorZ],
     ),

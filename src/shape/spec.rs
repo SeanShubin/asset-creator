@@ -42,6 +42,10 @@ pub struct SpecNode {
     pub import: Option<String>,
     #[serde(default)]
     pub children: Vec<SpecNode>,
+    /// Single transform applied before symmetry. Composed left-to-right
+    /// into one placement. Used for orienting imports.
+    #[serde(default)]
+    pub rotate: Vec<SymOp>,
     /// Symmetry generators. The system takes the closure and deduplicates.
     #[serde(default)]
     pub symmetry: Vec<SymOp>,
@@ -75,9 +79,13 @@ impl SpecNode {
         self.primitive().map(|(s, _)| s)
     }
 
-    /// Convenience: the orientation placement.
+    /// The full orientation: primitive's own placement composed with
+    /// the `rotate` field. For imports without a primitive, `rotate`
+    /// alone determines the orientation.
     pub fn orient_placement(&self) -> Placement {
-        self.primitive().map(|(_, p)| p).unwrap_or(identity_placement())
+        let prim_p = self.primitive().map(|(_, p)| p).unwrap_or(identity_placement());
+        let rotate_p = compose_orient(&self.rotate);
+        compose_placements(rotate_p, prim_p)
     }
 
     /// The effective name of this node. Import nodes that don't specify
@@ -470,7 +478,6 @@ fn faces_to_placement(faces: &[Face]) -> Placement {
     // Track which axes are specified (for Wedge ridge detection).
     let mut has_x = false;
     let mut has_y = false;
-    let mut has_z = false;
 
     for &f in faces {
         match f {
@@ -478,8 +485,8 @@ fn faces_to_placement(faces: &[Face]) -> Placement {
             Face::MaxX => { px = NegX; has_x = true; }
             Face::MinY => { py = PosY; has_y = true; }
             Face::MaxY => { py = NegY; has_y = true; }
-            Face::MinZ => { pz = PosZ; has_z = true; }
-            Face::MaxZ => { pz = NegZ; has_z = true; }
+            Face::MinZ => { pz = PosZ; }
+            Face::MaxZ => { pz = NegZ; }
         }
     }
 
@@ -500,13 +507,6 @@ fn faces_to_placement(faces: &[Face]) -> Placement {
                 Face::MinX => PosY, Face::MaxX => NegY,
                 Face::MinY => PosY, Face::MaxY => NegY,
                 Face::MinZ => PosZ, Face::MaxZ => NegZ,
-            }
-        };
-        let ridge_axis = |f: Face| -> SignedAxis {
-            match f {
-                Face::MinX | Face::MaxX => PosX,
-                Face::MinY | Face::MaxY => PosY,
-                Face::MinZ | Face::MaxZ => PosZ,
             }
         };
         // Map identity Y → first specified face's axis with sign.
@@ -562,8 +562,8 @@ pub const fn identity_placement() -> Placement {
 /// Works for any combination of operations — mirrors, rotations, or both.
 /// Compute placements from a SpecNode's symmetry generators.
 pub fn placements_for(spec: &SpecNode) -> Vec<(Placement, String)> {
-    let (shape, orient_p) = spec.primitive()
-        .unwrap_or((PrimitiveShape::Box, identity_placement()));
+    let shape = spec.shape().unwrap_or(PrimitiveShape::Box);
+    let orient_p = spec.orient_placement();
     placements(&spec.symmetry, spec.bounds, Some(shape), orient_p)
 }
 
@@ -692,7 +692,6 @@ pub struct Collision {
 struct SubtractVolume {
     shape: PrimitiveShape,
     orient_placement: Placement,
-    placement: Placement,
     bounds: Bounds,
 }
 
@@ -914,7 +913,6 @@ fn walk_single_for_occupancy(
             occ.subtracts.push(SubtractVolume {
                 shape,
                 orient_placement: compose_placements(placement, orient_p),
-                placement,
                 bounds: transformed,
             });
         } else {
@@ -965,6 +963,7 @@ mod tests {
             tags: vec![],
             import: None,
             children: vec![],
+            rotate: vec![],
             symmetry,
             subtract: false,
             animations: vec![],

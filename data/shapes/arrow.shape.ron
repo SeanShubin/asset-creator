@@ -6,9 +6,8 @@
     ),
     (
         name: "tip",
-        shape: Wedge,
+        faces: [MinY, MaxX],
         bounds: (-3, 3, -1, 0, 6, 1),
-        orient: [Rotate90_XZ],
         symmetry: [MirrorX],
     ),
 ]

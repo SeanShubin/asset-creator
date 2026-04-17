@@ -9,7 +9,7 @@ use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{
     collect_occupancy, compile, despawn_shape,
     production_stats, spawn_shape, CompiledShape, FusedMesh, Placement,
-    RawMesh, ShapeAnimator, ShapePart, ShapeRoot, SymOp,
+    RawMesh, ShapeAnimator, ShapePart, ShapeRoot,
 };
 use super::orbit_camera::{self, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
 

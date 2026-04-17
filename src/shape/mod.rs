@@ -16,7 +16,7 @@ pub use meshes::RawMesh;
 #[allow(unused_imports)]
 pub use spec::{
     collect_occupancy, aabb_for_parts, identity_placement, Bounds,
-    Collision, Occupancy, Placement, SpecNode, SymOp,
+    Collision, Occupancy, Placement, SpecNode,
 };
 
 /// Plugin placeholder for shape-system invariants. Currently empty

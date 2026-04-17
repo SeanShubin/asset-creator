@@ -22,7 +22,7 @@ use bevy::math::{Mat3, Vec3};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::spec::{Bounds, Placement, PrimitiveShape, SignedAxis, SymOp, compose_orient, compose_placements};
+use super::spec::{Bounds, Placement, PrimitiveShape, SignedAxis, compose_placements};
 
 // =====================================================================
 // Placement → Mat3 conversion
@@ -60,12 +60,7 @@ pub fn placement_to_mat3(p: Placement) -> Mat3 {
     )
 }
 
-/// Convert orient ops + symmetry placement into a final Mat3.
-pub fn orient_placement_to_mat3(orient: &[SymOp], symmetry_placement: Placement) -> Mat3 {
-    let orient_p = compose_orient(orient);
-    let combined = compose_placements(symmetry_placement, orient_p);
-    placement_to_mat3(combined)
-}
+
 
 // =====================================================================
 // Cell-level queries

@@ -1,7 +1,7 @@
 [
     (
         name: "corner",
-        shape: Corner,
+        corner: [MinX, MinY, MinZ],
         bounds: (-1, -1, -1, 1, 1, 1),
         tags: ["cyan"],
     ),

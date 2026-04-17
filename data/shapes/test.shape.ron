@@ -6,29 +6,25 @@
     // ),
     (
         name:"face",
-        shape:Box,
         bounds: (-5, -1, -1, -4, 1, 1),
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
         name:"edge",
-        shape:Wedge,
+        faces: [MinY, MaxX],
         bounds: (-5, 1, -1, -4, 4, 1),
-        orient: [Rotate90_XZ],
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
         name:"corner1",
-        shape:Corner,
+        corner: [MaxZ, MinY, MinX],
         bounds: (-4, 4, 1, -1, 5, 4),
-        orient: [Rotate90_XZ],
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
         name:"corner2",
-        shape:InverseCorner,
+        clip: [MinX, MaxY, MaxZ],
         bounds: (-4, 1, 1, -1, 4, 4),
-        orient: [Rotate180_XY, Rotate180_XZ],
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     )
 ]

@@ -12,10 +12,9 @@
     ),
     (
         name: "corner",
-        shape: Wedge,
+        faces: [MinX, MaxZ],
         bounds: (-4, -1, 4, -2, 0, 2),
         tags: ["green"],
-        orient: [Rotate180_XZ, Rotate180_XY, Rotate90_XY],
         symmetry: [MirrorX, MirrorZ],
         subtract: true,
     ),

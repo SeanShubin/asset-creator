@@ -22,8 +22,8 @@ use crate::util::Color3;
 use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
     apply_placement_to_bounds, aabb_for_parts, compose_placements,
-    identity_placement, placements, remap_bounds_for_parts,
-    Bounds, Placement, PrimitiveShape, SpecNode, SymOp, compose_orient, placements_for,
+    identity_placement, remap_bounds_for_parts,
+    Bounds, Placement, PrimitiveShape, SpecNode, placements_for,
 };
 
 // =====================================================================
@@ -107,10 +107,7 @@ pub fn resolve_tags_emissive(tags: &[String]) -> bool {
     tags.iter().any(|t| t.eq_ignore_ascii_case("emissive"))
 }
 
-/// Convert orient ops + symmetry placement into a final Mat3.
-fn orient_mat3(orient: &[SymOp], placement: Placement) -> Mat3 {
-    super::csg::orient_placement_to_mat3(orient, placement)
-}
+
 
 // =====================================================================
 // Integer → float transforms
@@ -1158,6 +1155,7 @@ mod tests {
             tags: vec![],
             import: None,
             children: vec![],
+            rotate: vec![],
             symmetry: vec![],
             subtract: false,
             animations: Vec::<AnimState>::new(),
@@ -1284,6 +1282,7 @@ mod tests {
                         tags: vec!["red".into()],
                         import: None,
                         children: vec![],
+                        rotate: vec![],
                         symmetry: vec![],
                         subtract: false,
                         animations: vec![],
