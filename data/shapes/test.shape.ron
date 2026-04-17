@@ -1,41 +1,34 @@
 [
-    (
-        name:"core",
-        shape:Box,
-        bounds:(-1, -1, -1, 1, 1, 1)
-    ),
+    // (
+    //     name:"core",
+    //     shape:Box,
+    //     bounds:(-1, -1, -1, 1, 1, 1)
+    // ),
     (
         name:"face",
         shape:Box,
         bounds: (-5, -1, -1, -4, 1, 1),
-        symmetry: Faces
+        symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
-        name:"edge1",
+        name:"edge",
         shape:Wedge,
         bounds: (-5, 1, -1, -4, 4, 1),
-        orient: (Left, NoMirror, NoRotation),
-        symmetry: Edges
+        orient: [Rotate90_XZ],
+        symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
-        name:"edge2",
-        shape:Wedge,
-        bounds: (-4, 4, -1, -1, 5, 1),
-        orient: (Left, NoMirror, NoRotation),
-        symmetry: Edges
-    ),
-    (
-        name:"corner",
+        name:"corner1",
         shape:Corner,
         bounds: (-4, 4, 1, -1, 5, 4),
-        orient: (Left, NoMirror, NoRotation),
-         // symmetry: Edges
+        orient: [Rotate90_XZ],
+        symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
+    ),
+    (
+        name:"corner2",
+        shape:InverseCorner,
+        bounds: (-4, 1, 1, -1, 4, 4),
+        orient: [Rotate180_XY, Rotate180_XZ],
+        symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     )
-    // (
-    //     name:"corner",
-    //     shape:Corner,
-    //     bounds: (-5, 1, 1, -1, 5, 5),
-    //     orient: (Left, NoMirror, NoRotation),
-    //     symmetry: MirrorXYZ
-    // )
 ]

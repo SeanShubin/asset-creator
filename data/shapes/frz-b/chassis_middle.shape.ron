@@ -15,8 +15,8 @@
         shape: Wedge,
         bounds: (-4, -1, 4, -2, 0, 2),
         tags: ["green"],
-        orient: (Back, NoMirror, RotateClockwise),
-        symmetry: MirrorXZ,
+        orient: [Rotate180_XZ, Rotate180_XY, Rotate90_XY],
+        symmetry: [MirrorX, MirrorZ],
         subtract: true,
     ),
     (
@@ -24,7 +24,7 @@
         shape: Box,
         bounds: (-3, -1, -2, -2, 0, 4),
         tags: ["blue"],
-        symmetry: MirrorX,
+        symmetry: [MirrorX],
         subtract: true,
     ),
 ]

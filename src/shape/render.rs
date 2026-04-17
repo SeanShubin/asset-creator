@@ -23,7 +23,7 @@ use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
     apply_placement_to_bounds, aabb_for_parts, compose_placements,
     identity_placement, placements, remap_bounds_for_parts,
-    Bounds, Orientation, Placement, PrimitiveShape, SpecNode,
+    Bounds, Placement, PrimitiveShape, SpecNode, SymOp, compose_orient,
 };
 
 // =====================================================================
@@ -107,16 +107,9 @@ pub fn resolve_tags_emissive(tags: &[String]) -> bool {
     tags.iter().any(|t| t.eq_ignore_ascii_case("emissive"))
 }
 
-// =====================================================================
-// Orientation → Mat3 conversion
-// =====================================================================
-
-pub use super::csg::base_orientation_matrix;
-
-/// Convert a discrete `Orientation` tuple plus an accumulated placement
-/// from symmetry expansion into the final world→mesh matrix.
-fn orientation_to_mat3(orient: &Orientation, placement: Placement) -> Mat3 {
-    super::csg::orientation_to_mat3(orient, placement)
+/// Convert orient ops + symmetry placement into a final Mat3.
+fn orient_mat3(orient: &[SymOp], placement: Placement) -> Mat3 {
+    super::csg::orient_placement_to_mat3(orient, placement)
 }
 
 // =====================================================================
@@ -286,6 +279,7 @@ struct PrimitiveTemplates {
     box_mesh: RawMesh,
     wedge_mesh: RawMesh,
     corner_mesh: RawMesh,
+    inverse_corner_mesh: RawMesh,
 }
 
 impl PrimitiveTemplates {
@@ -294,6 +288,7 @@ impl PrimitiveTemplates {
             box_mesh: create_raw_mesh(PrimitiveShape::Box),
             wedge_mesh: create_raw_mesh(PrimitiveShape::Wedge),
             corner_mesh: create_raw_mesh(PrimitiveShape::Corner),
+            inverse_corner_mesh: create_raw_mesh(PrimitiveShape::InverseCorner),
         }
     }
 
@@ -302,6 +297,7 @@ impl PrimitiveTemplates {
             PrimitiveShape::Box => &self.box_mesh,
             PrimitiveShape::Wedge => &self.wedge_mesh,
             PrimitiveShape::Corner => &self.corner_mesh,
+            PrimitiveShape::InverseCorner => &self.inverse_corner_mesh,
         }
     }
 }
@@ -670,10 +666,14 @@ fn face_coverage(shape: PrimitiveShape, orient_mat: &Mat3) -> u8 {
     if shape == PrimitiveShape::Box {
         return 0b111111;
     }
+    // All 6 axis faces exist for InverseCorner (3 quads + 3 triangles).
+    if shape == PrimitiveShape::InverseCorner {
+        return 0b111111;
+    }
     let identity_faces: &[(usize, usize)] = match shape {
         PrimitiveShape::Wedge => &[(1, 2), (3, 2), (4, 1), (5, 1)],
         PrimitiveShape::Corner => &[(1, 1), (3, 1), (5, 1)],
-        PrimitiveShape::Box => unreachable!(),
+        PrimitiveShape::Box | PrimitiveShape::InverseCorner => unreachable!(),
     };
     let mut mask = 0u8;
     for &(face_idx, _) in identity_faces {
@@ -793,6 +793,21 @@ fn compute_face_tris(shape: PrimitiveShape, orient_mat: &Mat3) -> ([usize; 6], u
             let mut ft = [0usize; 6];
             // Identity: bottom(-Y)=1, back(-Z)=1, left(-X)=1
             for &(face_idx, tris) in &[(1usize, 1usize), (3, 1), (5, 1)] {
+                let (dx, dy, dz) = FACE_DIRS[face_idx];
+                let world = *orient_mat * Vec3::new(dx as f32, dy as f32, dz as f32);
+                for (i, &(fx, fy, fz)) in FACE_DIRS.iter().enumerate() {
+                    if world.dot(Vec3::new(fx as f32, fy as f32, fz as f32)) > 0.9 {
+                        ft[i] = tris;
+                        break;
+                    }
+                }
+            }
+            (ft, 1) // diagonal
+        }
+        PrimitiveShape::InverseCorner => {
+            let mut ft = [0usize; 6];
+            // Identity: +X=2(quad), +Y=2(quad), +Z=2(quad), -X=1(tri), -Y=1(tri), -Z=1(tri)
+            for &(face_idx, tris) in &[(0usize, 2usize), (1, 1), (2, 2), (3, 1), (4, 2), (5, 1)] {
                 let (dx, dy, dz) = FACE_DIRS[face_idx];
                 let world = *orient_mat * Vec3::new(dx as f32, dy as f32, dz as f32);
                 for (i, &(fx, fy, fz)) in FACE_DIRS.iter().enumerate() {
@@ -943,8 +958,7 @@ fn walk_into_group(
         return;
     }
 
-    let sym = spec.symmetry;
-    for (local, _suffix) in &placements(sym, spec.bounds, spec.shape, spec.orient) {
+    for (local, _suffix) in &placements(&spec.symmetry, spec.bounds, spec.shape, &spec.orient) {
         let combined = compose_placements(inherited_placement, *local);
         if let Some(ref import_name) = spec.import {
             walk_import(spec, import_name, combined, scale, group, ctx, &node_path);
@@ -991,10 +1005,10 @@ fn walk_node_body(
 
         if spec.subtract {
             if ctx.is_direct {
-                add_primitive(shape, &bounds, placement, scale, spec.orient, spec, &mut group.preview_primitives);
+                add_primitive(shape, &bounds, placement, scale, &spec.orient, spec, &mut group.preview_primitives);
             }
         } else {
-            add_primitive(shape, &bounds, placement, scale, spec.orient, spec, &mut group.union_primitives);
+            add_primitive(shape, &bounds, placement, scale, &spec.orient, spec, &mut group.union_primitives);
         }
     }
 
@@ -1012,12 +1026,12 @@ fn add_primitive(
     bounds: &Bounds,
     placement: Placement,
     scale: (i32, i32, i32),
-    orient: Orientation,
+    orient: &[SymOp],
     spec: &SpecNode,
     target: &mut Vec<UnionPrimitive>,
 ) {
     let world_bounds = apply_placement_to_bounds(placement, *bounds);
-    let orient_mat = orientation_to_mat3(&orient, placement);
+    let orient_mat = orient_mat3(orient, placement);
     let is_mirrored = orient_mat.determinant() < 0.0;
     let color = resolve_tags_color(&spec.tags);
     let emissive = resolve_tags_emissive(&spec.tags);
@@ -1049,13 +1063,12 @@ fn collect_subtracts(
     if spec.effective_name().is_some_and(|n| hidden.iter().any(|h| h == n)) {
         return;
     }
-    let sym = spec.symmetry;
-    for (local, _) in &placements(sym, spec.bounds, spec.shape, spec.orient) {
+    for (local, _) in &placements(&spec.symmetry, spec.bounds, spec.shape, &spec.orient) {
         let combined = compose_placements(placement, *local);
         if spec.subtract {
             if let (Some(shape), Some(bounds)) = (spec.shape, spec.bounds) {
                 let world_bounds = apply_placement_to_bounds(combined, bounds);
-                let orient_mat = orientation_to_mat3(&spec.orient, combined);
+                let orient_mat = orient_mat3(&spec.orient, combined);
                 out.push(SubtractPrimitive {
                     shape,
                     world_bounds,
@@ -1144,18 +1157,18 @@ fn walk_import(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::spec::{AnimState, Orientation, Symmetry};
+    use super::super::spec::AnimState;
 
     fn leaf_box(name: &str, bounds: Bounds) -> SpecNode {
         SpecNode {
             name: Some(name.to_string()),
             shape: Some(PrimitiveShape::Box),
             bounds: Some(bounds),
-            orient: Orientation::default(),
+            orient: vec![],
             tags: vec![],
             import: None,
             children: vec![],
-            symmetry: Symmetry::Single,
+            symmetry: vec![],
             subtract: false,
             animations: Vec::<AnimState>::new(),
         }
@@ -1277,11 +1290,11 @@ mod tests {
                         name: Some(format!("b_{x}_{y}_{z}")),
                         shape: Some(PrimitiveShape::Box),
                         bounds: Some(Bounds(x, y, z, x + 1, y + 1, z + 1)),
-                        orient: Orientation::default(),
+                        orient: vec![],
                         tags: vec!["red".into()],
                         import: None,
                         children: vec![],
-                        symmetry: Symmetry::Single,
+                        symmetry: vec![],
                         subtract: false,
                         animations: vec![],
                     });

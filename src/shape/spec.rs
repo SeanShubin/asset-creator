@@ -29,21 +29,21 @@ pub struct SpecNode {
     pub shape: Option<PrimitiveShape>,
     #[serde(default)]
     pub bounds: Option<Bounds>,
+    /// Orientation: a sequence of operations composed left-to-right
+    /// into a single transform. Empty = identity.
     #[serde(default)]
-    pub orient: Orientation,
+    pub orient: Vec<SymOp>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub import: Option<String>,
     #[serde(default)]
     pub children: Vec<SpecNode>,
-    /// Named symmetry pattern. `Single` means "render once, no copies".
-    /// All other variants produce multiple copies via a hand-curated
-    /// placement table (see `placements`). There is no generator-list
-    /// composition: each variant's placement set is validated by
-    /// construction to contain no duplicates.
+    /// Symmetry: a set of generator operations. The system takes the
+    /// closure (all compositions) and deduplicates by (bounds, signature).
+    /// Empty = single copy.
     #[serde(default)]
-    pub symmetry: Symmetry,
+    pub symmetry: Vec<SymOp>,
     #[serde(default)]
     pub subtract: bool,
     #[serde(default)]
@@ -74,7 +74,7 @@ impl SpecNode {
         found: &mut bool,
         registry: &AssetRegistry,
     ) {
-        for (local, _) in &placements(self.symmetry, self.bounds, self.shape, self.orient) {
+        for (local, _) in &placements(&self.symmetry, self.bounds, self.shape, &self.orient) {
             let combined = compose_placements(inherited, *local);
             self.collect_bounds_single(combined, min, max, found, registry);
         }
@@ -167,6 +167,66 @@ pub enum PrimitiveShape {
     Box,
     Wedge,
     Corner,
+    /// Box with one corner clipped — the complement of Corner.
+    /// Fills where x + y + z >= -0.5 in identity orientation.
+    InverseCorner,
+}
+
+// =====================================================================
+// SymOp — the unified operation for orient and symmetry
+// =====================================================================
+
+/// A single geometric operation. Used by both `orient` (composed
+/// left-to-right into one transform) and `symmetry` (closure taken
+/// over generators, deduplicated by signature).
+#[allow(non_camel_case_types)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SymOp {
+    MirrorX,
+    MirrorY,
+    MirrorZ,
+    /// 90° rotation in the XY plane (X toward Y).
+    Rotate90_XY,
+    /// 90° rotation in the XZ plane (X toward Z).
+    Rotate90_XZ,
+    /// 90° rotation in the YZ plane (Y toward Z).
+    Rotate90_YZ,
+    /// 180° rotation in the XY plane.
+    Rotate180_XY,
+    /// 180° rotation in the XZ plane.
+    Rotate180_XZ,
+    /// 180° rotation in the YZ plane.
+    Rotate180_YZ,
+}
+
+impl SymOp {
+    pub fn to_placement(self) -> Placement {
+        use SignedAxis::*;
+        match self {
+            SymOp::MirrorX     => Placement(NegX, PosY, PosZ),
+            SymOp::MirrorY     => Placement(PosX, NegY, PosZ),
+            SymOp::MirrorZ     => Placement(PosX, PosY, NegZ),
+            // XY plane: X→Y, Y→−X (CCW from +Z)
+            SymOp::Rotate90_XY  => Placement(NegY, PosX, PosZ),
+            // XZ plane: X→Z, Z→−X (CCW from +Y)
+            SymOp::Rotate90_XZ  => Placement(NegZ, PosY, PosX),
+            // YZ plane: Y→Z, Z→−Y (CCW from +X)
+            SymOp::Rotate90_YZ  => Placement(PosX, NegZ, PosY),
+            SymOp::Rotate180_XY => Placement(NegX, NegY, PosZ),
+            SymOp::Rotate180_XZ => Placement(NegX, PosY, NegZ),
+            SymOp::Rotate180_YZ => Placement(PosX, NegY, NegZ),
+        }
+    }
+}
+
+/// Compose a sequence of operations left-to-right into one placement.
+/// Used by `orient` to produce a single transform.
+pub fn compose_orient(ops: &[SymOp]) -> Placement {
+    let mut result = identity_placement();
+    for op in ops {
+        result = compose_placements(op.to_placement(), result);
+    }
+    result
 }
 
 // =====================================================================
@@ -306,59 +366,6 @@ impl SignedAxis {
     }
 }
 
-// =====================================================================
-// Orientation — the authored discrete orientation tuple
-// =====================================================================
-
-/// Authored orientation: a discrete (facing, mirroring, rotation) combination.
-/// The rendering layer converts this to a `Mat3` when it needs to compute
-/// a mesh transform. Storing the tuple instead of the derived matrix keeps
-/// the spec integer-pure.
-#[derive(Deserialize, Clone, Copy, Debug, Default)]
-pub struct Orientation(
-    #[serde(default)] pub Facing,
-    #[serde(default)] pub Mirroring,
-    #[serde(default)] pub Rotation,
-);
-
-impl Orientation {
-    pub fn facing(self) -> Facing {
-        self.0
-    }
-    pub fn mirroring(self) -> Mirroring {
-        self.1
-    }
-    pub fn rotation(self) -> Rotation {
-        self.2
-    }
-}
-
-#[derive(Deserialize, Clone, Copy, Debug, Default)]
-pub enum Facing {
-    #[default]
-    Front,
-    Back,
-    Left,
-    Right,
-    Top,
-    Bottom,
-}
-
-#[derive(Deserialize, Clone, Copy, Debug, Default)]
-pub enum Mirroring {
-    #[default]
-    NoMirror,
-    Mirror,
-}
-
-#[derive(Deserialize, Clone, Copy, Debug, Default)]
-pub enum Rotation {
-    #[default]
-    NoRotation,
-    RotateClockwise,
-    RotateHalf,
-    RotateCounter,
-}
 
 // =====================================================================
 // Animation data — carried through the spec but never interpreted here
@@ -402,47 +409,8 @@ pub struct AnimState {
 }
 
 // =====================================================================
-// Symmetry and Placements
+// Placements
 // =====================================================================
-
-/// Named symmetry pattern. Each variant expands to a curated list of
-/// placements that produces distinct copies with no duplicates. The user
-/// picks a pattern by name; there is no generator composition.
-///
-/// All copies are signed permutations of the coordinate axes — elements
-/// of the cube symmetry group B₃ (order 48). The variants here are the
-/// most commonly useful subsets for cell-grid authoring.
-#[allow(non_camel_case_types)]
-#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Symmetry {
-    /// Identity only: 1 copy.
-    #[default]
-    Single,
-    /// Mirror across the x=0 plane: 2 copies.
-    MirrorX,
-    /// Mirror across the y=0 plane: 2 copies.
-    MirrorY,
-    /// Mirror across the z=0 plane: 2 copies.
-    MirrorZ,
-    /// Mirror across x=0 and y=0: 4 copies.
-    MirrorXY,
-    /// Mirror across x=0 and z=0: 4 copies.
-    MirrorXZ,
-    /// Mirror across y=0 and z=0: 4 copies.
-    MirrorYZ,
-    /// Mirror across all three axis planes: 8 copies.
-    MirrorXYZ,
-    /// Mirror across x=0, then rotate 90° around Y: 4 copies.
-    MirrorX_SpinY,
-    /// Mirror across y=0, then rotate 90° around Z: 4 copies.
-    MirrorY_SpinZ,
-    /// Mirror across z=0, then rotate 90° around X: 4 copies.
-    MirrorZ_SpinX,
-    /// The 6 face cells of a cube — one copy on each of ±X, ±Y, ±Z faces.
-    Faces,
-    /// The 12 edge cells of a cube — 4 edges parallel to each axis.
-    Edges,
-}
 
 /// A signed permutation of the coordinate axes. `Placement(a, b, c)`
 /// means: the new copy's world X axis comes from the source's `a`,
@@ -456,111 +424,19 @@ pub const fn identity_placement() -> Placement {
     Placement(SignedAxis::PosX, SignedAxis::PosY, SignedAxis::PosZ)
 }
 
-/// Return the list of `(placement, name_suffix)` pairs for a given
-/// symmetry. For Faces and Edges, all 24 cube rotations are generated
-/// and deduplicated by signature + bounds — axis-order-independent and
-/// handedness-aware. Shape and orient are needed for signature-based
-/// dedup; pass None for shape if the node has no primitive.
+/// Compute placements from symmetry generators. Takes the closure of
+/// the generator operations and deduplicates by (bounds, CSG signature).
+/// Works for any combination of operations — mirrors, rotations, or both.
 pub fn placements(
-    symmetry: Symmetry,
+    generators: &[SymOp],
     bounds: Option<Bounds>,
     shape: Option<PrimitiveShape>,
-    orient: Orientation,
+    orient: &[SymOp],
 ) -> Vec<(Placement, String)> {
-    use SignedAxis::*;
-    match symmetry {
-        Symmetry::Faces | Symmetry::Edges => {
-            return rotational_placements(
-                bounds.expect("Faces/Edges symmetry requires bounds for deduplication"),
-                shape.unwrap_or(PrimitiveShape::Box),
-                orient,
-            );
-        }
-        _ => {}
-    }
-    let static_placements: &[(Placement, &str)] = match symmetry {
-        Symmetry::Single => &[(Placement(PosX, PosY, PosZ), "")],
-        Symmetry::MirrorX => &[
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(NegX, PosY, PosZ), "_mx"),
-        ],
-        Symmetry::MirrorY => &[
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(PosX, NegY, PosZ), "_my"),
-        ],
-        Symmetry::MirrorZ => &[
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(PosX, PosY, NegZ), "_mz"),
-        ],
-        Symmetry::MirrorXY => &[
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(NegX, PosY, PosZ), "_mx"),
-            (Placement(PosX, NegY, PosZ), "_my"),
-            (Placement(NegX, NegY, PosZ), "_mxy"),
-        ],
-        Symmetry::MirrorXZ => &[
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(NegX, PosY, PosZ), "_mx"),
-            (Placement(PosX, PosY, NegZ), "_mz"),
-            (Placement(NegX, PosY, NegZ), "_mxz"),
-        ],
-        Symmetry::MirrorYZ => &[
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(PosX, NegY, PosZ), "_my"),
-            (Placement(PosX, PosY, NegZ), "_mz"),
-            (Placement(PosX, NegY, NegZ), "_myz"),
-        ],
-        Symmetry::MirrorXYZ => &[
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(NegX, PosY, PosZ), "_mx"),
-            (Placement(PosX, NegY, PosZ), "_my"),
-            (Placement(NegX, NegY, PosZ), "_mxy"),
-            (Placement(PosX, PosY, NegZ), "_mz"),
-            (Placement(NegX, PosY, NegZ), "_mxz"),
-            (Placement(PosX, NegY, NegZ), "_myz"),
-            (Placement(NegX, NegY, NegZ), "_mxyz"),
-        ],
-        Symmetry::MirrorX_SpinY => &[
-            // Mirror across x=0, then rotate both copies 90° around Y.
-            // Produces 4 copies on the ±X and ±Z sides.
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(NegX, PosY, PosZ), "_mx"),
-            (Placement(PosZ, PosY, NegX), "_sy"),
-            (Placement(PosZ, PosY, PosX), "_mx_sy"),
-        ],
-        Symmetry::MirrorY_SpinZ => &[
-            // Mirror across y=0, then rotate both copies 90° around Z.
-            // Produces 4 copies on the ±Y and ±X sides.
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(PosX, NegY, PosZ), "_my"),
-            (Placement(NegY, PosX, PosZ), "_sz"),
-            (Placement(PosY, PosX, PosZ), "_my_sz"),
-        ],
-        Symmetry::MirrorZ_SpinX => &[
-            // Mirror across z=0, then rotate both copies 90° around X.
-            // Produces 4 copies on the ±Z and ±Y sides.
-            (Placement(PosX, PosY, PosZ), ""),
-            (Placement(PosX, PosY, NegZ), "_mz"),
-            (Placement(PosX, NegZ, PosY), "_sx"),
-            (Placement(PosX, PosZ, PosY), "_mz_sx"),
-        ],
-        Symmetry::Faces | Symmetry::Edges => unreachable!(),
-    };
-    static_placements.iter()
-        .map(|&(p, s)| (p, s.to_string()))
-        .collect()
-}
-
-/// Generate all 24 cube rotations as placements.
-fn cube_rotations() -> Vec<Placement> {
-    use SignedAxis::*;
-    // Generators: 90° rotations around Y and X.
-    // Closure under these two produces all 24 proper rotations.
-    let rot90_y = Placement(NegZ, PosY, PosX); // X→-Z, Y→Y, Z→X
-    let rot90_x = Placement(PosX, PosZ, NegY); // X→X, Y→Z, Z→-Y
-
+    // Compute the closure: all placements reachable by composing generators.
     let mut set = vec![identity_placement()];
-    for gen in [rot90_y, rot90_x] {
+    for op in generators {
+        let gen = op.to_placement();
         loop {
             let mut new_found = false;
             let current = set.clone();
@@ -574,33 +450,25 @@ fn cube_rotations() -> Vec<Placement> {
             if !new_found { break; }
         }
     }
-    set
-}
 
-/// Generate placements for Faces/Edges by applying all 24 cube
-/// rotations and deduplicating by (bounds, signature). The signature
-/// captures the actual geometry — a Box deduplicates by bounds alone
-/// (all orientations look the same), while a Wedge keeps mirrored
-/// copies that produce genuinely different geometry.
-fn rotational_placements(
-    bounds: Bounds,
-    shape: PrimitiveShape,
-    orient: Orientation,
-) -> Vec<(Placement, String)> {
-    let rotations = cube_rotations();
+    // Deduplicate by (canonicalized bounds, signature).
+    let orient_placement = compose_orient(orient);
+    let shape = shape.unwrap_or(PrimitiveShape::Box);
+    let bounds = bounds.unwrap_or(Bounds(0, 0, 0, 1, 1, 1));
+
     let mut result: Vec<(Placement, Bounds, u64)> = Vec::new();
-
-    for rot in &rotations {
-        let transformed = apply_placement_to_bounds(*rot, bounds);
+    for p in &set {
+        let transformed = apply_placement_to_bounds(*p, bounds);
         let canon = Bounds(
             transformed.min().0, transformed.min().1, transformed.min().2,
             transformed.max().0, transformed.max().1, transformed.max().2,
         );
-        let orient_mat = super::csg::orientation_to_mat3(&orient, *rot);
-        let sig = super::csg::compute_signature(shape, orient_mat);
+        let combined = compose_placements(*p, orient_placement);
+        let mat = super::csg::placement_to_mat3(combined);
+        let sig = super::csg::compute_signature(shape, mat);
 
         if !result.iter().any(|(_, b, s)| *b == canon && *s == sig) {
-            result.push((*rot, canon, sig));
+            result.push((*p, canon, sig));
         }
     }
 
@@ -685,7 +553,7 @@ pub struct Collision {
 /// union cells are claimed, cells fully inside a subtract are removed.
 struct SubtractVolume {
     shape: PrimitiveShape,
-    orient: Orientation,
+    orient: Vec<SymOp>,
     placement: Placement,
     bounds: Bounds,
 }
@@ -806,8 +674,7 @@ fn walk_for_occupancy(
 ) {
     let base_path = append_path(parent_path, node.effective_name());
 
-    let sym = node.symmetry;
-    for (local, suffix) in &placements(sym, node.bounds, node.shape, node.orient) {
+    for (local, suffix) in &placements(&node.symmetry, node.bounds, node.shape, &node.orient) {
         let combined = compose_placements(inherited, *local);
         let path = if suffix.is_empty() {
             base_path.clone()
@@ -908,7 +775,7 @@ fn walk_single_for_occupancy(
         if node.subtract {
             occ.subtracts.push(SubtractVolume {
                 shape,
-                orient: node.orient,
+                orient: node.orient.clone(),
                 placement,
                 bounds: transformed,
             });
@@ -950,12 +817,12 @@ fn append_path(parent: &str, name: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    fn leaf_spec(bounds: Bounds, symmetry: Symmetry) -> SpecNode {
+    fn leaf_spec(bounds: Bounds, symmetry: Vec<SymOp>) -> SpecNode {
         SpecNode {
             name: Some("leaf".into()),
             shape: Some(PrimitiveShape::Box),
             bounds: Some(bounds),
-            orient: Orientation::default(),
+            orient: vec![],
             tags: vec![],
             import: None,
             children: vec![],
@@ -1009,61 +876,24 @@ mod tests {
     }
 
     #[test]
-    fn symmetry_placements_are_distinct_and_correct_count() {
-        // Every variant's placement table must have unique entries.
-        for sym in [
-            Symmetry::Single,
-            Symmetry::MirrorX,
-            Symmetry::MirrorY,
-            Symmetry::MirrorZ,
-            Symmetry::MirrorXY,
-            Symmetry::MirrorXZ,
-            Symmetry::MirrorYZ,
-            Symmetry::MirrorXYZ,
-            Symmetry::MirrorX_SpinY,
-            Symmetry::MirrorY_SpinZ,
-            Symmetry::MirrorZ_SpinX,
-            Symmetry::Faces,
-            Symmetry::Edges,
-        ] {
-            // Faces/Edges need bounds for deduplication.
-            let test_bounds = match sym {
-                Symmetry::Faces => Some(Bounds(1, -1, -1, 3, 1, 1)),
-                Symmetry::Edges => Some(Bounds(-1, 1, 1, 1, 3, 3)),
-                _ => None,
-            };
-            let (test_shape, test_orient) = match sym {
-                Symmetry::Faces => (Some(PrimitiveShape::Box), Orientation::default()),
-                Symmetry::Edges => (Some(PrimitiveShape::Wedge), Orientation::default()),
-                _ => (None, Orientation::default()),
-            };
-            let ps = placements(sym, test_bounds, test_shape, test_orient);
-            let mut seen = std::collections::HashSet::new();
-            for (p, _) in &ps {
-                assert!(
-                    seen.insert(*p),
-                    "symmetry {:?} has duplicate placement {:?}",
-                    sym,
-                    p
-                );
-            }
-        }
-        let d = Orientation::default();
-        assert_eq!(placements(Symmetry::Single, None, None, d).len(), 1);
-        assert_eq!(placements(Symmetry::MirrorX, None, None, d).len(), 2);
-        assert_eq!(placements(Symmetry::MirrorXYZ, None, None, d).len(), 8);
-        assert_eq!(placements(Symmetry::MirrorX_SpinY, None, None, d).len(), 4);
-        assert_eq!(placements(Symmetry::MirrorY_SpinZ, None, None, d).len(), 4);
-        assert_eq!(placements(Symmetry::MirrorZ_SpinX, None, None, d).len(), 4);
-        // Faces/Edges count depends on bounds + shape (signature dedup).
-        assert_eq!(placements(Symmetry::Faces, Some(Bounds(1, -1, -1, 3, 1, 1)), Some(PrimitiveShape::Box), d).len(), 6);
-        assert_eq!(placements(Symmetry::Edges, Some(Bounds(-1, 1, 1, 1, 3, 3)), Some(PrimitiveShape::Wedge), d).len(), 12);
+    fn symmetry_placements_correct_counts() {
+        let e: &[SymOp] = &[];
+        assert_eq!(placements(e, None, None, e).len(), 1);
+        assert_eq!(placements(&[SymOp::MirrorX], None, None, e).len(), 2);
+        assert_eq!(placements(&[SymOp::MirrorX, SymOp::MirrorY, SymOp::MirrorZ], None, None, e).len(), 8);
+        assert_eq!(placements(&[SymOp::MirrorX, SymOp::Rotate90_XZ], None, None, e).len(), 4);
+        assert_eq!(placements(&[SymOp::MirrorY, SymOp::Rotate90_XY], None, None, e).len(), 4);
+        assert_eq!(placements(&[SymOp::MirrorZ, SymOp::Rotate90_YZ], None, None, e).len(), 4);
+        // Rotational symmetry: count depends on bounds + shape.
+        let rot = &[SymOp::Rotate90_XY, SymOp::Rotate90_XZ, SymOp::Rotate90_YZ];
+        assert_eq!(placements(rot, Some(Bounds(1, -1, -1, 3, 1, 1)), Some(PrimitiveShape::Box), e).len(), 6);
+        assert_eq!(placements(rot, Some(Bounds(-1, 1, 1, 1, 3, 3)), Some(PrimitiveShape::Wedge), e).len(), 12);
     }
 
     #[test]
     fn faces_symmetry_produces_six_distinct_world_cells() {
         // Source: a box that covers +X face of a 3×3×3 grid.
-        let spec = leaf_spec(Bounds(1, -1, -1, 3, 1, 1), Symmetry::Faces);
+        let spec = leaf_spec(Bounds(1, -1, -1, 3, 1, 1), vec![SymOp::Rotate90_XY, SymOp::Rotate90_XZ, SymOp::Rotate90_YZ]);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         // AABB should span ±3 on all three axes (cell range).
@@ -1075,7 +905,7 @@ mod tests {
     #[test]
     fn edges_symmetry_produces_twelve_distinct_world_cells() {
         // Source: a +X-parallel edge cell at +Y+Z in the 3×3×3 grid.
-        let spec = leaf_spec(Bounds(-1, 1, 1, 1, 3, 3), Symmetry::Edges);
+        let spec = leaf_spec(Bounds(-1, 1, 1, 1, 3, 3), vec![SymOp::Rotate90_XY, SymOp::Rotate90_XZ, SymOp::Rotate90_YZ]);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         let aabb = occ.aabb().unwrap();
@@ -1085,7 +915,7 @@ mod tests {
 
     #[test]
     fn octants_symmetry_produces_eight_corners() {
-        let spec = leaf_spec(Bounds(1, 1, 1, 3, 3, 3), Symmetry::MirrorXYZ);
+        let spec = leaf_spec(Bounds(1, 1, 1, 3, 3, 3), vec![SymOp::MirrorX, SymOp::MirrorY, SymOp::MirrorZ]);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         let aabb = occ.aabb().unwrap();
@@ -1094,17 +924,17 @@ mod tests {
     }
 
     #[test]
-    fn centered_pair_x_collides_with_itself() {
-        // The motivating "sphere at origin mirrored across X" case:
-        // both copies land on the same cells, so every cell is a collision.
-        let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), Symmetry::MirrorX);
+    fn centered_box_mirror_x_deduplicates() {
+        // A centered Box mirrored across X produces the same geometry
+        // — signature-based dedup gives 1 copy, no collisions.
+        let spec = leaf_spec(Bounds(-1, -1, -1, 1, 1, 1), vec![SymOp::MirrorX]);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
-        assert_eq!(occ.collision_count(), 8);
+        assert_eq!(occ.collision_count(), 0);
     }
 
     #[test]
     fn off_origin_pair_x_does_not_collide() {
-        let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), Symmetry::MirrorX);
+        let spec = leaf_spec(Bounds(2, 0, 0, 3, 1, 1), vec![SymOp::MirrorX]);
         let occ = collect_occupancy(&[spec], &AssetRegistry::default());
         assert_eq!(occ.collision_count(), 0);
         assert_eq!(occ.aabb(), Some(Bounds(-3, 0, 0, 3, 1, 1)));
@@ -1118,7 +948,7 @@ mod tests {
         // Shape root with two import children at overlapping placements.
         let mut shape_a_import = leaf_spec(
             Bounds(0, 0, 0, 3, 3, 3),
-            Symmetry::Single,
+            vec![],
         );
         shape_a_import.name = Some("a".into());
         shape_a_import.shape = None;
@@ -1126,7 +956,7 @@ mod tests {
 
         let mut shape_b_import = leaf_spec(
             Bounds(2, 0, 0, 5, 3, 3),
-            Symmetry::Single,
+            vec![],
         );
         shape_b_import.name = Some("b".into());
         shape_b_import.shape = None;
@@ -1147,12 +977,12 @@ mod tests {
     /// would (hypothetically) occupy other cells in world space.
     #[test]
     fn non_overlapping_imports_pass() {
-        let mut import_a = leaf_spec(Bounds(0, 0, 0, 3, 3, 3), Symmetry::Single);
+        let mut import_a = leaf_spec(Bounds(0, 0, 0, 3, 3, 3), vec![]);
         import_a.name = Some("a".into());
         import_a.shape = None;
         import_a.import = Some("dummy".into());
 
-        let mut native = leaf_spec(Bounds(-5, 0, 0, -2, 3, 3), Symmetry::Single);
+        let mut native = leaf_spec(Bounds(-5, 0, 0, -2, 3, 3), vec![]);
         native.name = Some("native".into());
 
         let parts = vec![import_a, native];

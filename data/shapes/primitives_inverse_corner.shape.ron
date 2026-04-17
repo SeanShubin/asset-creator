@@ -1,0 +1,8 @@
+[
+    (
+        name: "inverse_corner",
+        shape: InverseCorner,
+        bounds: (-1, -1, -1, 1, 1, 1),
+        tags: ["cyan"],
+    ),
+]

@@ -68,6 +68,7 @@ pub fn create_raw_mesh(shape: PrimitiveShape) -> RawMesh {
         PrimitiveShape::Box => create_raw_box(),
         PrimitiveShape::Wedge => create_raw_wedge(),
         PrimitiveShape::Corner => create_raw_corner(),
+        PrimitiveShape::InverseCorner => create_raw_inverse_corner(),
     }
 }
 
@@ -196,6 +197,72 @@ fn create_raw_corner() -> RawMesh {
         [0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, -0.5],
         [diag_normal.x, diag_normal.y, diag_normal.z],
     );
+
+    RawMesh { positions, normals, uvs, colors: Vec::new(), indices }
+}
+
+// =====================================================================
+// InverseCorner — box with one corner clipped
+// =====================================================================
+
+/// Unit inverse corner: fills the cube minus the (-X, -Y, -Z) tetrahedron.
+/// Complement of Corner. 10 triangles: 3 full quads (+X, +Y, +Z),
+/// 3 clipped triangles (-X, -Y, -Z), 1 diagonal face.
+fn create_raw_inverse_corner() -> RawMesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+
+    // Key vertices:
+    // B = ( 0.5, -0.5, -0.5)  — on clip plane, +X from clipped vertex
+    // C = (-0.5,  0.5, -0.5)  — on clip plane, +Y
+    // D = (-0.5, -0.5,  0.5)  — on clip plane, +Z
+    // E = ( 0.5,  0.5, -0.5)
+    // F = ( 0.5, -0.5,  0.5)
+    // G = (-0.5,  0.5,  0.5)
+    // H = ( 0.5,  0.5,  0.5)
+
+    // +X face: quad B, F, H, E — normal +X
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5],
+        [1.0, 0.0, 0.0]);
+
+    // +Y face: quad C, E, H, G — normal +Y
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5],
+        [0.0, 1.0, 0.0]);
+
+    // +Z face: quad D, G, H, F — normal +Z
+    // (0,2,1) → D,H,G. Cross = (H-D)×(G-D) = (1,1,0)×(0,1,0) = (0,0,1) ✓
+    add_quad(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5],
+        [0.0, 0.0, 1.0]);
+
+    // -X face (clipped): triangle D, C, G — normal -X
+    // (0,2,1) → D,G,C. Cross = (G-D)×(C-D) = (0,1,0)×(0,1,-1) = (-1,0,0) ✓
+    add_triangle(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, 0.5], [-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5],
+        [-1.0, 0.0, 0.0]);
+
+    // -Y face (clipped): triangle F, B, D — normal -Y
+    // (0,2,1) → F,D,B. Cross = (D-F)×(B-F) = (-1,0,0)×(0,0,-1) = (0,-1,0) ✓
+    add_triangle(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [-0.5, -0.5, 0.5],
+        [0.0, -1.0, 0.0]);
+
+    // -Z face (clipped): triangle C, B, E — normal -Z
+    // (0,2,1) → C,E,B. Cross = (E-C)×(B-C) = (1,0,0)×(1,-1,0) = (0,0,-1) ✓
+    add_triangle(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, 0.5, -0.5], [0.5, -0.5, -0.5], [0.5, 0.5, -0.5],
+        [0.0, 0.0, -1.0]);
+
+    // Diagonal face: triangle D, B, C — normal toward clipped vertex (-1,-1,-1)
+    // (0,2,1) → D,C,B. Cross = (C-D)×(B-D) = (-1,-1,-1) ✓
+    let diag_normal = Vec3::new(-1.0, -1.0, -1.0).normalize();
+    add_triangle(&mut positions, &mut normals, &mut uvs, &mut indices,
+        [-0.5, -0.5, 0.5], [0.5, -0.5, -0.5], [-0.5, 0.5, -0.5],
+        [diag_normal.x, diag_normal.y, diag_normal.z]);
 
     RawMesh { positions, normals, uvs, colors: Vec::new(), indices }
 }

@@ -18,65 +18,71 @@
 //! lookup returns *some* valid representation for any reachable
 //! bitmask — enough for rendering.
 
-use bevy::math::{Mat3, Quat, Vec3};
+use bevy::math::{Mat3, Vec3};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::spec::{Bounds, Facing, Mirroring, Orientation, Placement, PrimitiveShape, Rotation, SignedAxis};
+use super::spec::{Bounds, Placement, PrimitiveShape, SignedAxis, SymOp, compose_orient, compose_placements};
 
 // =====================================================================
-// Orientation → Mat3 conversion (cube symmetry math)
+// Placement → Mat3 conversion
 // =====================================================================
 
-pub fn base_orientation_matrix(orient: &Orientation) -> Mat3 {
-    let facing = facing_matrix(orient.facing());
-    let mirror = match orient.mirroring() {
-        Mirroring::NoMirror => Mat3::IDENTITY,
-        Mirroring::Mirror => Mat3::from_cols(Vec3::NEG_X, Vec3::Y, Vec3::Z),
+/// Convert a Placement (signed axis permutation) to a Mat3. Each
+/// component of the placement tells which source axis feeds that
+/// world axis; the matrix columns tell where each source axis goes.
+pub fn placement_to_mat3(p: Placement) -> Mat3 {
+    // The placement rows tell us: world_x = ±source_a, etc.
+    // The matrix M must satisfy: M * source = world.
+    // Row i of M has a ±1 in the column corresponding to p.i's axis.
+    let row = |sa: SignedAxis| -> Vec3 {
+        let (idx, sign) = match sa {
+            SignedAxis::PosX => (0, 1.0f32),
+            SignedAxis::NegX => (0, -1.0),
+            SignedAxis::PosY => (1, 1.0),
+            SignedAxis::NegY => (1, -1.0),
+            SignedAxis::PosZ => (2, 1.0),
+            SignedAxis::NegZ => (2, -1.0),
+        };
+        let mut v = [0.0f32; 3];
+        v[idx] = sign;
+        Vec3::from(v)
     };
-    let rotation = rotation_matrix(orient.rotation());
-    rotation * mirror * facing
+    // Mat3::from_cols takes columns, but we computed rows.
+    // Transpose: rows of M become columns of M^T.
+    let r0 = row(p.0);
+    let r1 = row(p.1);
+    let r2 = row(p.2);
+    Mat3::from_cols(
+        Vec3::new(r0.x, r1.x, r2.x),
+        Vec3::new(r0.y, r1.y, r2.y),
+        Vec3::new(r0.z, r1.z, r2.z),
+    )
 }
 
-fn facing_matrix(facing: Facing) -> Mat3 {
-    use std::f32::consts::FRAC_PI_2;
-    match facing {
-        Facing::Front => Mat3::IDENTITY,
-        Facing::Back => Mat3::from_quat(Quat::from_rotation_y(std::f32::consts::PI)),
-        Facing::Left => Mat3::from_quat(Quat::from_rotation_y(-FRAC_PI_2)),
-        Facing::Right => Mat3::from_quat(Quat::from_rotation_y(FRAC_PI_2)),
-        Facing::Top => Mat3::from_quat(Quat::from_rotation_x(-FRAC_PI_2)),
-        Facing::Bottom => Mat3::from_quat(Quat::from_rotation_x(FRAC_PI_2)),
-    }
-}
-
-fn rotation_matrix(rotation: Rotation) -> Mat3 {
-    use std::f32::consts::{FRAC_PI_2, PI};
-    match rotation {
-        Rotation::NoRotation => Mat3::IDENTITY,
-        Rotation::RotateClockwise => Mat3::from_quat(Quat::from_rotation_z(-FRAC_PI_2)),
-        Rotation::RotateHalf => Mat3::from_quat(Quat::from_rotation_z(PI)),
-        Rotation::RotateCounter => Mat3::from_quat(Quat::from_rotation_z(FRAC_PI_2)),
-    }
+/// Convert orient ops + symmetry placement into a final Mat3.
+pub fn orient_placement_to_mat3(orient: &[SymOp], symmetry_placement: Placement) -> Mat3 {
+    let orient_p = compose_orient(orient);
+    let combined = compose_placements(symmetry_placement, orient_p);
+    placement_to_mat3(combined)
 }
 
 // =====================================================================
 // Cell-level queries
 // =====================================================================
 
-/// Is this cell fully inside the given oriented primitive? Used by the
-/// occupancy pass to determine which cells a subtract removes.
+/// Is this cell fully inside the given oriented primitive?
 pub fn is_cell_inside_primitive(
     shape: PrimitiveShape,
-    orient: &Orientation,
+    orient: &[SymOp],
     placement: Placement,
     prim_bounds: &Bounds,
     cell: (i32, i32, i32),
 ) -> bool {
     if shape == PrimitiveShape::Box {
-        return true; // all cells in a Box's bounds are inside
+        return true;
     }
-    let orient_mat = orientation_to_mat3(orient, placement);
+    let orient_mat = orient_placement_to_mat3(orient, placement);
     let mn = prim_bounds.min();
     let mx = prim_bounds.max();
     let prim_center = Vec3::new(
@@ -89,44 +95,7 @@ pub fn is_cell_inside_primitive(
         (mx.1 - mn.1) as f32,
         (mx.2 - mn.2) as f32,
     );
-    // Check all 64 sample points. If all are inside, the cell is fully
-    // covered. This is conservative — partially covered cells remain
-    // occupied, which is correct for collision detection (avoids
-    // false negatives).
     compute_signature_at_cell(shape, orient_mat, prim_center, prim_size, cell) == !0u64
-}
-
-pub fn orientation_to_mat3(orient: &Orientation, placement: Placement) -> Mat3 {
-    let base = base_orientation_matrix(orient);
-    apply_placement_to_mat3(placement, base)
-}
-
-fn apply_placement_to_mat3(placement: Placement, m: Mat3) -> Mat3 {
-    let apply_to_col = |col: Vec3| -> Vec3 {
-        Vec3::new(
-            signed_axis_project(placement.0, col),
-            signed_axis_project(placement.1, col),
-            signed_axis_project(placement.2, col),
-        )
-    };
-    Mat3::from_cols(
-        apply_to_col(m.x_axis),
-        apply_to_col(m.y_axis),
-        apply_to_col(m.z_axis),
-    )
-}
-
-fn signed_axis_project(sa: SignedAxis, v: Vec3) -> f32 {
-    let component = match sa {
-        SignedAxis::PosX | SignedAxis::NegX => v.x,
-        SignedAxis::PosY | SignedAxis::NegY => v.y,
-        SignedAxis::PosZ | SignedAxis::NegZ => v.z,
-    };
-    if matches!(sa, SignedAxis::PosX | SignedAxis::PosY | SignedAxis::PosZ) {
-        component
-    } else {
-        -component
-    }
 }
 
 const GRID_DIM: usize = 4;
@@ -175,6 +144,9 @@ fn point_in_identity_primitive(shape: PrimitiveShape, p: Vec3) -> bool {
         // Identity corner: tetrahedron at the (-x, -y, -z) vertex,
         // bounded by the plane x + y + z = -0.5.
         PrimitiveShape::Corner => p.x + p.y + p.z <= -0.5,
+        // Inverse corner: complement of Corner. Box with the (-x,-y,-z)
+        // vertex clipped off. Filled where x + y + z >= -0.5.
+        PrimitiveShape::InverseCorner => p.x + p.y + p.z >= -0.5,
     }
 }
 
@@ -251,8 +223,8 @@ fn primitive_table() -> &'static HashMap<u64, (PrimitiveShape, Mat3)> {
             PrimitiveShape::Wedge,
             PrimitiveShape::Corner,
         ] {
-            for orient in all_orientations() {
-                let mat = base_orientation_matrix(&orient);
+            for p in all_48_placements() {
+                let mat = placement_to_mat3(p);
                 let sig = compute_signature(shape, mat);
                 table.entry(sig).or_insert((shape, mat));
             }
@@ -261,21 +233,32 @@ fn primitive_table() -> &'static HashMap<u64, (PrimitiveShape, Mat3)> {
     })
 }
 
-fn all_orientations() -> impl Iterator<Item = Orientation> {
-    const FACINGS: [Facing; 6] = [
-        Facing::Front, Facing::Back, Facing::Left,
-        Facing::Right, Facing::Top, Facing::Bottom,
+/// Generate all 48 elements of the cube symmetry group (signed
+/// permutations of 3 axes = 24 rotations × 2 handedness).
+pub fn all_48_placements() -> Vec<Placement> {
+    use SignedAxis::*;
+    // Close under three generators: 90° around Y, 90° around X, mirror X.
+    let generators = [
+        Placement(NegZ, PosY, PosX),  // rot90 Y
+        Placement(PosX, NegZ, PosY),  // rot90 X
+        Placement(NegX, PosY, PosZ),  // mirror X
     ];
-    const MIRRORINGS: [Mirroring; 2] = [Mirroring::NoMirror, Mirroring::Mirror];
-    const ROTATIONS: [Rotation; 4] = [
-        Rotation::NoRotation, Rotation::RotateClockwise,
-        Rotation::RotateHalf, Rotation::RotateCounter,
-    ];
-    FACINGS.iter().flat_map(|&f| {
-        MIRRORINGS.iter().flat_map(move |&m| {
-            ROTATIONS.iter().map(move |&r| Orientation(f, m, r))
-        })
-    })
+    let mut set = vec![super::spec::identity_placement()];
+    for gen in generators {
+        loop {
+            let mut new_found = false;
+            let current = set.clone();
+            for existing in &current {
+                let new = compose_placements(gen, *existing);
+                if !set.contains(&new) {
+                    set.push(new);
+                    new_found = true;
+                }
+            }
+            if !new_found { break; }
+        }
+    }
+    set
 }
 
 /// Outcome of subtracting a set of primitives from one union primitive
@@ -348,7 +331,7 @@ mod tests {
     #[test]
     fn box_minus_identity_wedge_yields_a_wedge() {
         let minuend = (PrimitiveShape::Box, Mat3::IDENTITY);
-        let wedge_mat = base_orientation_matrix(&Orientation::default());
+        let wedge_mat = Mat3::IDENTITY;
         let result = cell_subtract(minuend, &[(PrimitiveShape::Wedge, wedge_mat)]);
         match result {
             CellResult::Keep { shape, .. } => {

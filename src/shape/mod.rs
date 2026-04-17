@@ -1,9 +1,9 @@
 mod animation;
-mod csg;
+pub mod csg;
 mod interpreter;
 mod meshes;
 mod render;
-mod spec;
+pub mod spec;
 
 use bevy::prelude::*;
 
@@ -11,13 +11,12 @@ pub use animation::ShapeAnimator;
 pub use interpreter::{
     despawn_shape, spawn_shape, spawn_shape_with_layers, ShapePart, ShapeRoot,
 };
-pub use render::{base_orientation_matrix, compile, production_stats, CompiledShape, FusedMesh};
+pub use render::{compile, production_stats, CompiledShape, FusedMesh};
 pub use meshes::RawMesh;
 #[allow(unused_imports)]
 pub use spec::{
     collect_occupancy, aabb_for_parts, identity_placement, Bounds,
-    Collision, Facing, Mirroring, Occupancy, Orientation, Placement, Rotation,
-    SpecNode, Symmetry,
+    Collision, Occupancy, Placement, SpecNode, SymOp,
 };
 
 /// Plugin placeholder for shape-system invariants. Currently empty

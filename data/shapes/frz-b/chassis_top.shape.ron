@@ -9,16 +9,16 @@
         shape: Wedge,
         bounds: (-4, 0, -2, -2, 1, 2),
         tags: ["red", "darken", "darken"],
-        orient: (Left, NoMirror, NoRotation),
-        symmetry: MirrorX_SpinY
+        orient: [Rotate90_XZ],
+        symmetry: [MirrorX, Rotate90_XZ]
     ),
     (
         name: "corners",
         shape: Corner,
         bounds: (-4, 0, 2, -2, 1, 4),
         tags: ["red", "darken", "darken"],
-        orient: (Left, NoMirror, NoRotation),
-        symmetry: MirrorXZ
+        orient: [Rotate90_XZ],
+        symmetry: [MirrorX, MirrorZ]
     ),
     (
         name: "center",

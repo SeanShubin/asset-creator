@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use crate::browser::{browser_ui, ActiveEditor};
 use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{
-    base_orientation_matrix, collect_occupancy, compile, despawn_shape,
-    production_stats, spawn_shape, CompiledShape, Facing, FusedMesh, Mirroring, Orientation,
-    RawMesh, Rotation, ShapeAnimator, ShapePart, ShapeRoot,
+    collect_occupancy, compile, despawn_shape,
+    production_stats, spawn_shape, CompiledShape, FusedMesh, Placement,
+    RawMesh, ShapeAnimator, ShapePart, ShapeRoot, SymOp,
 };
 use super::orbit_camera::{self, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
 
@@ -665,34 +665,19 @@ fn update_zoom_limits(limits: &mut ZoomLimits, fit_scale: f32) {
 
 // =====================================================================
 // Orientation grid preview — shows the selected part in every unique
-// (Facing × Mirroring × Rotation) combination, laid out in a grid.
+// orientation from the 48 cube symmetries, laid out in a grid.
 // =====================================================================
 
-const ALL_FACINGS: [Facing; 6] = [
-    Facing::Front, Facing::Back, Facing::Left, Facing::Right, Facing::Top, Facing::Bottom,
-];
-const ALL_MIRRORINGS: [Mirroring; 2] = [Mirroring::NoMirror, Mirroring::Mirror];
-const ALL_ROTATIONS: [Rotation; 4] = [
-    Rotation::NoRotation, Rotation::RotateClockwise, Rotation::RotateHalf, Rotation::RotateCounter,
-];
-
-fn facing_short(f: Facing) -> &'static str {
-    match f {
-        Facing::Front => "Fr", Facing::Back => "Bk",
-        Facing::Left => "Lf", Facing::Right => "Rt",
-        Facing::Top => "Tp", Facing::Bottom => "Bt",
-    }
-}
-fn mirroring_short(m: Mirroring) -> &'static str {
-    match m { Mirroring::NoMirror => "—", Mirroring::Mirror => "Mir" }
-}
-fn rotation_short(r: Rotation) -> &'static str {
-    match r {
-        Rotation::NoRotation => "0",
-        Rotation::RotateClockwise => "CW",
-        Rotation::RotateHalf => "180",
-        Rotation::RotateCounter => "CCW",
-    }
+fn placement_label(p: Placement) -> String {
+    let axis_str = |sa: crate::shape::spec::SignedAxis| -> &'static str {
+        use crate::shape::spec::SignedAxis;
+        match sa {
+            SignedAxis::PosX => "+X", SignedAxis::NegX => "-X",
+            SignedAxis::PosY => "+Y", SignedAxis::NegY => "-Y",
+            SignedAxis::PosZ => "+Z", SignedAxis::NegZ => "-Z",
+        }
+    };
+    format!("{} {} {}", axis_str(p.0), axis_str(p.1), axis_str(p.2))
 }
 
 // Each cell mesh + camera gets a unique RenderLayers bit so cameras
@@ -810,12 +795,7 @@ fn build_orientation_grid(
             layer.clone(),
         ));
 
-        let label = format!(
-            "{} / {} / {}",
-            facing_short(orient.facing()),
-            mirroring_short(orient.mirroring()),
-            rotation_short(orient.rotation()),
-        );
+        let label = placement_label(orient);
 
         // Cell camera: own viewport + own render layer. Its transform
         // and viewport are set each frame by `layout_orientation_cells`;
@@ -997,22 +977,17 @@ fn recenter_positions(mesh: &mut RawMesh, centroid: Vec3) {
 /// and keep only visually distinct results. Dedup key is a sorted,
 /// quantized vertex list (positions rounded to 1/1000 of a unit, plus
 /// per-vertex RGBA rounded to bytes) — exact for cell-aligned geometry.
-fn unique_orientations(flat: &RawMesh) -> Vec<(Orientation, RawMesh)> {
+fn unique_orientations(flat: &RawMesh) -> Vec<(Placement, RawMesh)> {
     use std::collections::HashSet;
     let mut seen: HashSet<Vec<[i32; 7]>> = HashSet::new();
-    let mut out: Vec<(Orientation, RawMesh)> = Vec::new();
+    let mut out: Vec<(Placement, RawMesh)> = Vec::new();
 
-    for &f in &ALL_FACINGS {
-        for &m in &ALL_MIRRORINGS {
-            for &r in &ALL_ROTATIONS {
-                let orient = Orientation(f, m, r);
-                let mat = base_orientation_matrix(&orient);
-                let rotated = transform_mesh(flat, mat);
-                let key = canonical_key(&rotated);
-                if seen.insert(key) {
-                    out.push((orient, rotated));
-                }
-            }
+    for p in crate::shape::csg::all_48_placements() {
+        let mat = crate::shape::csg::placement_to_mat3(p);
+        let rotated = transform_mesh(flat, mat);
+        let key = canonical_key(&rotated);
+        if seen.insert(key) {
+            out.push((p, rotated));
         }
     }
     out
