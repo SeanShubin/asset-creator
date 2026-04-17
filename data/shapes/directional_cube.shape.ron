@@ -1,7 +1,7 @@
 [
     (
         name: "base",
-        shape: Box,
+        ,
         bounds: (-5, -5, -5, 5, 5, 5),
     ),
     (

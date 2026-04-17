@@ -6,7 +6,7 @@
 [
     (
         name: "body",
-        shape: Box,
+        ,
         bounds: (-4, -1, -4, 4, 0, 4),
         tags: ["red", "darken", "darken"],
     ),
@@ -21,7 +21,7 @@
     ),
     (
         name: "weapons_bay",
-        shape: Box,
+        ,
         bounds: (-3, -1, -2, -2, 0, 4),
         tags: ["blue"],
         symmetry: [MirrorX],

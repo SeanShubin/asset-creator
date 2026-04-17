@@ -26,22 +26,23 @@ pub struct SpecNode {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub shape: Option<PrimitiveShape>,
-    #[serde(default)]
     pub bounds: Option<Bounds>,
-    /// Orientation: a sequence of operations composed left-to-right
-    /// into a single transform. Empty = identity.
+    /// Wedge: 2 faces adjacent to the filled half.
     #[serde(default)]
-    pub orient: Vec<SymOp>,
+    pub faces: Option<[Face; 2]>,
+    /// Corner: 3 faces meeting at the filled vertex.
+    #[serde(default)]
+    pub corner: Option<[Face; 3]>,
+    /// InverseCorner: 3 faces meeting at the clipped vertex.
+    #[serde(default)]
+    pub clip: Option<[Face; 3]>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub import: Option<String>,
     #[serde(default)]
     pub children: Vec<SpecNode>,
-    /// Symmetry: a set of generator operations. The system takes the
-    /// closure (all compositions) and deduplicates by (bounds, signature).
-    /// Empty = single copy.
+    /// Symmetry generators. The system takes the closure and deduplicates.
     #[serde(default)]
     pub symmetry: Vec<SymOp>,
     #[serde(default)]
@@ -51,6 +52,34 @@ pub struct SpecNode {
 }
 
 impl SpecNode {
+    /// Infer the primitive shape and orientation from corner/clip/fill.
+    /// Returns None for container nodes (no geometry) and Box nodes
+    /// (no corner/clip/fill specified but bounds present).
+    pub fn primitive(&self) -> Option<(PrimitiveShape, Placement)> {
+        self.bounds?;
+
+        if let Some(f) = self.corner {
+            return Some((PrimitiveShape::Corner, faces_to_placement(&f)));
+        }
+        if let Some(f) = self.clip {
+            return Some((PrimitiveShape::InverseCorner, faces_to_placement(&f)));
+        }
+        if let Some(f) = self.faces {
+            return Some((PrimitiveShape::Wedge, faces_to_placement(&f)));
+        }
+        Some((PrimitiveShape::Box, identity_placement()))
+    }
+
+    /// Convenience: the shape type, or None for containers.
+    pub fn shape(&self) -> Option<PrimitiveShape> {
+        self.primitive().map(|(s, _)| s)
+    }
+
+    /// Convenience: the orientation placement.
+    pub fn orient_placement(&self) -> Placement {
+        self.primitive().map(|(_, p)| p).unwrap_or(identity_placement())
+    }
+
     /// The effective name of this node. Import nodes that don't specify
     /// an explicit name use the last path segment of the import path
     /// (e.g. `"frz-b/chassis"` → `"chassis"`). Name and import are
@@ -74,7 +103,7 @@ impl SpecNode {
         found: &mut bool,
         registry: &AssetRegistry,
     ) {
-        for (local, _) in &placements(&self.symmetry, self.bounds, self.shape, &self.orient) {
+        for (local, _) in &placements_for(self) {
             let combined = compose_placements(inherited, *local);
             self.collect_bounds_single(combined, min, max, found, registry);
         }
@@ -170,6 +199,16 @@ pub enum PrimitiveShape {
     /// Box with one corner clipped — the complement of Corner.
     /// Fills where x + y + z >= -0.5 in identity orientation.
     InverseCorner,
+}
+
+/// A face of the bounding box, used to specify which sides of the
+/// cell are adjacent to filled geometry. Determines the primitive
+/// shape and orientation.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Face {
+    MinX, MaxX,
+    MinY, MaxY,
+    MinZ, MaxZ,
 }
 
 // =====================================================================
@@ -409,6 +448,100 @@ pub struct AnimState {
 }
 
 // =====================================================================
+// Shape inference from corner/clip/fill
+// =====================================================================
+
+/// Compute the placement from a list of faces. Each face specifies
+/// one axis direction. The identity primitives fill the Min side of
+/// each axis, so MinX/MinY/MinZ → identity. MaxX/MaxY/MaxZ → mirror.
+///
+/// For Wedge (2 faces): the identity fills y+z ≤ 0 (MinY, MinZ sides).
+/// The two faces determine which two axes are involved in the cut and
+/// which side is filled. The third axis (not mentioned) is the ridge.
+///
+/// For Corner/InverseCorner (3 faces): all three axes specified.
+fn faces_to_placement(faces: &[Face]) -> Placement {
+    use SignedAxis::*;
+
+    // Default: identity (MinX, MinY, MinZ).
+    let mut px = PosX;
+    let mut py = PosY;
+    let mut pz = PosZ;
+    // Track which axes are specified (for Wedge ridge detection).
+    let mut has_x = false;
+    let mut has_y = false;
+    let mut has_z = false;
+
+    for &f in faces {
+        match f {
+            Face::MinX => { px = PosX; has_x = true; }
+            Face::MaxX => { px = NegX; has_x = true; }
+            Face::MinY => { py = PosY; has_y = true; }
+            Face::MaxY => { py = NegY; has_y = true; }
+            Face::MinZ => { pz = PosZ; has_z = true; }
+            Face::MaxZ => { pz = NegZ; has_z = true; }
+        }
+    }
+
+    if faces.len() == 3 {
+        // Corner/InverseCorner: each face determines one axis mirror.
+        // Identity Corner fills (Min,Min,Min). MaxX → mirror X, etc.
+        Placement(px, py, pz)
+    } else if faces.len() == 2 {
+        // Wedge: identity fills y+z ≤ 0 (MinY + MinZ), ridge along X.
+        // The two faces specify which axes have the cut and which side
+        // is filled. The unspecified axis is the ridge.
+        //
+        // The placement maps: identity_X → world_ridge (unchanged),
+        // identity_Y → world_cut1, identity_Z → world_cut2.
+        // Min face → Pos (same as identity), Max face → Neg (mirrored).
+        let face_sign = |f: Face| -> SignedAxis {
+            match f {
+                Face::MinX => PosY, Face::MaxX => NegY,
+                Face::MinY => PosY, Face::MaxY => NegY,
+                Face::MinZ => PosZ, Face::MaxZ => NegZ,
+            }
+        };
+        let ridge_axis = |f: Face| -> SignedAxis {
+            match f {
+                Face::MinX | Face::MaxX => PosX,
+                Face::MinY | Face::MaxY => PosY,
+                Face::MinZ | Face::MaxZ => PosZ,
+            }
+        };
+        // Map identity Y → first specified face's axis with sign.
+        // Map identity Z → second specified face's axis with sign.
+        // Map identity X → the ridge axis.
+        if !has_x {
+            Placement(PosX, face_sign(faces[0]), face_sign(faces[1]))
+        } else if !has_y {
+            // Ridge = Y. Route identity_X→world_Y.
+            let s0 = face_sign(faces[0]);
+            let s1 = face_sign(faces[1]);
+            // Which face is X, which is Z?
+            let (sx, sz) = if matches!(faces[0], Face::MinX | Face::MaxX) {
+                (s0, s1)
+            } else {
+                (s1, s0)
+            };
+            Placement(sx, PosY, sz)
+        } else {
+            // Ridge = Z. Route identity_X→world_Z.
+            let s0 = face_sign(faces[0]);
+            let s1 = face_sign(faces[1]);
+            let (sx, sy) = if matches!(faces[0], Face::MinX | Face::MaxX) {
+                (s0, s1)
+            } else {
+                (s1, s0)
+            };
+            Placement(sx, sy, PosZ)
+        }
+    } else {
+        identity_placement()
+    }
+}
+
+// =====================================================================
 // Placements
 // =====================================================================
 
@@ -427,13 +560,19 @@ pub const fn identity_placement() -> Placement {
 /// Compute placements from symmetry generators. Takes the closure of
 /// the generator operations and deduplicates by (bounds, CSG signature).
 /// Works for any combination of operations — mirrors, rotations, or both.
+/// Compute placements from a SpecNode's symmetry generators.
+pub fn placements_for(spec: &SpecNode) -> Vec<(Placement, String)> {
+    let (shape, orient_p) = spec.primitive()
+        .unwrap_or((PrimitiveShape::Box, identity_placement()));
+    placements(&spec.symmetry, spec.bounds, Some(shape), orient_p)
+}
+
 pub fn placements(
     generators: &[SymOp],
     bounds: Option<Bounds>,
     shape: Option<PrimitiveShape>,
-    orient: &[SymOp],
+    orient_placement: Placement,
 ) -> Vec<(Placement, String)> {
-    // Compute the closure: all placements reachable by composing generators.
     let mut set = vec![identity_placement()];
     for op in generators {
         let gen = op.to_placement();
@@ -452,7 +591,6 @@ pub fn placements(
     }
 
     // Deduplicate by (canonicalized bounds, signature).
-    let orient_placement = compose_orient(orient);
     let shape = shape.unwrap_or(PrimitiveShape::Box);
     let bounds = bounds.unwrap_or(Bounds(0, 0, 0, 1, 1, 1));
 
@@ -553,7 +691,7 @@ pub struct Collision {
 /// union cells are claimed, cells fully inside a subtract are removed.
 struct SubtractVolume {
     shape: PrimitiveShape,
-    orient: Vec<SymOp>,
+    orient_placement: Placement,
     placement: Placement,
     bounds: Bounds,
 }
@@ -653,7 +791,7 @@ fn apply_subtracts(occ: &mut Occupancy) {
                 && cell.1 >= mn.1 && cell.1 < mx.1
                 && cell.2 >= mn.2 && cell.2 < mx.2
             {
-                if super::csg::is_cell_inside_primitive(sub.shape, &sub.orient, sub.placement, &sub.bounds, cell) {
+                if super::csg::is_cell_inside_primitive(sub.shape, sub.orient_placement, &sub.bounds, cell) {
                     return false; // cell is subtracted
                 }
             }
@@ -674,7 +812,7 @@ fn walk_for_occupancy(
 ) {
     let base_path = append_path(parent_path, node.effective_name());
 
-    for (local, suffix) in &placements(&node.symmetry, node.bounds, node.shape, &node.orient) {
+    for (local, suffix) in &placements_for(node) {
         let combined = compose_placements(inherited, *local);
         let path = if suffix.is_empty() {
             base_path.clone()
@@ -770,12 +908,12 @@ fn walk_single_for_occupancy(
     placement: Placement,
     registry: &AssetRegistry,
 ) {
-    if let (Some(shape), Some(bounds)) = (node.shape, node.bounds.as_ref()) {
+    if let (Some((shape, orient_p)), Some(bounds)) = (node.primitive(), node.bounds.as_ref()) {
         let transformed = apply_placement_to_bounds(placement, *bounds);
         if node.subtract {
             occ.subtracts.push(SubtractVolume {
                 shape,
-                orient: node.orient.clone(),
+                orient_placement: compose_placements(placement, orient_p),
                 placement,
                 bounds: transformed,
             });
@@ -820,9 +958,10 @@ mod tests {
     fn leaf_spec(bounds: Bounds, symmetry: Vec<SymOp>) -> SpecNode {
         SpecNode {
             name: Some("leaf".into()),
-            shape: Some(PrimitiveShape::Box),
             bounds: Some(bounds),
-            orient: vec![],
+            corner: None,
+            clip: None,
+            faces: None,
             tags: vec![],
             import: None,
             children: vec![],
@@ -877,17 +1016,16 @@ mod tests {
 
     #[test]
     fn symmetry_placements_correct_counts() {
-        let e: &[SymOp] = &[];
-        assert_eq!(placements(e, None, None, e).len(), 1);
-        assert_eq!(placements(&[SymOp::MirrorX], None, None, e).len(), 2);
-        assert_eq!(placements(&[SymOp::MirrorX, SymOp::MirrorY, SymOp::MirrorZ], None, None, e).len(), 8);
-        assert_eq!(placements(&[SymOp::MirrorX, SymOp::Rotate90_XZ], None, None, e).len(), 4);
-        assert_eq!(placements(&[SymOp::MirrorY, SymOp::Rotate90_XY], None, None, e).len(), 4);
-        assert_eq!(placements(&[SymOp::MirrorZ, SymOp::Rotate90_YZ], None, None, e).len(), 4);
-        // Rotational symmetry: count depends on bounds + shape.
+        let id = identity_placement();
+        assert_eq!(placements(&[], None, None, id).len(), 1);
+        assert_eq!(placements(&[SymOp::MirrorX], None, None, id).len(), 2);
+        assert_eq!(placements(&[SymOp::MirrorX, SymOp::MirrorY, SymOp::MirrorZ], None, None, id).len(), 8);
+        assert_eq!(placements(&[SymOp::MirrorX, SymOp::Rotate90_XZ], None, None, id).len(), 4);
+        assert_eq!(placements(&[SymOp::MirrorY, SymOp::Rotate90_XY], None, None, id).len(), 4);
+        assert_eq!(placements(&[SymOp::MirrorZ, SymOp::Rotate90_YZ], None, None, id).len(), 4);
         let rot = &[SymOp::Rotate90_XY, SymOp::Rotate90_XZ, SymOp::Rotate90_YZ];
-        assert_eq!(placements(rot, Some(Bounds(1, -1, -1, 3, 1, 1)), Some(PrimitiveShape::Box), e).len(), 6);
-        assert_eq!(placements(rot, Some(Bounds(-1, 1, 1, 1, 3, 3)), Some(PrimitiveShape::Wedge), e).len(), 12);
+        assert_eq!(placements(rot, Some(Bounds(1, -1, -1, 3, 1, 1)), Some(PrimitiveShape::Box), id).len(), 6);
+        assert_eq!(placements(rot, Some(Bounds(-1, 1, 1, 1, 3, 3)), Some(PrimitiveShape::Wedge), id).len(), 12);
     }
 
     #[test]
@@ -951,7 +1089,6 @@ mod tests {
             vec![],
         );
         shape_a_import.name = Some("a".into());
-        shape_a_import.shape = None;
         shape_a_import.import = Some("dummy_a".into());
 
         let mut shape_b_import = leaf_spec(
@@ -959,7 +1096,6 @@ mod tests {
             vec![],
         );
         shape_b_import.name = Some("b".into());
-        shape_b_import.shape = None;
         shape_b_import.import = Some("dummy_b".into());
 
         let parts = vec![shape_a_import, shape_b_import];
@@ -979,7 +1115,6 @@ mod tests {
     fn non_overlapping_imports_pass() {
         let mut import_a = leaf_spec(Bounds(0, 0, 0, 3, 3, 3), vec![]);
         import_a.name = Some("a".into());
-        import_a.shape = None;
         import_a.import = Some("dummy".into());
 
         let mut native = leaf_spec(Bounds(-5, 0, 0, -2, 3, 3), vec![]);

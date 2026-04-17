@@ -23,7 +23,7 @@ use super::meshes::{create_raw_mesh, RawMesh};
 use super::spec::{
     apply_placement_to_bounds, aabb_for_parts, compose_placements,
     identity_placement, placements, remap_bounds_for_parts,
-    Bounds, Placement, PrimitiveShape, SpecNode, SymOp, compose_orient,
+    Bounds, Placement, PrimitiveShape, SpecNode, SymOp, compose_orient, placements_for,
 };
 
 // =====================================================================
@@ -958,7 +958,7 @@ fn walk_into_group(
         return;
     }
 
-    for (local, _suffix) in &placements(&spec.symmetry, spec.bounds, spec.shape, &spec.orient) {
+    for (local, _suffix) in &placements_for(spec) {
         let combined = compose_placements(inherited_placement, *local);
         if let Some(ref import_name) = spec.import {
             walk_import(spec, import_name, combined, scale, group, ctx, &node_path);
@@ -979,12 +979,8 @@ fn walk_node_body(
     all_subtracts: &[SubtractPrimitive],
     node_path: &str,
 ) {
-    if let Some(shape) = spec.shape {
+    if let Some((shape, orient_p)) = spec.primitive() {
         let Some(bounds) = spec.bounds else {
-            warn!(
-                "Shape '{}' has no bounds — skipping geometry",
-                spec.effective_name().unwrap_or("unnamed")
-            );
             for child in &spec.children {
                 walk_into_group(child, placement, scale, group, false, ctx, all_subtracts, node_path);
             }
@@ -993,22 +989,15 @@ fn walk_node_body(
 
         let size = bounds.size();
         if size.0 == 0 || size.1 == 0 || size.2 == 0 {
-            error!(
-                "'{}' has zero-size bounds ({},{},{}) — skipping",
-                spec.effective_name().unwrap_or("unnamed"),
-                size.0,
-                size.1,
-                size.2
-            );
             return;
         }
 
         if spec.subtract {
             if ctx.is_direct {
-                add_primitive(shape, &bounds, placement, scale, &spec.orient, spec, &mut group.preview_primitives);
+                add_primitive(shape, &bounds, placement, scale, orient_p, spec, &mut group.preview_primitives);
             }
         } else {
-            add_primitive(shape, &bounds, placement, scale, &spec.orient, spec, &mut group.union_primitives);
+            add_primitive(shape, &bounds, placement, scale, orient_p, spec, &mut group.union_primitives);
         }
     }
 
@@ -1026,12 +1015,12 @@ fn add_primitive(
     bounds: &Bounds,
     placement: Placement,
     scale: (i32, i32, i32),
-    orient: &[SymOp],
+    orient_p: Placement,
     spec: &SpecNode,
     target: &mut Vec<UnionPrimitive>,
 ) {
     let world_bounds = apply_placement_to_bounds(placement, *bounds);
-    let orient_mat = orient_mat3(orient, placement);
+    let orient_mat = super::csg::placement_to_mat3(compose_placements(placement, orient_p));
     let is_mirrored = orient_mat.determinant() < 0.0;
     let color = resolve_tags_color(&spec.tags);
     let emissive = resolve_tags_emissive(&spec.tags);
@@ -1063,12 +1052,12 @@ fn collect_subtracts(
     if spec.effective_name().is_some_and(|n| hidden.iter().any(|h| h == n)) {
         return;
     }
-    for (local, _) in &placements(&spec.symmetry, spec.bounds, spec.shape, &spec.orient) {
+    for (local, _) in &placements_for(spec) {
         let combined = compose_placements(placement, *local);
         if spec.subtract {
-            if let (Some(shape), Some(bounds)) = (spec.shape, spec.bounds) {
+            if let (Some((shape, orient_p)), Some(bounds)) = (spec.primitive(), spec.bounds) {
                 let world_bounds = apply_placement_to_bounds(combined, bounds);
-                let orient_mat = orient_mat3(&spec.orient, combined);
+                let orient_mat = super::csg::placement_to_mat3(compose_placements(combined, orient_p));
                 out.push(SubtractPrimitive {
                     shape,
                     world_bounds,
@@ -1162,9 +1151,10 @@ mod tests {
     fn leaf_box(name: &str, bounds: Bounds) -> SpecNode {
         SpecNode {
             name: Some(name.to_string()),
-            shape: Some(PrimitiveShape::Box),
             bounds: Some(bounds),
-            orient: vec![],
+            corner: None,
+            clip: None,
+            faces: None,
             tags: vec![],
             import: None,
             children: vec![],
@@ -1238,7 +1228,6 @@ mod tests {
         // Shape B imports A at placement (-4, 0, -4, 4, 8, 4) — an
         // 8×8×8 cube. A's native 4×4×4 stretches by ×2 in each axis.
         let mut import_node = leaf_box("imported", Bounds(-4, 0, -4, 4, 8, 4));
-        import_node.shape = None;
         import_node.import = Some("shape_a".into());
         let shape_b_parts = vec![import_node];
 
@@ -1288,9 +1277,10 @@ mod tests {
                 for x in 0..2 {
                     parts.push(SpecNode {
                         name: Some(format!("b_{x}_{y}_{z}")),
-                        shape: Some(PrimitiveShape::Box),
                         bounds: Some(Bounds(x, y, z, x + 1, y + 1, z + 1)),
-                        orient: vec![],
+                        corner: None,
+                        clip: None,
+                        faces: None,
                         tags: vec!["red".into()],
                         import: None,
                         children: vec![],

@@ -74,15 +74,14 @@ pub fn orient_placement_to_mat3(orient: &[SymOp], symmetry_placement: Placement)
 /// Is this cell fully inside the given oriented primitive?
 pub fn is_cell_inside_primitive(
     shape: PrimitiveShape,
-    orient: &[SymOp],
-    placement: Placement,
+    orient_placement: Placement,
     prim_bounds: &Bounds,
     cell: (i32, i32, i32),
 ) -> bool {
     if shape == PrimitiveShape::Box {
         return true;
     }
-    let orient_mat = orient_placement_to_mat3(orient, placement);
+    let orient_mat = placement_to_mat3(orient_placement);
     let mn = prim_bounds.min();
     let mx = prim_bounds.max();
     let prim_center = Vec3::new(

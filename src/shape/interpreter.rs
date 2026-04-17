@@ -96,7 +96,7 @@ fn validate_parts(parts: &[SpecNode]) {
             if !seen.insert(name.to_string()) {
                 error!("Duplicate part name '{}'", name);
             }
-        } else if part.shape.is_some() {
+        } else if part.shape().is_some() {
             warn!("Unnamed shape part — every shape should have a name");
         }
     }

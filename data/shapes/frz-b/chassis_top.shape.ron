@@ -22,13 +22,13 @@
     ),
     (
         name: "center",
-        shape: Box,
+        ,
         bounds: (-2, 0, -2, 2, 1, 2),
         tags: ["red", "darken", "darken"],
     ),
     (
         name: "hole",
-        shape: Box,
+        ,
         bounds: (-1, 0, -1, 1, 1, 1),
         tags: ["blue"],
         subtract: true

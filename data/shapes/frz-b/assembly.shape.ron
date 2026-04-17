@@ -10,14 +10,14 @@
     ),
     (
         name: "hover",
-        shape: Box,
+        ,
         bounds: (2, -3, 2, 6, -2, 6),
         tags: ["green", "darken", "darken"],
         symmetry: [MirrorX, MirrorZ],
     ),
     (
         name: "sensor",
-        shape: Box,
+        ,
         bounds: (-2, 1, -2, 2, 3, 2),
         tags: ["blue", "darken"]
     ),
