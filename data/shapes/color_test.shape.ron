@@ -1,47 +1,46 @@
 // Color test: 6 chromatic bases × 5 non-gray levels each = 30 boxes.
-// Layout: each base color is a column along X (spaced by 3).
-// Within each column, the 5 levels are stacked along Y (bottom=darkest).
-// Order bottom to top: darken×2, darken×1, base, lighten×1, lighten×2.
+// Layout: primaries (red, green, blue) at z=-2, secondaries at z=+1.
+// Columns along X spaced by 3. Levels stacked along Y (bottom=darkest).
 [
-    // === Red (x=0) ===
-    (name: "red_dd",  shape: Box, bounds: (0, 0, 0, 1, 1, 1), tags: ["red", "darken", "darken"]),
-    (name: "red_d",   shape: Box, bounds: (0, 2, 0, 1, 3, 1), tags: ["red", "darken"]),
-    (name: "red",     shape: Box, bounds: (0, 4, 0, 1, 5, 1), tags: ["red"]),
-    (name: "red_l",   shape: Box, bounds: (0, 6, 0, 1, 7, 1), tags: ["red", "lighten"]),
-    (name: "red_ll",  shape: Box, bounds: (0, 8, 0, 1, 9, 1), tags: ["red", "lighten", "lighten"]),
+    // === Red (x=-3) ===
+    (name: "red_dd",  shape: Box, bounds: (-3, -4, -2, -2, -3, -1), tags: ["red", "darken", "darken"]),
+    (name: "red_d",   shape: Box, bounds: (-3, -2, -2, -2, -1, -1), tags: ["red", "darken"]),
+    (name: "red",     shape: Box, bounds: (-3,  0, -2, -2,  1, -1), tags: ["red"]),
+    (name: "red_l",   shape: Box, bounds: (-3,  2, -2, -2,  3, -1), tags: ["red", "lighten"]),
+    (name: "red_ll",  shape: Box, bounds: (-3,  4, -2, -2,  5, -1), tags: ["red", "lighten", "lighten"]),
 
-    // === Green (x=3) ===
-    (name: "green_dd",  shape: Box, bounds: (3, 0, 0, 4, 1, 1), tags: ["green", "darken", "darken"]),
-    (name: "green_d",   shape: Box, bounds: (3, 2, 0, 4, 3, 1), tags: ["green", "darken"]),
-    (name: "green",     shape: Box, bounds: (3, 4, 0, 4, 5, 1), tags: ["green"]),
-    (name: "green_l",   shape: Box, bounds: (3, 6, 0, 4, 7, 1), tags: ["green", "lighten"]),
-    (name: "green_ll",  shape: Box, bounds: (3, 8, 0, 4, 9, 1), tags: ["green", "lighten", "lighten"]),
+    // === Green (x=0) ===
+    (name: "green_dd",  shape: Box, bounds: (0, -4, -2, 1, -3, -1), tags: ["green", "darken", "darken"]),
+    (name: "green_d",   shape: Box, bounds: (0, -2, -2, 1, -1, -1), tags: ["green", "darken"]),
+    (name: "green",     shape: Box, bounds: (0,  0, -2, 1,  1, -1), tags: ["green"]),
+    (name: "green_l",   shape: Box, bounds: (0,  2, -2, 1,  3, -1), tags: ["green", "lighten"]),
+    (name: "green_ll",  shape: Box, bounds: (0,  4, -2, 1,  5, -1), tags: ["green", "lighten", "lighten"]),
 
-    // === Blue (x=6) ===
-    (name: "blue_dd",  shape: Box, bounds: (6, 0, 0, 7, 1, 1), tags: ["blue", "darken", "darken"]),
-    (name: "blue_d",   shape: Box, bounds: (6, 2, 0, 7, 3, 1), tags: ["blue", "darken"]),
-    (name: "blue",     shape: Box, bounds: (6, 4, 0, 7, 5, 1), tags: ["blue"]),
-    (name: "blue_l",   shape: Box, bounds: (6, 6, 0, 7, 7, 1), tags: ["blue", "lighten"]),
-    (name: "blue_ll",  shape: Box, bounds: (6, 8, 0, 7, 9, 1), tags: ["blue", "lighten", "lighten"]),
+    // === Blue (x=3) ===
+    (name: "blue_dd",  shape: Box, bounds: (3, -4, -2, 4, -3, -1), tags: ["blue", "darken", "darken"]),
+    (name: "blue_d",   shape: Box, bounds: (3, -2, -2, 4, -1, -1), tags: ["blue", "darken"]),
+    (name: "blue",     shape: Box, bounds: (3,  0, -2, 4,  1, -1), tags: ["blue"]),
+    (name: "blue_l",   shape: Box, bounds: (3,  2, -2, 4,  3, -1), tags: ["blue", "lighten"]),
+    (name: "blue_ll",  shape: Box, bounds: (3,  4, -2, 4,  5, -1), tags: ["blue", "lighten", "lighten"]),
 
-    // === Yellow (x=0, z=3) ===
-    (name: "yellow_dd",  shape: Box, bounds: (0, 0, 3, 1, 1, 4), tags: ["yellow", "darken", "darken"]),
-    (name: "yellow_d",   shape: Box, bounds: (0, 2, 3, 1, 3, 4), tags: ["yellow", "darken"]),
-    (name: "yellow",     shape: Box, bounds: (0, 4, 3, 1, 5, 4), tags: ["yellow"]),
-    (name: "yellow_l",   shape: Box, bounds: (0, 6, 3, 1, 7, 4), tags: ["yellow", "lighten"]),
-    (name: "yellow_ll",  shape: Box, bounds: (0, 8, 3, 1, 9, 4), tags: ["yellow", "lighten", "lighten"]),
+    // === Yellow (x=-3, z=1) ===
+    (name: "yellow_dd",  shape: Box, bounds: (-3, -4, 1, -2, -3, 2), tags: ["yellow", "darken", "darken"]),
+    (name: "yellow_d",   shape: Box, bounds: (-3, -2, 1, -2, -1, 2), tags: ["yellow", "darken"]),
+    (name: "yellow",     shape: Box, bounds: (-3,  0, 1, -2,  1, 2), tags: ["yellow"]),
+    (name: "yellow_l",   shape: Box, bounds: (-3,  2, 1, -2,  3, 2), tags: ["yellow", "lighten"]),
+    (name: "yellow_ll",  shape: Box, bounds: (-3,  4, 1, -2,  5, 2), tags: ["yellow", "lighten", "lighten"]),
 
-    // === Cyan (x=3, z=3) ===
-    (name: "cyan_dd",  shape: Box, bounds: (3, 0, 3, 4, 1, 4), tags: ["cyan", "darken", "darken"]),
-    (name: "cyan_d",   shape: Box, bounds: (3, 2, 3, 4, 3, 4), tags: ["cyan", "darken"]),
-    (name: "cyan",     shape: Box, bounds: (3, 4, 3, 4, 5, 4), tags: ["cyan"]),
-    (name: "cyan_l",   shape: Box, bounds: (3, 6, 3, 4, 7, 4), tags: ["cyan", "lighten"]),
-    (name: "cyan_ll",  shape: Box, bounds: (3, 8, 3, 4, 9, 4), tags: ["cyan", "lighten", "lighten"]),
+    // === Cyan (x=0, z=1) ===
+    (name: "cyan_dd",  shape: Box, bounds: (0, -4, 1, 1, -3, 2), tags: ["cyan", "darken", "darken"]),
+    (name: "cyan_d",   shape: Box, bounds: (0, -2, 1, 1, -1, 2), tags: ["cyan", "darken"]),
+    (name: "cyan",     shape: Box, bounds: (0,  0, 1, 1,  1, 2), tags: ["cyan"]),
+    (name: "cyan_l",   shape: Box, bounds: (0,  2, 1, 1,  3, 2), tags: ["cyan", "lighten"]),
+    (name: "cyan_ll",  shape: Box, bounds: (0,  4, 1, 1,  5, 2), tags: ["cyan", "lighten", "lighten"]),
 
-    // === Magenta (x=6, z=3) ===
-    (name: "magenta_dd",  shape: Box, bounds: (6, 0, 3, 7, 1, 4), tags: ["magenta", "darken", "darken"]),
-    (name: "magenta_d",   shape: Box, bounds: (6, 2, 3, 7, 3, 4), tags: ["magenta", "darken"]),
-    (name: "magenta",     shape: Box, bounds: (6, 4, 3, 7, 5, 4), tags: ["magenta"]),
-    (name: "magenta_l",   shape: Box, bounds: (6, 6, 3, 7, 7, 4), tags: ["magenta", "lighten"]),
-    (name: "magenta_ll",  shape: Box, bounds: (6, 8, 3, 7, 9, 4), tags: ["magenta", "lighten", "lighten"]),
+    // === Magenta (x=3, z=1) ===
+    (name: "magenta_dd",  shape: Box, bounds: (3, -4, 1, 4, -3, 2), tags: ["magenta", "darken", "darken"]),
+    (name: "magenta_d",   shape: Box, bounds: (3, -2, 1, 4, -1, 2), tags: ["magenta", "darken"]),
+    (name: "magenta",     shape: Box, bounds: (3,  0, 1, 4,  1, 2), tags: ["magenta"]),
+    (name: "magenta_l",   shape: Box, bounds: (3,  2, 1, 4,  3, 2), tags: ["magenta", "lighten"]),
+    (name: "magenta_ll",  shape: Box, bounds: (3,  4, 1, 4,  5, 2), tags: ["magenta", "lighten", "lighten"]),
 ]

@@ -1,0 +1,27 @@
+[
+    (
+        name:"core",
+        shape:Box,
+        bounds:(-1, -1, -1, 1, 1, 1)
+    ),
+    (
+        name:"face",
+        shape:Box,
+        bounds: (-5, -1, -1, -4, 1, 1),
+        symmetry: Faces
+    ),
+    (
+        name:"edge",
+        shape:Wedge,
+        bounds: (-5, 1, -1, -1, 5, 1),
+        orient: (Left, NoMirror, NoRotation),
+        symmetry: Edges
+    ),
+    (
+        name:"corner",
+        shape:Corner,
+        bounds: (-5, 1, 1, -1, 5, 5),
+        orient: (Left, NoMirror, NoRotation),
+        symmetry: MirrorXYZ
+    )
+]

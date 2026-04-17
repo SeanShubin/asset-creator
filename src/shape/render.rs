@@ -212,6 +212,7 @@ pub fn compile(
             false,
             &ctx,
             &all_subtracts,
+            "",
         );
     }
     group.finish(None, false, ctx.templates)
@@ -254,6 +255,7 @@ pub fn production_stats(
             false,
             &ctx,
             &all_subtracts,
+            "",
         );
     }
     let resolved = fuse_boxes(group.resolve(None));
@@ -888,19 +890,24 @@ fn compile_group(
     scale: (i32, i32, i32),
     ctx: &CompileCtx<'_>,
     all_subtracts: &[SubtractPrimitive],
+    parent_path: &str,
 ) -> CompiledShape {
     let mut group = GroupAccumulator::new();
     group.subtract_primitives.extend_from_slice(all_subtracts);
-    walk_into_group(spec, inherited_placement, scale, &mut group, true, ctx, all_subtracts);
+    walk_into_group(spec, inherited_placement, scale, &mut group, true, ctx, all_subtracts, parent_path);
     group.finish(spec.effective_name().map(str::to_string), spec.subtract, ctx.templates)
 }
 
-fn is_hidden(spec: &SpecNode, ctx: &CompileCtx<'_>) -> bool {
+fn build_path(parent_path: &str, spec: &SpecNode) -> String {
     if let Some(name) = spec.effective_name() {
-        ctx.hidden.iter().any(|h| h == name)
+        if parent_path.is_empty() { name.to_string() } else { format!("{parent_path}/{name}") }
     } else {
-        false
+        parent_path.to_string()
     }
+}
+
+fn is_hidden(path: &str, ctx: &CompileCtx<'_>) -> bool {
+    !path.is_empty() && ctx.hidden.iter().any(|h| h == path)
 }
 
 fn walk_into_group(
@@ -911,37 +918,38 @@ fn walk_into_group(
     is_group_root: bool,
     ctx: &CompileCtx<'_>,
     all_subtracts: &[SubtractPrimitive],
+    parent_path: &str,
 ) {
+    let node_path = build_path(parent_path, spec);
+
     // Named non-root nodes create child groups (unless flattening).
     if !ctx.flatten && !is_group_root && spec.effective_name().is_some() {
-        let child = compile_group(spec, inherited_placement, scale, ctx, all_subtracts);
+        let child = compile_group(spec, inherited_placement, scale, ctx, all_subtracts, parent_path);
         group.children.push(child);
         return;
     }
 
     // Hidden nodes skip their own geometry and CSG but still walk
     // children so they appear in the parts tree.
-    if is_hidden(spec, ctx) {
+    if is_hidden(&node_path, ctx) {
         if ctx.flatten { return; }
         if let Some(ref import_name) = spec.import {
-            walk_import(spec, import_name, inherited_placement, scale, group, ctx);
+            walk_import(spec, import_name, inherited_placement, scale, group, ctx, &node_path);
         } else {
             for child in &spec.children {
-                walk_into_group(child, inherited_placement, scale, group, false, ctx, all_subtracts);
+                walk_into_group(child, inherited_placement, scale, group, false, ctx, all_subtracts, &node_path);
             }
         }
         return;
     }
 
-    // Symmetry and import compose: expand symmetry placements, then
-    // process the import (or body) for each placement.
     let sym = spec.symmetry;
-    for (local, _suffix) in placements(sym) {
+    for (local, _suffix) in &placements(sym, spec.bounds) {
         let combined = compose_placements(inherited_placement, *local);
         if let Some(ref import_name) = spec.import {
-            walk_import(spec, import_name, combined, scale, group, ctx);
+            walk_import(spec, import_name, combined, scale, group, ctx, &node_path);
         } else {
-            walk_node_body(spec, combined, scale, group, ctx, all_subtracts);
+            walk_node_body(spec, combined, scale, group, ctx, all_subtracts, &node_path);
         }
     }
 }
@@ -955,6 +963,7 @@ fn walk_node_body(
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
     all_subtracts: &[SubtractPrimitive],
+    node_path: &str,
 ) {
     if let Some(shape) = spec.shape {
         let Some(bounds) = spec.bounds else {
@@ -963,7 +972,7 @@ fn walk_node_body(
                 spec.effective_name().unwrap_or("unnamed")
             );
             for child in &spec.children {
-                walk_into_group(child, placement, scale, group, false, ctx, all_subtracts);
+                walk_into_group(child, placement, scale, group, false, ctx, all_subtracts, node_path);
             }
             return;
         };
@@ -990,7 +999,7 @@ fn walk_node_body(
     }
 
     for child in &spec.children {
-        walk_into_group(child, placement, scale, group, false, ctx, all_subtracts);
+        walk_into_group(child, placement, scale, group, false, ctx, all_subtracts, node_path);
     }
 }
 
@@ -1041,7 +1050,7 @@ fn collect_subtracts(
         return;
     }
     let sym = spec.symmetry;
-    for (local, _) in placements(sym) {
+    for (local, _) in &placements(sym, spec.bounds) {
         let combined = compose_placements(placement, *local);
         if spec.subtract {
             if let (Some(shape), Some(bounds)) = (spec.shape, spec.bounds) {
@@ -1069,6 +1078,7 @@ fn walk_import(
     parent_scale: (i32, i32, i32),
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
+    parent_path: &str,
 ) {
     let imported = match ctx.registry.get_shape(import_name) {
         Some(parts) => parts.to_vec(),
@@ -1122,6 +1132,7 @@ fn walk_import(
             false,
             &import_ctx,
             &import_subtracts,
+            parent_path,
         );
     }
 }

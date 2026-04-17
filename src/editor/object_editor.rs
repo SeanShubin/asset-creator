@@ -194,11 +194,12 @@ struct SelectedPart {
     name_path: Vec<String>,
 }
 
-/// Names of parts the user has hidden in the parts tree. Passed to
-/// `compile` so hidden parts produce no geometry or CSG effects.
+/// Paths of parts the user has hidden in the parts tree. Paths are
+/// slash-separated (e.g. "chassis_top/hole"). Passed to `compile`
+/// so hidden parts produce no geometry or CSG effects.
 #[derive(Resource, Default)]
 struct HiddenParts {
-    names: Vec<String>,
+    paths: Vec<String>,
 }
 
 /// Names of parts involved in cell collisions. Populated during
@@ -255,14 +256,14 @@ fn handle_activation(
         despawn_all(&mut commands, &existing_editor, &existing_shapes);
         activation.spawned = false;
         activation.current_path = None;
-        hidden.names.clear();
+        hidden.paths.clear();
     }
 
     // Switching between shapes — despawn old shape, keep scene
     if was_object && is_object {
         let roots: Vec<Entity> = existing_shapes.iter().collect();
         despawn_shape(&mut commands, &roots);
-        hidden.names.clear();
+        hidden.paths.clear();
     }
 
     // Spawn scene if entering object editor for the first time
@@ -425,7 +426,7 @@ fn reload_shape(
     }
 
     let name = shape_name_from_path(path);
-    spawn_shape(&mut commands, &mut meshes, &mut materials, &name, shape_file, &registry, &hidden.names);
+    spawn_shape(&mut commands, &mut meshes, &mut materials, &name, shape_file, &registry, &hidden.paths);
     stats.needs_update = true;
 }
 
@@ -1281,7 +1282,7 @@ fn part_tree_ui(
     colliding: Res<CollidingParts>,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else { return };
-    let mut toggles: Vec<(Entity, Visibility)> = Vec::new();
+    let mut toggles: Vec<(String, Visibility)> = Vec::new();
     let mut new_selection: Option<(Entity, Vec<String>)> = None;
 
     egui::SidePanel::left("part_tree").min_width(200.0).show(ctx, |ui| {
@@ -1309,21 +1310,18 @@ fn part_tree_ui(
     }
 
     if !toggles.is_empty() {
-        let snapshot = hidden.names.clone();
-        for &(entity, ref vis) in &toggles {
-            if let Ok((part, _, _)) = parts.get(entity) {
-                if let Some(ref name) = part.name {
-                    if *vis == Visibility::Hidden {
-                        if !hidden.names.contains(name) {
-                            hidden.names.push(name.clone());
-                        }
-                    } else {
-                        hidden.names.retain(|n| n != name);
-                    }
+        let snapshot = hidden.paths.clone();
+        for (path, vis) in &toggles {
+            if path.is_empty() { continue; }
+            if *vis == Visibility::Hidden {
+                if !hidden.paths.contains(path) {
+                    hidden.paths.push(path.clone());
                 }
+            } else {
+                hidden.paths.retain(|p| p != path);
             }
         }
-        if hidden.names != snapshot {
+        if hidden.paths != snapshot {
             reload.needs_reload = true;
         }
     }
@@ -1471,7 +1469,7 @@ fn draw_tree_node(
     ui: &mut egui::Ui,
     entity: Entity,
     parts: &Query<(&ShapePart, Option<&Children>, &Visibility)>,
-    toggles: &mut Vec<(Entity, Visibility)>,
+    toggles: &mut Vec<(String, Visibility)>,
     new_selection: &mut Option<(Entity, Vec<String>)>,
     selected_entity: Option<Entity>,
     depth: usize,
@@ -1480,6 +1478,15 @@ fn draw_tree_node(
     colliding: &CollidingParts,
 ) {
     let Ok((part, children, _vis)) = parts.get(entity) else { return };
+
+    // Build the full path for this node.
+    let node_path = if depth == 0 {
+        String::new()
+    } else if let Some(name) = &part.name {
+        if name_path.is_empty() { name.clone() } else { format!("{}/{name}", name_path.join("/")) }
+    } else {
+        name_path.join("/")
+    };
 
     let state = compute_tri_state(entity, parts);
     let label = part.name.as_deref().unwrap_or("(unnamed)");
@@ -1494,7 +1501,7 @@ fn draw_tree_node(
     // Color: blue for subtractive, red for colliding, default otherwise.
     let label_color = if part.subtract {
         Some(egui::Color32::from_rgb(100, 140, 255))
-    } else if part.name.as_ref().is_some_and(|n| colliding.names.iter().any(|c| c == n)) {
+    } else if colliding.names.iter().any(|c| c == &node_path) {
         Some(egui::Color32::from_rgb(255, 80, 80))
     } else {
         None
@@ -1510,10 +1517,10 @@ fn draw_tree_node(
                 TriState::Hidden => Visibility::Inherited,
                 _ => Visibility::Hidden,
             };
-            let mut subtree = Vec::new();
-            collect_subtree(entity, parts, &mut subtree);
-            for e in subtree {
-                toggles.push((e, new_vis));
+            let mut subtree_paths = Vec::new();
+            collect_subtree_paths(entity, parts, &node_path, &mut subtree_paths);
+            for path in subtree_paths {
+                toggles.push((path, new_vis));
             }
         }
         let label_widget = if let Some(color) = label_color {
@@ -1592,16 +1599,28 @@ fn compute_tri_state(
     else { TriState::Mixed }
 }
 
-fn collect_subtree(
+/// Collect paths for an entity and all its descendants. `node_path`
+/// is the already-built path for this entity (not rebuilt from name).
+fn collect_subtree_paths(
     entity: Entity,
     parts: &Query<(&ShapePart, Option<&Children>, &Visibility)>,
-    out: &mut Vec<Entity>,
+    node_path: &str,
+    out: &mut Vec<String>,
 ) {
-    if parts.get(entity).is_err() { return; }
-    out.push(entity);
-    if let Ok((_, Some(children), _)) = parts.get(entity) {
+    let Ok((_, children, _)) = parts.get(entity) else { return };
+    if !node_path.is_empty() {
+        out.push(node_path.to_string());
+    }
+    if let Some(children) = children {
         for &child in children.iter() {
-            collect_subtree(child, parts, out);
+            if let Ok((child_part, _, _)) = parts.get(child) {
+                let child_path = if let Some(ref name) = child_part.name {
+                    if node_path.is_empty() { name.clone() } else { format!("{node_path}/{name}") }
+                } else {
+                    node_path.to_string()
+                };
+                collect_subtree_paths(child, parts, &child_path, out);
+            }
         }
     }
 }

@@ -76,6 +76,7 @@ pub fn spawn_shape_with_layers(
         &render_layers,
         /* is_root */ true,
         hidden,
+        "",
     );
 
     root
@@ -154,12 +155,19 @@ fn attach_compiled(
     render_layers: &Option<RenderLayers>,
     is_root: bool,
     hidden: &[String],
+    parent_path: &str,
 ) {
+    let node_path = if let Some(ref name) = compiled.name {
+        if parent_path.is_empty() { name.clone() } else { format!("{parent_path}/{name}") }
+    } else {
+        parent_path.to_string()
+    };
+
     let entity = if is_root {
         parent
     } else {
-        let is_hidden = compiled.name.as_ref()
-            .is_some_and(|n| hidden.iter().any(|h| h == n));
+        let is_hidden = !node_path.is_empty()
+            && hidden.iter().any(|h| h == &node_path);
         let vis = if is_hidden { Visibility::Hidden } else { Visibility::Visible };
         let part_entity = commands
             .spawn((
@@ -186,8 +194,9 @@ fn attach_compiled(
             entity,
             child,
             render_layers,
-            /* is_root */ false,
+            false,
             hidden,
+            &node_path,
         );
     }
 }

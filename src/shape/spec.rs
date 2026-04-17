@@ -74,7 +74,7 @@ impl SpecNode {
         found: &mut bool,
         registry: &AssetRegistry,
     ) {
-        for (local, _) in placements(self.symmetry) {
+        for (local, _) in &placements(self.symmetry, self.bounds) {
             let combined = compose_placements(inherited, *local);
             self.collect_bounds_single(combined, min, max, found, registry);
         }
@@ -456,13 +456,21 @@ pub const fn identity_placement() -> Placement {
     Placement(SignedAxis::PosX, SignedAxis::PosY, SignedAxis::PosZ)
 }
 
-/// Return the hand-curated list of `(placement, name_suffix)` pairs for
-/// a given symmetry. Each placement produces one rendered copy. The
-/// suffix is appended to the node's name to distinguish copies in the
-/// entity tree for animation-channel lookup.
-pub fn placements(symmetry: Symmetry) -> &'static [(Placement, &'static str)] {
+/// Return the list of `(placement, name_suffix)` pairs for a given
+/// symmetry. For Faces and Edges, all 24 cube rotations are generated
+/// and deduplicated by the resulting bounds — making them axis-order-
+/// independent. `bounds` is required for Faces/Edges deduplication.
+pub fn placements(symmetry: Symmetry, bounds: Option<Bounds>) -> Vec<(Placement, String)> {
     use SignedAxis::*;
     match symmetry {
+        Symmetry::Faces | Symmetry::Edges => {
+            return rotational_placements(bounds.expect(
+                "Faces/Edges symmetry requires bounds for deduplication"
+            ));
+        }
+        _ => {}
+    }
+    let static_placements: &[(Placement, &str)] = match symmetry {
         Symmetry::Single => &[(Placement(PosX, PosY, PosZ), "")],
         Symmetry::MirrorX => &[
             (Placement(PosX, PosY, PosZ), ""),
@@ -528,49 +536,66 @@ pub fn placements(symmetry: Symmetry) -> &'static [(Placement, &'static str)] {
             (Placement(PosX, NegZ, PosY), "_sx"),
             (Placement(PosX, PosZ, PosY), "_mz_sx"),
         ],
-        Symmetry::Faces => &[
-            // Six face cells. Designed for a source box sitting on the
-            // +X face of a symmetric cube: y-range and z-range of the
-            // source are symmetric around origin. To move the +X face
-            // to the ∓Y or ∓Z face, the source's offset (nonsymmetric)
-            // X axis is routed to the target's offset slot with the
-            // correct sign; the other two slots are filled by the
-            // source's symmetric axes.
-            (Placement(PosX, PosY, PosZ), "_px"),
-            (Placement(NegX, PosY, PosZ), "_nx"),
-            (Placement(PosY, PosX, PosZ), "_py"),
-            (Placement(PosY, NegX, PosZ), "_ny"),
-            (Placement(PosY, PosZ, PosX), "_pz"),
-            (Placement(PosY, PosZ, NegX), "_nz"),
-        ],
-        Symmetry::Edges => &[
-            // Twelve edge cells. Designed for a source wedge running
-            // parallel to the source's X axis, with its outer corner
-            // in the +Y+Z quadrant. Source's X range is symmetric
-            // (the edge's long axis); source's Y and Z are offset.
-            //
-            // For X-parallel edges, negate source Y/Z to walk the 4
-            // (±Y, ±Z) positions. For Y-parallel, route source X (the
-            // symmetric axis) to the world Y slot and fill the other
-            // two slots with source Y/Z. For Z-parallel, likewise.
-            //
-            // 4 X-parallel edges:
-            (Placement(PosX, PosY, PosZ), "_x_py_pz"),
-            (Placement(PosX, NegY, PosZ), "_x_ny_pz"),
-            (Placement(PosX, PosY, NegZ), "_x_py_nz"),
-            (Placement(PosX, NegY, NegZ), "_x_ny_nz"),
-            // 4 Y-parallel edges (source x → world y; source y/z → world x/z):
-            (Placement(PosY, PosX, PosZ), "_y_px_pz"),
-            (Placement(NegY, PosX, PosZ), "_y_nx_pz"),
-            (Placement(PosY, PosX, NegZ), "_y_px_nz"),
-            (Placement(NegY, PosX, NegZ), "_y_nx_nz"),
-            // 4 Z-parallel edges (source x → world z; source y/z → world x/y):
-            (Placement(PosY, PosZ, PosX), "_z_px_py"),
-            (Placement(NegY, PosZ, PosX), "_z_nx_py"),
-            (Placement(PosY, NegZ, PosX), "_z_px_ny"),
-            (Placement(NegY, NegZ, PosX), "_z_nx_ny"),
-        ],
+        Symmetry::Faces | Symmetry::Edges => unreachable!(),
+    };
+    static_placements.iter()
+        .map(|&(p, s)| (p, s.to_string()))
+        .collect()
+}
+
+/// Generate all 24 cube rotations as placements.
+fn cube_rotations() -> Vec<Placement> {
+    use SignedAxis::*;
+    // Generators: 90° rotations around Y and X.
+    // Closure under these two produces all 24 proper rotations.
+    let rot90_y = Placement(NegZ, PosY, PosX); // X→-Z, Y→Y, Z→X
+    let rot90_x = Placement(PosX, PosZ, NegY); // X→X, Y→Z, Z→-Y
+
+    let mut set = vec![identity_placement()];
+    for gen in [rot90_y, rot90_x] {
+        loop {
+            let mut new_found = false;
+            let current = set.clone();
+            for existing in &current {
+                let new = compose_placements(gen, *existing);
+                if !set.contains(&new) {
+                    set.push(new);
+                    new_found = true;
+                }
+            }
+            if !new_found { break; }
+        }
     }
+    set
+}
+
+/// Generate placements for Faces/Edges by applying all 24 cube
+/// rotations to the source bounds and deduplicating by result.
+/// Axis-order-independent: works regardless of which axis the source
+/// shape's offset is along.
+fn rotational_placements(bounds: Bounds) -> Vec<(Placement, String)> {
+    let rotations = cube_rotations();
+    let mut result: Vec<(Placement, Bounds)> = Vec::new();
+
+    for rot in &rotations {
+        let transformed = apply_placement_to_bounds(*rot, bounds);
+        // Canonicalize bounds so mirrored versions match.
+        let canon = Bounds(
+            transformed.min().0, transformed.min().1, transformed.min().2,
+            transformed.max().0, transformed.max().1, transformed.max().2,
+        );
+        if !result.iter().any(|(_, b)| *b == canon) {
+            result.push((*rot, canon));
+        }
+    }
+
+    result.into_iter()
+        .enumerate()
+        .map(|(i, (p, _))| {
+            let suffix = if i == 0 { String::new() } else { format!("_{i}") };
+            (p, suffix)
+        })
+        .collect()
 }
 
 /// Apply a placement to an integer `Bounds`. Each world axis range is
@@ -767,7 +792,7 @@ fn walk_for_occupancy(
     let base_path = append_path(parent_path, node.effective_name());
 
     let sym = node.symmetry;
-    for (local, suffix) in placements(sym) {
+    for (local, suffix) in &placements(sym, node.bounds) {
         let combined = compose_placements(inherited, *local);
         let path = if suffix.is_empty() {
             base_path.clone()
@@ -986,9 +1011,15 @@ mod tests {
             Symmetry::Faces,
             Symmetry::Edges,
         ] {
-            let ps = placements(sym);
+            // Faces/Edges need bounds for deduplication.
+            let test_bounds = match sym {
+                Symmetry::Faces => Some(Bounds(1, -1, -1, 3, 1, 1)),
+                Symmetry::Edges => Some(Bounds(-1, 1, 1, 1, 3, 3)),
+                _ => None,
+            };
+            let ps = placements(sym, test_bounds);
             let mut seen = std::collections::HashSet::new();
-            for (p, _) in ps {
+            for (p, _) in &ps {
                 assert!(
                     seen.insert(*p),
                     "symmetry {:?} has duplicate placement {:?}",
@@ -997,14 +1028,15 @@ mod tests {
                 );
             }
         }
-        assert_eq!(placements(Symmetry::Single).len(), 1);
-        assert_eq!(placements(Symmetry::MirrorX).len(), 2);
-        assert_eq!(placements(Symmetry::MirrorXYZ).len(), 8);
-        assert_eq!(placements(Symmetry::MirrorX_SpinY).len(), 4);
-        assert_eq!(placements(Symmetry::MirrorY_SpinZ).len(), 4);
-        assert_eq!(placements(Symmetry::MirrorZ_SpinX).len(), 4);
-        assert_eq!(placements(Symmetry::Faces).len(), 6);
-        assert_eq!(placements(Symmetry::Edges).len(), 12);
+        assert_eq!(placements(Symmetry::Single, None).len(), 1);
+        assert_eq!(placements(Symmetry::MirrorX, None).len(), 2);
+        assert_eq!(placements(Symmetry::MirrorXYZ, None).len(), 8);
+        assert_eq!(placements(Symmetry::MirrorX_SpinY, None).len(), 4);
+        assert_eq!(placements(Symmetry::MirrorY_SpinZ, None).len(), 4);
+        assert_eq!(placements(Symmetry::MirrorZ_SpinX, None).len(), 4);
+        // Faces/Edges count depends on bounds (dedup by result).
+        assert_eq!(placements(Symmetry::Faces, Some(Bounds(1, -1, -1, 3, 1, 1))).len(), 6);
+        assert_eq!(placements(Symmetry::Edges, Some(Bounds(-1, 1, 1, 1, 3, 3))).len(), 12);
     }
 
     #[test]
