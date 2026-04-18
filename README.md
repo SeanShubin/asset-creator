@@ -2,6 +2,29 @@
 
 A Rust/Bevy application for procedurally generating and live-editing game assets. Everything is driven by a human-readable RON text format, with real-time preview and interactive parameter tweaking via egui panels.
 
+## Dependency Upgrades
+
+One-time tooling install:
+
+```bash
+cargo install cargo-outdated cargo-edit
+```
+
+Check current vs latest versions:
+
+```bash
+cargo outdated --root-deps-only   # just the crates declared in Cargo.toml
+cargo outdated | grep -i bevy     # all bevy-related crates, direct + transitive
+```
+
+Upgrade everything (including breaking bumps) and verify it still builds:
+
+```bash
+cargo upgrade --incompatible && cargo update && cargo check
+```
+
+Before bumping Bevy specifically, confirm `bevy_egui` has a matching release, and skim the [Bevy migration guides](https://bevy.org/learn/migration-guides/) for each version you cross.
+
 ## Editors
 
 | Editor                                   | Description                                                                                        |
