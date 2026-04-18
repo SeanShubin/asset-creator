@@ -90,6 +90,24 @@ impl AssetRegistry {
             .map(|r| r.data.as_slice())
     }
 
+    pub fn remove_by_path(&mut self, path: &std::path::Path) -> bool {
+        let shape_key = self.shapes.iter()
+            .find(|(_, r)| r.path == path)
+            .map(|(k, _)| k.clone());
+        if let Some(key) = shape_key {
+            self.shapes.remove(&key);
+            return true;
+        }
+        let surface_key = self.surfaces.iter()
+            .find(|(_, r)| r.path == path)
+            .map(|(k, _)| k.clone());
+        if let Some(key) = surface_key {
+            self.surfaces.remove(&key);
+            return true;
+        }
+        false
+    }
+
     pub fn shape_entries(&self) -> Vec<(String, PathBuf)> {
         let mut entries: Vec<(String, PathBuf)> = self.shapes.iter()
             .map(|(key, r)| (key.clone(), r.path.clone()))
@@ -372,8 +390,8 @@ fn poll_file_changes(
         return;
     }
 
-    let changed_paths = watcher.detect_changes();
-    if changed_paths.is_empty() {
+    let (changed_paths, deleted_paths) = watcher.detect_changes();
+    if changed_paths.is_empty() && deleted_paths.is_empty() {
         return;
     }
 
@@ -388,6 +406,13 @@ fn poll_file_changes(
         if is_shape_file(path) {
             load_shape_into_registry(path, &mut registry);
             shape_changed = true;
+        }
+    }
+
+    for path in &deleted_paths {
+        if registry.remove_by_path(path) {
+            if is_surface_file(path) { surface_changed = true; }
+            if is_shape_file(path) { shape_changed = true; }
         }
     }
 

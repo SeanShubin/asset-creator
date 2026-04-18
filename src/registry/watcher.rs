@@ -27,10 +27,21 @@ impl FileWatcher {
         true
     }
 
-    pub fn detect_changes(&mut self) -> Vec<PathBuf> {
+    pub fn detect_changes(&mut self) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let mut changed = Vec::new();
-        collect_changed_files(&self.data_dir, &mut self.seen_mtimes, &mut changed);
-        changed
+        let mut current_paths = std::collections::HashSet::new();
+        collect_changed_files(&self.data_dir, &mut self.seen_mtimes, &mut changed, &mut current_paths);
+
+        // Files in seen_mtimes but not on disk → deleted.
+        let deleted: Vec<PathBuf> = self.seen_mtimes.keys()
+            .filter(|p| !current_paths.contains(*p))
+            .cloned()
+            .collect();
+        for p in &deleted {
+            self.seen_mtimes.remove(p);
+        }
+
+        (changed, deleted)
     }
 }
 
@@ -38,6 +49,7 @@ fn collect_changed_files(
     dir: &Path,
     seen_mtimes: &mut HashMap<PathBuf, SystemTime>,
     changed: &mut Vec<PathBuf>,
+    current_paths: &mut std::collections::HashSet<PathBuf>,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -47,8 +59,9 @@ fn collect_changed_files(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_changed_files(&path, seen_mtimes, changed);
+            collect_changed_files(&path, seen_mtimes, changed, current_paths);
         } else if path.extension().is_some_and(|ext| ext == "ron") {
+            current_paths.insert(path.clone());
             if has_new_modification(&path, seen_mtimes) {
                 changed.push(path);
             }

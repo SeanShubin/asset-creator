@@ -471,38 +471,19 @@ pub struct AnimState {
 fn faces_to_placement(faces: &[Face]) -> Placement {
     use SignedAxis::*;
 
-    // Default: identity (MinX, MinY, MinZ).
-    let mut px = PosX;
-    let mut py = PosY;
-    let mut pz = PosZ;
-    // Track which axes are specified (for Wedge ridge detection).
-    let mut has_x = false;
-    let mut has_y = false;
-
-    for &f in faces {
-        match f {
-            Face::MinX => { px = PosX; has_x = true; }
-            Face::MaxX => { px = NegX; has_x = true; }
-            Face::MinY => { py = PosY; has_y = true; }
-            Face::MaxY => { py = NegY; has_y = true; }
-            Face::MinZ => { pz = PosZ; }
-            Face::MaxZ => { pz = NegZ; }
-        }
-    }
-
     if faces.len() == 3 {
         // Corner/InverseCorner: each face determines one axis mirror.
-        // Identity Corner fills (Min,Min,Min). MaxX → mirror X, etc.
+        let mut px = PosX; let mut py = PosY; let mut pz = PosZ;
+        for &f in faces {
+            match f {
+                Face::MinX => px = PosX, Face::MaxX => px = NegX,
+                Face::MinY => py = PosY, Face::MaxY => py = NegY,
+                Face::MinZ => pz = PosZ, Face::MaxZ => pz = NegZ,
+            }
+        }
         Placement(px, py, pz)
     } else if faces.len() == 2 {
-        // Wedge: identity fills y+z ≤ 0 (MinY + MinZ), ridge along X.
-        // The two faces specify which axes have the cut and which side
-        // is filled. The unspecified axis is the ridge.
-        //
-        // The placement maps: identity_X → world_ridge (unchanged),
-        // identity_Y → world_cut1, identity_Z → world_cut2.
-        // Min face → Pos (same as identity), Max face → Neg (mirrored).
-        // The identity wedge fills y+z ≤ 0, ridge along X.
+        // Wedge: identity fills y+z ≤ 0, ridge along X.
         // We need to map the identity's Y and Z cut axes to the
         // world axes specified by the two faces, and route the
         // ridge (identity X) to the unspecified world axis.
