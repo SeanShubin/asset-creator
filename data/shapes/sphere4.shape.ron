@@ -1,30 +1,29 @@
 [
-    // (
-    //     name:"core",
-    //     shape:Box,
-    //     bounds:(-1, -1, -1, 1, 1, 1)
-    // ),
     (
         name:"face",
         bounds: (-5, -1, -1, -4, 1, 1),
-        symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
+        symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ],
+        tags:["yellow"]
     ),
     (
         name:"edge",
         faces: (MinY, MaxX),
         bounds: (-5, 1, -1, -4, 4, 1),
+        tags:["red"],
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
         name:"corner1",
         corner: (MaxX, MinY, MinZ),
         bounds: (-4, 4, 1, -1, 5, 4),
+        tags:["green"],
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
         name:"corner2",
         clip: (MinX, MaxY, MaxZ),
         bounds: (-4, 1, 1, -1, 4, 4),
+        tags:["blue"],
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     )
 ]

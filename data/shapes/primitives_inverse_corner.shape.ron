@@ -1,8 +1,8 @@
 [
     (
         name: "inverse_corner",
-        clip: (MinX, MinY, MinZ),
+        clip: (MaxX, MaxY, MaxZ),
         bounds: (-1, -1, -1, 1, 1, 1),
-        tags: ["cyan"],
+        tags: ["green"],
     ),
 ]
