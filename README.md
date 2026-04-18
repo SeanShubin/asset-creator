@@ -14,13 +14,15 @@ Check current vs latest versions:
 
 ```bash
 cargo outdated --root-deps-only   # just the crates declared in Cargo.toml
-cargo outdated | grep -i bevy     # all bevy-related crates, direct + transitive
+cargo outdated                    # full tree, direct + transitive
 ```
 
-Upgrade everything (including breaking bumps) and verify it still builds:
+Upgrade everything (including breaking bumps) and verify it still builds — run each line, in order:
 
 ```bash
-cargo upgrade --incompatible && cargo update && cargo check
+cargo upgrade --incompatible
+cargo update
+cargo check
 ```
 
 Before bumping Bevy specifically, confirm `bevy_egui` has a matching release, and skim the [Bevy migration guides](https://bevy.org/learn/migration-guides/) for each version you cross.
