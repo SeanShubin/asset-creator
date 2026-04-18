@@ -66,63 +66,59 @@ fn compose_ops(ops: &[SymOp]) -> Placement {
 }
 
 /// Convert a Placement to face notation for Corner/InverseCorner.
+/// The identity corner fills vertex (-0.5,-0.5,-0.5) = (min,min,min).
+/// Through the placement, this vertex maps to a specific world corner.
+/// Each world axis's face is determined by which identity axis feeds it
+/// and whether the sign is preserved or negated.
 fn placement_to_corner_faces(p: Placement) -> String {
-    let face = |sa: SA| -> &'static str {
-        match sa {
-            SA::PosX => "MinX", SA::NegX => "MaxX",
-            SA::PosY => "MinY", SA::NegY => "MaxY",
-            SA::PosZ => "MinZ", SA::NegZ => "MaxZ",
+    // For each world axis, the placement tells us which identity axis
+    // feeds it and with what sign. The identity corner vertex is at
+    // -0.5 on all axes. If the sign is positive, -0.5 stays negative → Min.
+    // If negated, -0.5 becomes +0.5 → Max.
+    let face = |sa: SA, world_axis: &str| -> String {
+        let is_pos = matches!(sa, SA::PosX | SA::PosY | SA::PosZ);
+        if is_pos {
+            format!("Min{}", world_axis)
+        } else {
+            format!("Max{}", world_axis)
         }
     };
-    format!("[{}, {}, {}]", face(p.0), face(p.1), face(p.2))
+    format!("({}, {}, {})", face(p.0, "X"), face(p.1, "Y"), face(p.2, "Z"))
 }
 
 /// Convert a Placement to face notation for Wedge.
-/// Identity wedge: ridge=X, cut in YZ, fill MinY+MinZ.
-/// The placement tells us where identity's Y and Z map.
+/// Identity wedge fills MinY+MinZ (y+z ≤ 0), ridge along X.
+/// The filled side has identity_y = -0.5 and identity_z = -0.5.
+/// Through the placement, find which world faces these map to.
 fn placement_to_wedge_faces(p: Placement) -> String {
-    // Identity's Y axis (first cut axis) maps to world via p's columns.
-    // We need to find which world axes identity_Y and identity_Z map to,
-    // and their signs.
-    //
-    // The placement rows tell us: world_x comes from p.0, etc.
-    // So: identity_Y feeds into world positions where p.i == PosY or NegY.
-    // identity_Z feeds into world positions where p.i == PosZ or NegZ.
+    // For each world axis, the placement tells us which identity axis
+    // feeds it. We need the world axes that receive identity_Y and
+    // identity_Z (the cut axes), and their signs.
+    let slots = [p.0, p.1, p.2];
+    let world_names = ["X", "Y", "Z"];
+    let mut faces = Vec::new();
 
-    let world_face_from_identity = |target: SA| -> &'static str {
-        // Find which world axis (x/y/z) gets `target` from the placement.
-        // Then determine the face.
-        for (world_idx, &sa) in [p.0, p.1, p.2].iter().enumerate() {
-            let (axis, pos) = match sa {
-                SA::PosX => (0, true), SA::NegX => (0, false),
-                SA::PosY => (1, true), SA::NegY => (1, false),
-                SA::PosZ => (2, true), SA::NegZ => (2, false),
-            };
-            let (t_axis, t_pos) = match target {
-                SA::PosX => (0, true), SA::NegX => (0, false),
-                SA::PosY => (1, true), SA::NegY => (1, false),
-                SA::PosZ => (2, true), SA::NegZ => (2, false),
-            };
-            if axis == t_axis {
-                // This world axis (world_idx) gets from source axis `axis`.
-                // If signs match, it's the min face. If not, max face.
-                let is_min = pos == t_pos;
-                return match (world_idx, is_min) {
-                    (0, true) => "MinX", (0, false) => "MaxX",
-                    (1, true) => "MinY", (1, false) => "MaxY",
-                    (2, true) => "MinZ", (2, false) => "MaxZ",
-                    _ => unreachable!(),
-                };
-            }
-        }
-        "???"
-    };
+    for (world_idx, &sa) in slots.iter().enumerate() {
+        let (id_axis, is_pos) = match sa {
+            SA::PosX => (0, true), SA::NegX => (0, false),
+            SA::PosY => (1, true), SA::NegY => (1, false),
+            SA::PosZ => (2, true), SA::NegZ => (2, false),
+        };
+        // Identity Y (axis 1) and Z (axis 2) are the cut axes.
+        // Identity X (axis 0) is the ridge — skip it.
+        if id_axis == 0 { continue; }
 
-    // Identity wedge fills MinY + MinZ. Through the placement, these map to world faces.
-    let f1 = world_face_from_identity(SA::PosY); // identity MinY → Pos means min
-    let f2 = world_face_from_identity(SA::PosZ); // identity MinZ → Pos means min
+        // The identity vertex at -0.5 on this axis. If sign is positive,
+        // -0.5 stays min. If negated, becomes max.
+        let face = if is_pos {
+            format!("Min{}", world_names[world_idx])
+        } else {
+            format!("Max{}", world_names[world_idx])
+        };
+        faces.push(face);
+    }
 
-    format!("[{}, {}]", f1, f2)
+    format!("({}, {})", faces[0], faces[1])
 }
 
 fn parse_orient(text: &str) -> Vec<SymOp> {

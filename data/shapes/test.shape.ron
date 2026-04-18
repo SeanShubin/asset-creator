@@ -11,19 +11,19 @@
     ),
     (
         name:"edge",
-        faces: [MinY, MaxX],
+        faces: (MinY, MaxX),
         bounds: (-5, 1, -1, -4, 4, 1),
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
         name:"corner1",
-        corner: [MaxZ, MinY, MinX],
+        corner: (MaxX, MinY, MinZ),
         bounds: (-4, 4, 1, -1, 5, 4),
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     ),
     (
         name:"corner2",
-        clip: [MinX, MaxY, MaxZ],
+        clip: (MinX, MaxY, MaxZ),
         bounds: (-4, 1, 1, -1, 4, 4),
         symmetry: [Rotate90_XY, Rotate90_XZ, Rotate90_YZ]
     )

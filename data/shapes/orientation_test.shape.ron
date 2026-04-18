@@ -1,25 +1,21 @@
 [
     (
         name: "center",
-        ,
         bounds: (-1, -1, -1, 1, 1, 1),
         tags: ["white"],
     ),
     (
         name: "x",
-        ,
         bounds: (1, -1, -1, 3, 1, 1),
         tags: ["red"],
     ),
     (
         name: "y",
-        ,
         bounds: (-1, 1, -1, 1, 3, 1),
         tags: ["green"],
     ),
     (
         name: "z",
-        ,
         bounds: (-1, -1, 1, 1, 1, 3),
         tags: ["blue"],
     ),

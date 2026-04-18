@@ -6,13 +6,12 @@
 [
     (
         name: "body",
-        ,
         bounds: (-4, -1, -4, 4, 0, 4),
         tags: ["red", "darken", "darken"],
     ),
     (
         name: "corner",
-        faces: [MinX, MaxZ],
+        faces: (MinX, MaxZ),
         bounds: (-4, -1, 4, -2, 0, 2),
         tags: ["green"],
         symmetry: [MirrorX, MirrorZ],
@@ -20,7 +19,6 @@
     ),
     (
         name: "weapons_bay",
-        ,
         bounds: (-3, -1, -2, -2, 0, 4),
         tags: ["blue"],
         symmetry: [MirrorX],

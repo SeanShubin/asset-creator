@@ -1,7 +1,7 @@
 [
     (
         name: "wedge",
-        faces: [MinY, MinZ],
+        faces: (MinY, MinZ),
         bounds: (-1, -1, -1, 1, 1, 1),
     ),
 ]

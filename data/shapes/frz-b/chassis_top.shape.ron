@@ -6,27 +6,25 @@
 [
     (
         name: "edges",
-        faces: [MinY, MaxX],
+        faces: (MinY, MaxX),
         bounds: (-4, 0, -2, -2, 1, 2),
         tags: ["red", "darken", "darken"],
         symmetry: [MirrorX, Rotate90_XZ]
     ),
     (
         name: "corners",
-        corner: [MaxZ, MinY, MinX],
+        corner: (MaxX, MinY, MinZ),
         bounds: (-4, 0, 2, -2, 1, 4),
         tags: ["red", "darken", "darken"],
         symmetry: [MirrorX, MirrorZ]
     ),
     (
         name: "center",
-        ,
         bounds: (-2, 0, -2, 2, 1, 2),
         tags: ["red", "darken", "darken"],
     ),
     (
         name: "hole",
-        ,
         bounds: (-1, 0, -1, 1, 1, 1),
         tags: ["blue"],
         subtract: true

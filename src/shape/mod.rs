@@ -11,8 +11,7 @@ pub use animation::ShapeAnimator;
 pub use interpreter::{
     despawn_shape, spawn_shape, spawn_shape_with_layers, ShapePart, ShapeRoot,
 };
-pub use render::{compile, production_stats, CompiledShape, FusedMesh};
-pub use meshes::RawMesh;
+pub use render::{compile, production_stats, CompiledShape};
 #[allow(unused_imports)]
 pub use spec::{
     collect_occupancy, aabb_for_parts, identity_placement, Bounds,

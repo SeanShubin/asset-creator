@@ -502,40 +502,57 @@ fn faces_to_placement(faces: &[Face]) -> Placement {
         // The placement maps: identity_X → world_ridge (unchanged),
         // identity_Y → world_cut1, identity_Z → world_cut2.
         // Min face → Pos (same as identity), Max face → Neg (mirrored).
-        let face_sign = |f: Face| -> SignedAxis {
+        // The identity wedge fills y+z ≤ 0, ridge along X.
+        // We need to map the identity's Y and Z cut axes to the
+        // world axes specified by the two faces, and route the
+        // ridge (identity X) to the unspecified world axis.
+        //
+        // Each face specifies a world axis and sign:
+        //   MinX → world X, min side (PosX preserves)
+        //   MaxX → world X, max side (NegX mirrors)
+        //   etc.
+        let face_to_signed_axis = |f: Face| -> SignedAxis {
             match f {
-                Face::MinX => PosY, Face::MaxX => NegY,
+                Face::MinX => PosX, Face::MaxX => NegX,
                 Face::MinY => PosY, Face::MaxY => NegY,
                 Face::MinZ => PosZ, Face::MaxZ => NegZ,
             }
         };
-        // Map identity Y → first specified face's axis with sign.
-        // Map identity Z → second specified face's axis with sign.
-        // Map identity X → the ridge axis.
-        if !has_x {
-            Placement(PosX, face_sign(faces[0]), face_sign(faces[1]))
-        } else if !has_y {
-            // Ridge = Y. Route identity_X→world_Y.
-            let s0 = face_sign(faces[0]);
-            let s1 = face_sign(faces[1]);
-            // Which face is X, which is Z?
-            let (sx, sz) = if matches!(faces[0], Face::MinX | Face::MaxX) {
-                (s0, s1)
-            } else {
-                (s1, s0)
-            };
-            Placement(sx, PosY, sz)
-        } else {
-            // Ridge = Z. Route identity_X→world_Z.
-            let s0 = face_sign(faces[0]);
-            let s1 = face_sign(faces[1]);
-            let (sx, sy) = if matches!(faces[0], Face::MinX | Face::MaxX) {
-                (s0, s1)
-            } else {
-                (s1, s0)
-            };
-            Placement(sx, sy, PosZ)
-        }
+        let sa0 = face_to_signed_axis(faces[0]);
+        let sa1 = face_to_signed_axis(faces[1]);
+
+        // Determine the ridge axis (the one not mentioned).
+        // Build placement: world_ridge = identity_X,
+        //                  world_cut0 = identity_Y (with sign),
+        //                  world_cut1 = identity_Z (with sign).
+        // The placement slots are indexed by WORLD axis.
+        let mut slots = [PosX, PosY, PosZ]; // [world_x, world_y, world_z]
+
+        // Assign sa0 to identity_Y, sa1 to identity_Z.
+        // The sign of sa0/sa1 tells us whether to mirror.
+        // The axis of sa0/sa1 tells us which world slot to fill.
+        let axis_idx = |sa: SignedAxis| -> usize {
+            match sa {
+                PosX | NegX => 0,
+                PosY | NegY => 1,
+                PosZ | NegZ => 2,
+            }
+        };
+        let to_identity_axis = |sa: SignedAxis, identity: SignedAxis| -> SignedAxis {
+            // If face says Min (Pos), identity axis is positive.
+            // If face says Max (Neg), identity axis is negative (mirrored).
+            if sa.is_positive() { identity } else { identity.negate() }
+        };
+
+        slots[axis_idx(sa0)] = to_identity_axis(sa0, PosY);
+        slots[axis_idx(sa1)] = to_identity_axis(sa1, PosZ);
+
+        // The ridge axis is the one not touched by sa0 or sa1.
+        // It gets identity_X (PosX).
+        let ridge_idx = (0..3).find(|&i| i != axis_idx(sa0) && i != axis_idx(sa1)).unwrap();
+        slots[ridge_idx] = PosX;
+
+        Placement(slots[0], slots[1], slots[2])
     } else {
         identity_placement()
     }

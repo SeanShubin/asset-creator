@@ -1,13 +1,11 @@
 [
     (
         name: "body",
-        ,
         bounds: (-2, -2, -4, 2, 2, 4),
         tags: ["black"],
     ),
     (
         name: "blade",
-        ,
         bounds: (-1, -1, 4, 1, 1, 12),
         tags: ["red"],
     ),

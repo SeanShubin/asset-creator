@@ -1,12 +1,11 @@
 [
     (
         name: "base",
-        ,
         bounds: (-1, -2, -1, 1, 3, 1),
     ),
     (
         name: "tip",
-        faces: [MinY, MaxX],
+        faces: (MinY, MaxX),
         bounds: (-3, 3, -1, 0, 6, 1),
         symmetry: [MirrorX],
     ),
