@@ -89,7 +89,7 @@ pub(crate) fn browser_ui(
     mut save_events: EventWriter<SaveSurface>,
     mut delete_events: EventWriter<DeleteSurface>,
 ) {
-    let ctx = contexts.ctx_mut();
+    let Some(ctx) = contexts.try_ctx_mut() else { return };
 
     egui::SidePanel::right("asset_browser").min_width(180.0).max_width(250.0).show(ctx, |ui| {
         ui.heading("Assets");

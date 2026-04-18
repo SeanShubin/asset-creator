@@ -3,6 +3,7 @@
 //! launch so it always matches the current run.
 
 use std::fs::File;
+use std::io::Write;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 const LOG_FILE: &str = "asset-creator.log";
@@ -23,6 +24,12 @@ pub fn init() {
 
     std::panic::set_hook(Box::new(|info| {
         let backtrace = std::backtrace::Backtrace::force_capture();
-        eprintln!("PANIC: {info}\n\n{backtrace}");
+        let msg = format!("PANIC: {info}\n\n{backtrace}");
+        // Append to the log file directly — tracing may not be available
+        // during panic (the subscriber could be torn down).
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(LOG_FILE) {
+            let _ = writeln!(f, "\n{msg}");
+        }
+        eprintln!("{msg}");
     }));
 }

@@ -46,5 +46,7 @@ fn main() {
         app.insert_resource(editor);
     }
 
+    info!("starting app");
     app.run();
+    info!("clean exit");
 }
