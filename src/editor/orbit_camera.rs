@@ -175,6 +175,14 @@ pub fn compute_camera_pose(yaw: f32, pitch: f32, target: Vec3) -> (Vec3, Quat) {
     (position, rotation)
 }
 
+/// Compute the directional light rotation for a given camera yaw/pitch.
+/// The light is offset slightly left and above the camera view.
+pub fn compute_light_rotation(yaw: f32, pitch: f32) -> Quat {
+    let cam_rot = Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), -pitch.to_radians(), 0.0);
+    let light_offset = Quat::from_euler(EulerRot::YXZ, 15.0_f32.to_radians(), -30.0_f32.to_radians(), 0.0);
+    cam_rot * light_offset
+}
+
 fn orthographic_scale(projection: &Projection) -> f32 {
     match projection {
         Projection::Orthographic(o) => o.scale,

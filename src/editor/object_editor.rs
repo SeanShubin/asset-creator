@@ -20,7 +20,8 @@ pub struct ObjectEditorPlugin;
 
 impl Plugin for ObjectEditorPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<EditorActivation>()
+        app.add_event::<ReloadShape>()
+            .init_resource::<EditorActivation>()
             .init_resource::<ShapeReloadState>()
             .init_resource::<CameraFitState>()
             .init_resource::<SceneStats>()
@@ -85,10 +86,13 @@ struct EditorActivation {
     last_seen_editor: Option<ActiveEditor>,
 }
 
-/// Tracks when the shape needs to be reloaded from the registry.
+/// Event: request a shape reload. Replaces the old `needs_reload` flag.
+#[derive(Event)]
+struct ReloadShape;
+
+/// Tracks the last-seen shape generation for file-change detection.
 #[derive(Resource, Default)]
 struct ShapeReloadState {
-    needs_reload: bool,
     last_shape_generation: u64,
 }
 
@@ -172,7 +176,7 @@ struct CollidingParts {
 fn handle_activation(
     active: Res<ActiveEditor>,
     mut activation: ResMut<EditorActivation>,
-    mut reload: ResMut<ShapeReloadState>,
+    mut reload_events: EventWriter<ReloadShape>,
     mut fit: ResMut<CameraFitState>,
     mut orbit: ResMut<OrbitState>,
     mut hidden: ResMut<HiddenParts>,
@@ -214,7 +218,7 @@ fn handle_activation(
     // the new shape from the canonical default angle.
     if let ActiveEditor::Object { ref path } = current {
         activation.current_path = Some(path.clone());
-        reload.needs_reload = true;
+        reload_events.send(ReloadShape);
         fit.needs_fit = true;
         orbit.yaw = DEFAULT_YAW;
         orbit.pitch = DEFAULT_PITCH;
@@ -269,10 +273,11 @@ fn spawn_scene(commands: &mut Commands) {
 fn watch_shape_changes(
     mut reload: ResMut<ShapeReloadState>,
     registry: Res<AssetRegistry>,
+    mut reload_events: EventWriter<ReloadShape>,
 ) {
     if registry.shape_generation() != reload.last_shape_generation {
         reload.last_shape_generation = registry.shape_generation();
-        reload.needs_reload = true;
+        reload_events.send(ReloadShape);
     }
 }
 
@@ -284,7 +289,7 @@ fn reload_shape(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut reload: ResMut<ShapeReloadState>,
+    mut reload_events: EventReader<ReloadShape>,
     mut stats: ResMut<SceneStats>,
     mut bounds: ResMut<SceneBounds>,
     activation: Res<EditorActivation>,
@@ -293,8 +298,8 @@ fn reload_shape(
     hidden: Res<HiddenParts>,
     mut colliding: ResMut<CollidingParts>,
 ) {
-    if !reload.needs_reload { return; }
-    reload.needs_reload = false;
+    if reload_events.read().next().is_none() { return; }
+    reload_events.clear();
 
     let Some(path) = &activation.current_path else { return };
 
@@ -318,22 +323,7 @@ fn reload_shape(
     }
 
     stats.collisions = occupancy.collision_count();
-    if stats.collisions > 0 {
-        warn!(
-            "shape '{}' has {} cell-level collision(s)",
-            path.display(),
-            stats.collisions
-        );
-        for c in occupancy.collisions().iter().take(10) {
-            warn!(
-                "  collision at {:?}: '{}' vs '{}'",
-                c.cell, c.first_path, c.second_path
-            );
-        }
-        if occupancy.collisions().len() > 10 {
-            warn!("  ... and {} more", occupancy.collisions().len() - 10);
-        }
-    }
+    occupancy.warn_collisions(&format!("shape '{}'", path.display()));
 
     // Collect the names of parts involved in collisions for tree coloring.
     colliding.names.clear();
@@ -594,22 +584,7 @@ fn update_light(
     let Ok(mut tf) = light.get_single_mut() else { return };
 
     // Camera rotation
-    let cam_rot = Quat::from_euler(
-        EulerRot::YXZ,
-        orbit.yaw.to_radians(),
-        -orbit.pitch.to_radians(),
-        0.0,
-    );
-
-    // Fixed offset: light comes from upper-left relative to camera view
-    let light_offset = Quat::from_euler(
-        EulerRot::YXZ,
-        15.0_f32.to_radians(),   // slightly left of camera
-        -30.0_f32.to_radians(),  // above camera view
-        0.0,
-    );
-
-    tf.rotation = cam_rot * light_offset;
+    tf.rotation = orbit_camera::compute_light_rotation(orbit.yaw, orbit.pitch);
 }
 
 // =====================================================================
@@ -721,11 +696,11 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
 
 fn keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mut reload: ResMut<ShapeReloadState>,
+    mut reload_events: EventWriter<ReloadShape>,
     mut animators: Query<&mut ShapeAnimator>,
 ) {
     if keys.just_pressed(KeyCode::KeyR) {
-        reload.needs_reload = true;
+        reload_events.send(ReloadShape);
         info!("Reloading shape...");
     }
     if keys.just_pressed(KeyCode::Tab) {
@@ -750,7 +725,7 @@ fn part_tree_ui(
     fit: Res<CameraFitState>,
     stats: Res<SceneStats>,
     mut hidden: ResMut<HiddenParts>,
-    mut reload: ResMut<ShapeReloadState>,
+    mut reload_events: EventWriter<ReloadShape>,
     colliding: Res<CollidingParts>,
 ) {
     let Some(ctx) = contexts.try_ctx_mut() else { return };
@@ -785,7 +760,7 @@ fn part_tree_ui(
             }
         }
         if hidden.paths != snapshot {
-            reload.needs_reload = true;
+            reload_events.send(ReloadShape);
         }
     }
 }

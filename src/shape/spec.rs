@@ -8,7 +8,9 @@
 //! escape hatches.
 //!
 //! Data flows: file → spec → render → Bevy entities. Nothing here
-//! imports `super::render`.
+//! imports `super::render`. The spec module calls `super::csg` for
+//! CSG signature computation during symmetry deduplication — this is
+//! the one intentional cross-module dependency.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -718,6 +720,24 @@ impl Occupancy {
 
     pub fn collisions(&self) -> &[Collision] {
         &self.collisions
+    }
+
+    /// Log collision warnings, showing up to 10 details.
+    pub fn warn_collisions(&self, label: &str) {
+        if self.collisions.is_empty() { return; }
+        bevy::prelude::warn!(
+            "{} has {} cell-level collision(s)",
+            label, self.collisions.len()
+        );
+        for c in self.collisions.iter().take(10) {
+            bevy::prelude::warn!(
+                "  collision at {:?}: '{}' vs '{}'",
+                c.cell, c.first_path, c.second_path
+            );
+        }
+        if self.collisions.len() > 10 {
+            bevy::prelude::warn!("  ... and {} more", self.collisions.len() - 10);
+        }
     }
 
     pub fn aabb(&self) -> Option<Bounds> {

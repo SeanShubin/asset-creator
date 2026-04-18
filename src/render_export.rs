@@ -188,19 +188,7 @@ fn process_render_queue(
     let Some(shape) = registry.get_shape_by_path(&job.shape_path) else { return };
 
     let occupancy = collect_occupancy(shape, &registry);
-    if occupancy.collision_count() > 0 {
-        warn!(
-            "render export: '{}' has {} cell collision(s)",
-            job.shape_path.display(),
-            occupancy.collision_count()
-        );
-        for c in occupancy.collisions().iter().take(10) {
-            warn!(
-                "  at {:?}: '{}' vs '{}'",
-                c.cell, c.first_path, c.second_path
-            );
-        }
-    }
+    occupancy.warn_collisions(&format!("render export: '{}'", job.shape_path.display()));
 
     let image_handle = create_render_target(&mut images);
     let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
@@ -282,12 +270,10 @@ fn spawn_export_camera(
 }
 
 fn spawn_export_light(commands: &mut Commands, layer: &RenderLayers) -> Entity {
-    let cam_rot = Quat::from_euler(EulerRot::YXZ, DEFAULT_YAW.to_radians(), -DEFAULT_PITCH.to_radians(), 0.0);
-    let light_offset = Quat::from_euler(EulerRot::YXZ, 15.0_f32.to_radians(), -30.0_f32.to_radians(), 0.0);
     commands.spawn((
         ExportEntity,
         DirectionalLight { illuminance: 6000.0, shadows_enabled: false, ..default() },
-        Transform::from_rotation(cam_rot * light_offset),
+        Transform::from_rotation(crate::editor::compute_light_rotation(DEFAULT_YAW, DEFAULT_PITCH)),
         layer.clone(),
     )).id()
 }

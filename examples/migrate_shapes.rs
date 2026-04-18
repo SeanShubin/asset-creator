@@ -7,6 +7,7 @@ use std::path::Path;
 
 /// The old SymOp values (copied from the codebase).
 #[derive(Debug, Clone, Copy)]
+#[allow(non_camel_case_types)]
 enum SymOp {
     MirrorX, MirrorY, MirrorZ,
     Rotate90_XY, Rotate90_XZ, Rotate90_YZ,
