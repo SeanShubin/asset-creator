@@ -27,13 +27,13 @@ fn main() {
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Asset Creator".into(),
-                    resolution: bevy::window::WindowResolution::new(1100.0, 720.0),
+                    resolution: bevy::window::WindowResolution::new(1100, 720),
                     ..default()
                 }),
                 ..default()
             })
             .disable::<bevy::log::LogPlugin>(),
-        EguiPlugin,
+        EguiPlugin::default(),
         registry::RegistryPlugin::default(),
         shape::ShapePlugin,
         browser::BrowserPlugin,
@@ -45,6 +45,20 @@ fn main() {
     if let Some(editor) = browser::resolve_from_cli() {
         app.insert_resource(editor);
     }
+
+    // bevy_egui 0.39 attaches the primary egui context to the first spawned
+    // camera and renders egui via that camera's render graph. Editors spawn
+    // their own cameras on activation, but the browser panel needs egui to
+    // work before any editor is active. This placeholder owns the egui
+    // context for the lifetime of the app. It runs at order=-1 so it draws
+    // first (clearing the screen), and editor cameras (default order=0)
+    // draw their content on top.
+    app.add_systems(Startup, |mut commands: Commands| {
+        commands.spawn((
+            Camera2d,
+            Camera { order: -1, ..default() },
+        ));
+    });
 
     info!("starting app");
     app.run();

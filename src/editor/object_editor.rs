@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use bevy::render::camera::Viewport;
-use bevy_egui::{EguiContexts, egui};
+use bevy::camera::Viewport;
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use std::path::PathBuf;
 
 use crate::browser::{browser_ui, ActiveEditor};
@@ -10,7 +10,7 @@ use crate::shape::{
     production_stats, spawn_shape,
     ShapeAnimator, ShapePart, ShapeRoot,
 };
-use super::orbit_camera::{self, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
+use super::orbit_camera::{self, fit_for_aabb, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
 
 // =====================================================================
 // Plugin
@@ -20,7 +20,7 @@ pub struct ObjectEditorPlugin;
 
 impl Plugin for ObjectEditorPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<ReloadShape>()
+        app.add_message::<ReloadShape>()
             .init_resource::<EditorActivation>()
             .init_resource::<ShapeReloadState>()
             .init_resource::<CameraFitState>()
@@ -48,24 +48,28 @@ impl Plugin for ObjectEditorPlugin {
                 ),
             ).chain())
             .add_systems(Update, (
+                update_light.run_if(is_object_active),
+                draw_grid.run_if(is_object_active),
+            ))
+            // Egui-touching systems must run in EguiPrimaryContextPass so the
+            // egui Context is initialized when ctx_mut() is called. Camera input
+            // (touches egui via wants_pointer_input) and viewport tracking
+            // (reads egui's available_rect after panels are drawn) live here.
+            .add_systems(EguiPrimaryContextPass, (
                 // Camera: input → intent → apply (chained)
                 (
                     orbit_camera::read_camera_input.run_if(is_object_active),
                     orbit_camera::apply_orbit.run_if(is_object_active),
                     orbit_camera::apply_zoom.run_if(is_object_active),
                 ).chain(),
-                update_light.run_if(is_object_active),
                 // UI must run before viewport tracking so egui's
                 // available_rect reflects the panels for this frame.
-                // The right-side browser panel is drawn by `browser_ui`
-                // in a different plugin, so we explicitly order after it.
                 part_tree_ui.run_if(is_object_active),
                 (
                     track_viewport_rect.run_if(is_object_active),
                     sync_camera_viewport.run_if(is_object_active),
                     sync_zoom_to_viewport.run_if(is_object_active),
                 ).chain().after(part_tree_ui).after(browser_ui),
-                draw_grid.run_if(is_object_active),
             ));
     }
 }
@@ -87,7 +91,7 @@ struct EditorActivation {
 }
 
 /// Event: request a shape reload. Replaces the old `needs_reload` flag.
-#[derive(Event)]
+#[derive(Message)]
 struct ReloadShape;
 
 /// Tracks the last-seen shape generation for file-change detection.
@@ -176,7 +180,7 @@ struct CollidingParts {
 fn handle_activation(
     active: Res<ActiveEditor>,
     mut activation: ResMut<EditorActivation>,
-    mut reload_events: EventWriter<ReloadShape>,
+    mut reload_events: MessageWriter<ReloadShape>,
     mut fit: ResMut<CameraFitState>,
     mut orbit: ResMut<OrbitState>,
     mut hidden: ResMut<HiddenParts>,
@@ -218,7 +222,7 @@ fn handle_activation(
     // the new shape from the canonical default angle.
     if let ActiveEditor::Object { ref path } = current {
         activation.current_path = Some(path.clone());
-        reload_events.send(ReloadShape);
+        reload_events.write(ReloadShape);
         fit.needs_fit = true;
         orbit.yaw = DEFAULT_YAW;
         orbit.pitch = DEFAULT_PITCH;
@@ -235,7 +239,7 @@ fn despawn_all(
     shape_roots: &Query<Entity, With<ShapeRoot>>,
 ) {
     for entity in editor_entities {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
     let roots: Vec<Entity> = shape_roots.iter().collect();
     despawn_shape(commands, &roots);
@@ -259,7 +263,7 @@ fn spawn_scene(commands: &mut Commands) {
         Transform::default(),
     ));
 
-    commands.insert_resource(AmbientLight {
+    commands.insert_resource(GlobalAmbientLight {
         color: Color::WHITE,
         brightness: 80.0,
         ..default()
@@ -273,11 +277,11 @@ fn spawn_scene(commands: &mut Commands) {
 fn watch_shape_changes(
     mut reload: ResMut<ShapeReloadState>,
     registry: Res<AssetRegistry>,
-    mut reload_events: EventWriter<ReloadShape>,
+    mut reload_events: MessageWriter<ReloadShape>,
 ) {
     if registry.shape_generation() != reload.last_shape_generation {
         reload.last_shape_generation = registry.shape_generation();
-        reload_events.send(ReloadShape);
+        reload_events.write(ReloadShape);
     }
 }
 
@@ -289,7 +293,7 @@ fn reload_shape(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut reload_events: EventReader<ReloadShape>,
+    mut reload_events: MessageReader<ReloadShape>,
     mut stats: ResMut<SceneStats>,
     mut bounds: ResMut<SceneBounds>,
     activation: Res<EditorActivation>,
@@ -345,22 +349,21 @@ fn reload_shape(
 // Camera fitting
 // =====================================================================
 
-// Zoom computation uses fixed projection angles (yaw=45, pitch=45) so that
-// fit_scale is deterministic regardless of the user's current orbit angle.
-// At these angles a unit cube projects to:
-//   width  = max_extent * 1.414214  (sqrt(2))
-//   height = max_extent * 1.707107  (1 + sqrt(2)/2)
-const ZOOM_PROJ_WIDTH_RATIO: f32 = 1.414214;
-const ZOOM_PROJ_HEIGHT_RATIO: f32 = 1.707107;
-const FIT_BORDER: f32 = 1.1;
+// Fit math uses fixed projection angles (yaw=45, pitch=45) so the result is
+// deterministic regardless of the user's current orbit angle. The 8 AABB
+// corners are projected through the view transform and actual screen-space
+// extents are measured (see orbit_camera::fit_for_aabb).
+const FIT_BORDER_PCT: f32 = 0.05;
 const ZOOM_MIN_PCT: f32 = 10.0;
 const ZOOM_MAX_PCT: f32 = 200.0;
 
-/// Runs on shape switch: computes fit scale and sets initial zoom to 100%.
+/// Runs on shape switch: computes fit scale, sets initial zoom to 100%, and
+/// targets the camera at the AABB center so off-origin shapes are centered.
 fn on_model_loaded(
     mut fit: ResMut<CameraFitState>,
     mut camera: Query<&mut Projection, With<OrbitCamera>>,
     mut limits: ResMut<ZoomLimits>,
+    mut orbit: ResMut<OrbitState>,
     bounds: Res<SceneBounds>,
     viewport: Res<ViewportRect>,
 ) {
@@ -368,15 +371,16 @@ fn on_model_loaded(
     if !viewport.is_renderable() { return; }
     fit.needs_fit = false;
 
-    let fit_scale = fit_scale_from_bounds(&bounds, viewport.logical_size);
-    if fit_scale < 0.001 { return; }
+    let Some(result) = fit_for_bounds(&bounds, viewport.logical_size) else { return };
+    if result.scale < 0.001 { return; }
 
-    fit.fit_scale = fit_scale;
-    update_zoom_limits(&mut limits, fit_scale);
+    fit.fit_scale = result.scale;
+    orbit.target = result.target;
+    update_zoom_limits(&mut limits, result.scale);
 
-    if let Ok(mut projection) = camera.get_single_mut() {
+    if let Ok(mut projection) = camera.single_mut() {
         if let Projection::Orthographic(ref mut ortho) = projection.as_mut() {
-            ortho.scale = fit_scale;
+            ortho.scale = result.scale;
         }
     }
 }
@@ -410,9 +414,10 @@ fn compute_stats(
     stats.needs_update = false;
 
     if viewport.is_renderable() {
-        let fit_scale = fit_scale_from_bounds(&bounds, viewport.logical_size);
-        if fit_scale > 0.001 {
-            update_zoom_limits(&mut limits, fit_scale);
+        if let Some(result) = fit_for_bounds(&bounds, viewport.logical_size) {
+            if result.scale > 0.001 {
+                update_zoom_limits(&mut limits, result.scale);
+            }
         }
     }
 
@@ -453,8 +458,8 @@ fn track_viewport_rect(
     windows: Query<&Window>,
     mut viewport: ResMut<ViewportRect>,
 ) {
-    let Some(ctx) = contexts.try_ctx_mut() else { return };
-    let Ok(window) = windows.get_single() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let Ok(window) = windows.single() else { return };
 
     let rect = ctx.available_rect();
     let logical_size = Vec2::new(rect.width().max(0.0), rect.height().max(0.0));
@@ -491,7 +496,7 @@ fn sync_camera_viewport(
     mut camera: Query<&mut Camera, With<OrbitCamera>>,
 ) {
     if !viewport.is_renderable() { return; }
-    let Ok(mut cam) = camera.get_single_mut() else { return };
+    let Ok(mut cam) = camera.single_mut() else { return };
     let new = Viewport {
         physical_position: viewport.physical_min,
         physical_size: viewport.physical_size,
@@ -527,7 +532,8 @@ fn sync_zoom_to_viewport(
     if !viewport.is_renderable() { return; }
     if fit.fit_scale <= 0.0 { return; }
 
-    let new_fit = fit_scale_from_bounds(&bounds, viewport.logical_size);
+    let Some(result) = fit_for_bounds(&bounds, viewport.logical_size) else { return };
+    let new_fit = result.scale;
     if new_fit < 0.001 { return; }
     if (new_fit - fit.fit_scale).abs() < f32::EPSILON * fit.fit_scale.max(1.0) {
         return;
@@ -537,30 +543,23 @@ fn sync_zoom_to_viewport(
     fit.fit_scale = new_fit;
     update_zoom_limits(&mut limits, new_fit);
 
-    if let Ok(mut projection) = camera.get_single_mut() {
+    if let Ok(mut projection) = camera.single_mut() {
         if let Projection::Orthographic(ref mut ortho) = projection.as_mut() {
             ortho.scale *= new_fit / old_fit;
         }
     }
 }
 
-/// Compute fit_scale from the spec-level scene bounds. These bounds
-/// come from the occupancy AABB and don't change when parts are
-/// hidden/shown, keeping zoom stable during visibility toggles.
-fn fit_scale_from_bounds(bounds: &SceneBounds, viewport_size: Vec2) -> f32 {
-    if viewport_size.x <= 0.0 || viewport_size.y <= 0.0 { return 0.0; }
-
-    let scene_size = bounds.scene_max - bounds.scene_min;
-    if scene_size.length() < 0.001 { return 0.0; }
-
-    let max_extent = scene_size.x.max(scene_size.y).max(scene_size.z);
-    let proj_width = max_extent * ZOOM_PROJ_WIDTH_RATIO;
-    let proj_height = max_extent * ZOOM_PROJ_HEIGHT_RATIO;
-
-    let scale_for_width = proj_width * FIT_BORDER / viewport_size.x;
-    let scale_for_height = proj_height * FIT_BORDER / viewport_size.y;
-
-    scale_for_width.max(scale_for_height)
+/// Compute the camera fit (scale + look-at target) for the spec-level
+/// scene bounds. These bounds come from the occupancy AABB and don't change
+/// when parts are hidden/shown, keeping zoom stable during visibility toggles.
+fn fit_for_bounds(bounds: &SceneBounds, viewport_size: Vec2) -> Option<orbit_camera::FitResult> {
+    fit_for_aabb(
+        bounds.scene_min, bounds.scene_max,
+        viewport_size,
+        DEFAULT_YAW, DEFAULT_PITCH,
+        FIT_BORDER_PCT,
+    )
 }
 
 fn update_zoom_limits(limits: &mut ZoomLimits, fit_scale: f32) {
@@ -581,7 +580,7 @@ fn update_light(
     orbit: Res<OrbitState>,
     mut light: Query<&mut Transform, With<EditorLight>>,
 ) {
-    let Ok(mut tf) = light.get_single_mut() else { return };
+    let Ok(mut tf) = light.single_mut() else { return };
 
     // Camera rotation
     tf.rotation = orbit_camera::compute_light_rotation(orbit.yaw, orbit.pitch);
@@ -696,11 +695,11 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
 
 fn keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
-    mut reload_events: EventWriter<ReloadShape>,
+    mut reload_events: MessageWriter<ReloadShape>,
     mut animators: Query<&mut ShapeAnimator>,
 ) {
     if keys.just_pressed(KeyCode::KeyR) {
-        reload_events.send(ReloadShape);
+        reload_events.write(ReloadShape);
         info!("Reloading shape...");
     }
     if keys.just_pressed(KeyCode::Tab) {
@@ -725,10 +724,10 @@ fn part_tree_ui(
     fit: Res<CameraFitState>,
     stats: Res<SceneStats>,
     mut hidden: ResMut<HiddenParts>,
-    mut reload_events: EventWriter<ReloadShape>,
+    mut reload_events: MessageWriter<ReloadShape>,
     colliding: Res<CollidingParts>,
 ) {
-    let Some(ctx) = contexts.try_ctx_mut() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
     let mut toggles: Vec<(String, Visibility)> = Vec::new();
 
     egui::SidePanel::left("part_tree").min_width(200.0).show(ctx, |ui| {
@@ -760,7 +759,7 @@ fn part_tree_ui(
             }
         }
         if hidden.paths != snapshot {
-            reload_events.send(ReloadShape);
+            reload_events.write(ReloadShape);
         }
     }
 }
@@ -825,7 +824,7 @@ fn current_zoom_pct(
     fit_scale: f32,
 ) -> f32 {
     if fit_scale <= 0.0 { return 100.0; }
-    if let Ok(proj) = camera.get_single() {
+    if let Ok(proj) = camera.single() {
         if let Projection::Orthographic(ref ortho) = *proj {
             return fit_scale / ortho.scale * 100.0;
         }
@@ -839,7 +838,7 @@ fn set_zoom_from_pct(
     pct: f32,
 ) {
     if fit_scale <= 0.0 { return; }
-    if let Ok(mut proj) = camera.get_single_mut() {
+    if let Ok(mut proj) = camera.single_mut() {
         if let Projection::Orthographic(ortho) = proj.as_mut() {
             ortho.scale = fit_scale / (pct / 100.0);
         }
@@ -945,7 +944,7 @@ fn draw_tree_node(
                 child_name_path.push(name.clone());
             }
         }
-        for &child in children.iter() {
+        for child in children.iter() {
             if parts.get(child).is_ok() {
                 draw_tree_node(
                     ui, child, parts, toggles,
@@ -967,7 +966,7 @@ fn compute_tri_state(
     let self_visible = *vis != Visibility::Hidden;
 
     let child_parts: Vec<Entity> = children
-        .map(|c| c.iter().copied().filter(|e| parts.get(*e).is_ok()).collect())
+        .map(|c| c.iter().filter(|e| parts.get(*e).is_ok()).collect())
         .unwrap_or_default();
 
     if child_parts.is_empty() {
@@ -1002,7 +1001,7 @@ fn collect_subtree_paths(
         out.push(node_path.to_string());
     }
     if let Some(children) = children {
-        for &child in children.iter() {
+        for child in children.iter() {
             if let Ok((child_part, _, _)) = parts.get(child) {
                 let child_path = if let Some(ref name) = child_part.name {
                     if node_path.is_empty() { name.clone() } else { format!("{node_path}/{name}") }

@@ -6,7 +6,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Zoom Debug".into(),
-                resolution: bevy::window::WindowResolution::new(1100.0, 720.0),
+                resolution: bevy::window::WindowResolution::new(1100, 720),
                 ..default()
             }),
             ..default()
@@ -63,7 +63,7 @@ fn report_scale(
 ) {
     if *reported { return; }
 
-    let Ok((proj, cam)) = camera.get_single() else { return };
+    let Ok((proj, cam)) = camera.single() else { return };
     let viewport = cam.logical_viewport_size();
 
     if let Projection::Orthographic(ortho) = proj {

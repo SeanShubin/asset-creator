@@ -7,9 +7,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = "0.15.3"
-bevy_egui = "0.33"
-ron = "0.8"
+bevy = "0.18.1"
+bevy_egui = "0.39"
+ron = "0.12"
 serde = { version = "1", features = ["derive"] }
 image = "0.25"
 noise = "0.9"

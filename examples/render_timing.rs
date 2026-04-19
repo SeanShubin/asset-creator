@@ -39,11 +39,11 @@
 //! Output goes to `generated/render_timing/` and results are printed to stdout.
 
 use bevy::prelude::*;
-use bevy::render::camera::RenderTarget;
+use bevy::camera::RenderTarget;
+use bevy::camera::visibility::RenderLayers;
 use bevy::render::render_resource::{
     Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
-use bevy::render::view::RenderLayers;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use std::path::PathBuf;
 
@@ -59,7 +59,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Render Timing Test".into(),
-                resolution: bevy::window::WindowResolution::new(400.0, 400.0),
+                resolution: bevy::window::WindowResolution::new(400, 400),
                 ..default()
             }),
             ..default()
@@ -144,11 +144,11 @@ fn run_test(
     mut images: ResMut<Assets<Image>>,
     mut state: ResMut<TestState>,
     entities: Query<Entity>,
-    mut exit: EventWriter<AppExit>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     if state.current_trial >= TRIALS.len() {
         print_results(&state.results);
-        exit.send(AppExit::Success);
+        exit.write(AppExit::Success);
         return;
     }
 
@@ -171,8 +171,8 @@ fn run_test(
             state.results.push((trial.name.to_string(), result));
 
             for &e in &state.entities {
-                if let Some(ec) = commands.get_entity(e) {
-                    ec.despawn_recursive();
+                if let Ok(mut ec) = commands.get_entity(e) {
+                    ec.despawn();
                 }
             }
             state.entities.clear();
@@ -272,10 +272,10 @@ fn spawn_test_camera(
     let mut cam_ec = commands.spawn((
         Camera3d::default(),
         Camera {
-            target: RenderTarget::Image(handle.clone().into()),
             clear_color: ClearColorConfig::Custom(Color::NONE),
             ..default()
         },
+        RenderTarget::Image(handle.clone().into()),
         Projection::Orthographic(OrthographicProjection {
             scale: 0.003,
             ..OrthographicProjection::default_3d()
@@ -303,9 +303,9 @@ fn spawn_test_camera(
 // Analysis and output
 // =====================================================================
 
-fn save_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>) {
-    move |trigger| {
-        let img = trigger.event().0.clone();
+fn save_with_alpha(path: PathBuf) -> impl FnMut(On<ScreenshotCaptured>) {
+    move |on| {
+        let img = on.event().image.clone();
         if let Ok(dyn_img) = img.try_into_dynamic() {
             let rgba = dyn_img.to_rgba8();
             let _ = rgba.save_with_format(&path, image::ImageFormat::Png);

@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages};
-use bevy::render::camera::RenderTarget;
-use bevy::render::view::RenderLayers;
+use bevy::camera::RenderTarget;
+use bevy::camera::visibility::RenderLayers;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use std::path::{Path, PathBuf};
 
-use crate::editor::compute_camera_pose;
+use crate::editor::{compute_camera_pose, fit_for_aabb};
 use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{collect_occupancy, aabb_for_parts, spawn_shape_with_layers};
 
@@ -175,8 +175,8 @@ fn process_render_queue(
             let cleanup = active.cleanup_entities.clone();
             queue.active = None;
             for entity in cleanup {
-                if let Some(ec) = commands.get_entity(entity) {
-                    ec.despawn_recursive();
+                if let Ok(mut ec) = commands.get_entity(entity) {
+                    ec.despawn();
                 }
             }
         }
@@ -192,10 +192,21 @@ fn process_render_queue(
 
     let image_handle = create_render_target(&mut images);
     let export_layer = RenderLayers::layer(EXPORT_RENDER_LAYER);
-    let fit_scale = compute_fit_from_parts(shape, &registry);
-    let shape_center = aabb_for_parts(shape, &registry)
-        .map(|b| { let c = b.center_f32(); Vec3::new(c.0, c.1, c.2) })
-        .unwrap_or(Vec3::ZERO);
+    let viewport_size = Vec2::new(RENDER_SIZE as f32, RENDER_SIZE as f32);
+    let (fit_scale, shape_center) = match aabb_for_parts(shape, &registry).and_then(|aabb| {
+        let min = aabb.min();
+        let max = aabb.max();
+        fit_for_aabb(
+            Vec3::new(min.0 as f32, min.1 as f32, min.2 as f32),
+            Vec3::new(max.0 as f32, max.1 as f32, max.2 as f32),
+            viewport_size,
+            DEFAULT_YAW, DEFAULT_PITCH,
+            0.0,
+        )
+    }) {
+        Some(r) => (r.scale, r.target),
+        None => (0.01, Vec3::ZERO),
+    };
 
     let camera = spawn_export_camera(&mut commands, &image_handle, fit_scale, shape_center, &export_layer);
     let light = spawn_export_light(&mut commands, &export_layer);
@@ -256,10 +267,10 @@ fn spawn_export_camera(
         ExportEntity,
         Camera3d::default(),
         Camera {
-            target: RenderTarget::Image(image_handle.clone().into()),
             clear_color: ClearColorConfig::Custom(Color::NONE),
             ..default()
         },
+        RenderTarget::Image(image_handle.clone().into()),
         Projection::Orthographic(OrthographicProjection {
             scale: fit_scale,
             ..OrthographicProjection::default_3d()
@@ -278,9 +289,9 @@ fn spawn_export_light(commands: &mut Commands, layer: &RenderLayers) -> Entity {
     )).id()
 }
 
-fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>) {
-    move |trigger| {
-        let img = trigger.event().0.clone();
+fn save_png_with_alpha(path: PathBuf) -> impl FnMut(On<ScreenshotCaptured>) {
+    move |on| {
+        let img = on.event().image.clone();
         match img.try_into_dynamic() {
             Ok(dyn_img) => {
                 let rgba = dyn_img.to_rgba8();
@@ -299,38 +310,3 @@ fn save_png_with_alpha(path: PathBuf) -> impl FnMut(Trigger<ScreenshotCaptured>)
     }
 }
 
-fn compute_fit_from_parts(shape: &[crate::shape::SpecNode], registry: &crate::registry::AssetRegistry) -> f32 {
-    let aabb = aabb_for_parts(shape, registry);
-    let Some(aabb) = aabb else { return 0.01 };
-
-    let center = aabb.center_f32();
-    let shape_center = Vec3::new(center.0, center.1, center.2);
-    let min = aabb.min();
-    let max = aabb.max();
-
-    let (cam_pos, _) = compute_camera_pose(DEFAULT_YAW, DEFAULT_PITCH, shape_center);
-    let view = Transform::from_translation(cam_pos)
-        .looking_at(shape_center, Vec3::Y)
-        .compute_matrix()
-        .inverse();
-
-    let mut view_min = Vec3::splat(f32::MAX);
-    let mut view_max = Vec3::splat(f32::MIN);
-
-    for &x in &[min.0 as f32, max.0 as f32] {
-        for &y in &[min.1 as f32, max.1 as f32] {
-            for &z in &[min.2 as f32, max.2 as f32] {
-                let view_pos = view.transform_point3(Vec3::new(x, y, z));
-                view_min = view_min.min(view_pos);
-                view_max = view_max.max(view_pos);
-            }
-        }
-    }
-
-    let proj_width = view_max.x - view_min.x;
-    let proj_height = view_max.y - view_min.y;
-
-    if proj_width < 0.001 && proj_height < 0.001 { return 0.01; }
-
-    proj_width.max(proj_height) / RENDER_SIZE as f32
-}

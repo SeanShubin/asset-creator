@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy::render::view::RenderLayers;
+use bevy::camera::visibility::RenderLayers;
 use crate::registry::AssetRegistry;
 use super::animation::ShapeAnimator;
 use super::render::{compile, CompiledShape, FusedMesh};
@@ -138,7 +138,7 @@ fn validate_names(node: &SpecNode, path: &str) {
 
 pub fn despawn_shape(commands: &mut Commands, roots: &[Entity]) {
     for &e in roots {
-        commands.entity(e).despawn_recursive();
+        commands.entity(e).despawn();
     }
 }
 

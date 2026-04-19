@@ -6,7 +6,7 @@ pub struct PanZoomCamera;
 
 pub fn zoom_camera(
     mut camera: Query<&mut Projection, With<PanZoomCamera>>,
-    mut scroll: EventReader<MouseWheel>,
+    mut scroll: MessageReader<MouseWheel>,
 ) {
     for ev in scroll.read() {
         for mut projection in &mut camera {

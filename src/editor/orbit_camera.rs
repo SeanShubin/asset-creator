@@ -74,14 +74,14 @@ pub fn spawn_orbit_camera<M: Component>(commands: &mut Commands, marker: M) {
 
 pub fn read_camera_input(
     mouse: Res<ButtonInput<MouseButton>>,
-    mut motion: EventReader<MouseMotion>,
-    mut scroll: EventReader<MouseWheel>,
+    mut motion: MessageReader<MouseMotion>,
+    mut scroll: MessageReader<MouseWheel>,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut contexts: EguiContexts,
     mut intent: ResMut<CameraIntent>,
 ) {
-    let egui_wants = contexts.ctx_mut().wants_pointer_input();
+    let egui_wants = contexts.ctx_mut().map(|c| c.wants_pointer_input()).unwrap_or(false);
 
     // Reset intent each frame
     *intent = CameraIntent::default();
@@ -127,7 +127,7 @@ pub fn apply_orbit(
     mut orbit: ResMut<OrbitState>,
     mut camera: Query<(&mut Transform, &Projection), With<OrbitCamera>>,
 ) {
-    let Ok((mut tf, proj)) = camera.get_single_mut() else { return };
+    let Ok((mut tf, proj)) = camera.single_mut() else { return };
     let scale = orthographic_scale(proj);
 
     // Apply orbit
@@ -173,6 +173,70 @@ pub fn compute_camera_pose(yaw: f32, pitch: f32, target: Vec3) -> (Vec3, Quat) {
     let rotation = Quat::from_euler(EulerRot::YXZ, yaw_rad, -pitch_rad, 0.0);
     let position = target + rotation * Vec3::new(0.0, 0.0, ISO_DISTANCE);
     (position, rotation)
+}
+
+// =====================================================================
+// AABB → orthographic camera fit
+// =====================================================================
+
+/// Result of fitting an orthographic camera to an AABB at a given view angle.
+pub struct FitResult {
+    /// Orthographic projection scale that frames the AABB in `viewport_size`.
+    pub scale: f32,
+    /// AABB center — the camera should look at this point.
+    pub target: Vec3,
+}
+
+/// Compute the orthographic scale and look-at target that frames an AABB
+/// in a given viewport at the given view angles. The AABB's eight corners
+/// are projected into view space and the actual screen-space extents are
+/// measured (no cube approximation). The constraining dimension fills the
+/// viewport with `border_pct` margin per side; the non-constraining
+/// dimension has at least that much margin.
+pub fn fit_for_aabb(
+    min: Vec3,
+    max: Vec3,
+    viewport_size: Vec2,
+    yaw_deg: f32,
+    pitch_deg: f32,
+    border_pct: f32,
+) -> Option<FitResult> {
+    if viewport_size.x <= 0.0 || viewport_size.y <= 0.0 { return None; }
+    let size = max - min;
+    if size.length() < 0.001 { return None; }
+
+    let target = (min + max) * 0.5;
+
+    let (cam_pos, _) = compute_camera_pose(yaw_deg, pitch_deg, target);
+    let view_inv = Transform::from_translation(cam_pos)
+        .looking_at(target, Vec3::Y)
+        .to_matrix()
+        .inverse();
+
+    let mut view_min = Vec3::splat(f32::MAX);
+    let mut view_max = Vec3::splat(f32::MIN);
+    for &x in &[min.x, max.x] {
+        for &y in &[min.y, max.y] {
+            for &z in &[min.z, max.z] {
+                let view_pos = view_inv.transform_point3(Vec3::new(x, y, z));
+                view_min = view_min.min(view_pos);
+                view_max = view_max.max(view_pos);
+            }
+        }
+    }
+
+    let proj_width = view_max.x - view_min.x;
+    let proj_height = view_max.y - view_min.y;
+    if proj_width < 0.001 && proj_height < 0.001 { return None; }
+
+    let border_mult = 1.0 + border_pct * 2.0;
+    let scale_for_width = proj_width * border_mult / viewport_size.x;
+    let scale_for_height = proj_height * border_mult / viewport_size.y;
+
+    Some(FitResult {
+        scale: scale_for_width.max(scale_for_height),
+        target,
+    })
 }
 
 /// Compute the directional light rotation for a given camera yaw/pitch.

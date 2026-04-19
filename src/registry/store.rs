@@ -172,13 +172,13 @@ impl Default for RegistryPlugin {
 // Events — UI code fires these, registry handles the I/O
 // =====================================================================
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct SaveSurface {
     pub name: String,
     pub data: SurfaceDef,
 }
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct DeleteSurface {
     pub name: String,
 }
@@ -205,14 +205,14 @@ impl Plugin for RegistryPlugin {
 
         app.insert_resource(registry)
             .insert_resource(FileWatcher::new(data_dir))
-            .add_event::<SaveSurface>()
-            .add_event::<DeleteSurface>()
+            .add_message::<SaveSurface>()
+            .add_message::<DeleteSurface>()
             .add_systems(Update, (poll_file_changes, handle_save_surface, handle_delete_surface));
     }
 }
 
 fn handle_save_surface(
-    mut events: EventReader<SaveSurface>,
+    mut events: MessageReader<SaveSurface>,
     mut registry: ResMut<AssetRegistry>,
 ) {
     for event in events.read() {
@@ -228,7 +228,7 @@ fn handle_save_surface(
 }
 
 fn handle_delete_surface(
-    mut events: EventReader<DeleteSurface>,
+    mut events: MessageReader<DeleteSurface>,
     mut registry: ResMut<AssetRegistry>,
 ) {
     for event in events.read() {

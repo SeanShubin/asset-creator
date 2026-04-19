@@ -3,7 +3,7 @@
 //! This module owns the authored data model: the `SpecNode` tree loaded
 //! from `.shape.ron` files, occupancy (cell-level collision detection),
 //! and AABB computation. All spatial data here is integer. Float
-//! conversions for camera positioning (`Bounds::center_f32`) and CSG
+//! conversions for CSG
 //! cell-in-primitive checks (delegated to `super::csg`) are isolated
 //! escape hatches.
 //!
@@ -286,16 +286,6 @@ pub fn compose_orient(ops: &[SymOp]) -> Placement {
 pub struct Bounds(pub i32, pub i32, pub i32, pub i32, pub i32, pub i32);
 
 impl Bounds {
-    /// Center as float — used for camera positioning and render export.
-    /// This is the one float escape hatch and it is NEVER called during
-    /// spec-side processing.
-    pub fn center_f32(&self) -> (f32, f32, f32) {
-        (
-            (self.0 + self.3) as f32 / 2.0,
-            (self.1 + self.4) as f32 / 2.0,
-            (self.2 + self.5) as f32 / 2.0,
-        )
-    }
 
     pub fn size(&self) -> (i32, i32, i32) {
         (

@@ -154,9 +154,9 @@ fn collect_named_parts(
     map: &mut HashMap<String, Vec<Entity>>,
 ) {
     for child in children.iter() {
-        if let Ok((part, grandchildren)) = parts.get(*child) {
+        if let Ok((part, grandchildren)) = parts.get(child) {
             if let Some(ref name) = part.name {
-                map.entry(name.clone()).or_default().push(*child);
+                map.entry(name.clone()).or_default().push(child);
             }
             if let Some(gc) = grandchildren {
                 collect_named_parts(gc, parts, map);

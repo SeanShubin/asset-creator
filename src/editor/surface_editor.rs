@@ -2,7 +2,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 
 use crate::browser::ActiveEditor;
 use crate::registry::{AssetRegistry, SaveSurface};
@@ -22,24 +22,20 @@ impl Plugin for SurfaceEditorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SurfaceEditorState>()
             .init_resource::<EditorDirty>()
+            // Phase 1 runs in Update; the egui-touching parameter_ui and the
+            // dirty-flag consumers run in EguiPrimaryContextPass so they're
+            // ordered together with parameter_ui on the same frame.
             .add_systems(Update, (
-                // Phase 1: detect changes from activation or registry
-                (
-                    handle_activation,
-                    sync_from_registry.run_if(is_surface_active),
-                ),
-                // Phase 2: UI reads/writes surface params
-                parameter_ui.run_if(is_surface_active),
-                // Phase 3: apply dirty flags
-                (
-                    regenerate_preview.run_if(is_surface_active),
-                    persist_to_file.run_if(is_surface_active),
-                ),
+                handle_activation,
+                sync_from_registry.run_if(is_surface_active),
             ).chain())
-            .add_systems(Update, (
-                zoom_camera.run_if(is_surface_active),
-                pan_camera.run_if(is_surface_active),
-            ));
+            .add_systems(EguiPrimaryContextPass, (
+                parameter_ui.run_if(is_surface_active),
+                regenerate_preview.run_if(is_surface_active),
+                persist_to_file.run_if(is_surface_active),
+            ).chain())
+            .add_systems(Update, zoom_camera.run_if(is_surface_active))
+            .add_systems(EguiPrimaryContextPass, pan_camera.run_if(is_surface_active));
     }
 }
 
@@ -147,7 +143,7 @@ fn spawn_editor(commands: &mut Commands, images: &mut ResMut<Assets<Image>>) {
 
 fn despawn_editor(commands: &mut Commands, entities: &Query<Entity, With<SurfaceEditorEntity>>) {
     for entity in entities {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -184,11 +180,11 @@ fn regenerate_preview(
     if !dirty.preview { return; }
     dirty.preview = false;
 
-    let Ok(sprite) = sprites.get_single() else { return };
+    let Ok(sprite) = sprites.single() else { return };
     let Some(image) = images.get_mut(&sprite.image) else { return };
 
     let pixels = surface::render_surface(&state.surface, PREVIEW_SIZE, PREVIEW_SIZE);
-    image.data = pixels;
+    image.data = Some(pixels);
 }
 
 // =====================================================================
@@ -198,12 +194,12 @@ fn regenerate_preview(
 fn persist_to_file(
     mut dirty: ResMut<EditorDirty>,
     state: Res<SurfaceEditorState>,
-    mut save_events: EventWriter<SaveSurface>,
+    mut save_events: MessageWriter<SaveSurface>,
 ) {
     if !dirty.file { return; }
     dirty.file = false;
 
-    save_events.send(SaveSurface {
+    save_events.write(SaveSurface {
         name: state.surface.name.clone(),
         data: state.surface.clone(),
     });
@@ -219,7 +215,7 @@ fn parameter_ui(
     mut dirty: ResMut<EditorDirty>,
     registry: Res<AssetRegistry>,
 ) {
-    let ctx = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else { return };
 
     egui::SidePanel::left("surface_params").min_width(280.0).show(ctx, |ui| {
         ui.heading("Surface Editor");
@@ -404,12 +400,12 @@ fn pan_camera(
     mut camera: Query<(&mut Transform, &Projection), With<PanZoomCamera>>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut motion: EventReader<MouseMotion>,
+    mut motion: MessageReader<MouseMotion>,
     time: Res<Time>,
     mut contexts: EguiContexts,
 ) {
-    let egui_wants = contexts.ctx_mut().wants_pointer_input();
-    let Ok((mut transform, projection)) = camera.get_single_mut() else { return };
+    let egui_wants = contexts.ctx_mut().map(|c| c.wants_pointer_input()).unwrap_or(false);
+    let Ok((mut transform, projection)) = camera.single_mut() else { return };
     let scale = match projection {
         Projection::Orthographic(o) => o.scale,
         _ => 1.0,

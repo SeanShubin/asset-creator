@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, PrimitiveTopology};
 
 use super::spec::PrimitiveShape;
 
@@ -34,7 +34,7 @@ impl RawMesh {
         world_tf: &Transform,
         color: [f32; 4],
     ) {
-        let mat = world_tf.compute_matrix();
+        let mat = world_tf.to_matrix();
         let normal_mat = mat.inverse().transpose();
         let base = self.positions.len() as u32;
 

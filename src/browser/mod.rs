@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, egui};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use std::path::PathBuf;
 
 use crate::registry::{AssetRegistry, DeleteSurface, SaveSurface};
@@ -74,7 +74,7 @@ pub struct BrowserPlugin;
 impl Plugin for BrowserPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveEditor>()
-            .add_systems(Update, browser_ui);
+            .add_systems(EguiPrimaryContextPass, browser_ui);
     }
 }
 
@@ -86,10 +86,10 @@ pub(crate) fn browser_ui(
     mut contexts: EguiContexts,
     registry: Res<AssetRegistry>,
     mut active: ResMut<ActiveEditor>,
-    mut save_events: EventWriter<SaveSurface>,
-    mut delete_events: EventWriter<DeleteSurface>,
+    mut save_events: MessageWriter<SaveSurface>,
+    mut delete_events: MessageWriter<DeleteSurface>,
 ) {
-    let Some(ctx) = contexts.try_ctx_mut() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
 
     egui::SidePanel::right("asset_browser").min_width(180.0).max_width(250.0).show(ctx, |ui| {
         ui.heading("Assets");
@@ -114,8 +114,8 @@ fn surface_list(
     ui: &mut egui::Ui,
     registry: &AssetRegistry,
     active: &mut ActiveEditor,
-    save_events: &mut EventWriter<SaveSurface>,
-    delete_events: &mut EventWriter<DeleteSurface>,
+    save_events: &mut MessageWriter<SaveSurface>,
+    delete_events: &mut MessageWriter<DeleteSurface>,
 ) {
     ui.label("Surfaces");
 
@@ -136,7 +136,7 @@ fn surface_list(
     }
 
     if let Some(ref name) = to_delete {
-        delete_events.send(DeleteSurface { name: name.clone() });
+        delete_events.write(DeleteSurface { name: name.clone() });
         if matches!(&*active, ActiveEditor::Surface { name: n } if n == name) {
             *active = ActiveEditor::None;
         }
@@ -148,7 +148,7 @@ fn surface_list(
         let mut surface = crate::surface::SurfaceDef::default();
         surface.name = new_name.clone();
 
-        save_events.send(SaveSurface { name: new_name.clone(), data: surface });
+        save_events.write(SaveSurface { name: new_name.clone(), data: surface });
         *active = ActiveEditor::Surface { name: new_name };
     }
 }

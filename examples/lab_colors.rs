@@ -10,12 +10,12 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "RGB Color Grid".into(),
-                resolution: bevy::window::WindowResolution::new(1200.0, 900.0),
+                resolution: bevy::window::WindowResolution::new(1200, 900),
                 ..default()
             }),
             ..default()
         }))
-        .add_plugins(EguiPlugin)
+        .add_plugins(EguiPlugin::default())
         .init_resource::<ColorGridState>()
         .add_systems(Update, ui_system)
         .run();
@@ -118,7 +118,7 @@ fn ui_system(
     mut contexts: EguiContexts,
     mut state: ResMut<ColorGridState>,
 ) {
-    let ctx = contexts.ctx_mut();
+    let Ok(ctx) = contexts.ctx_mut() else { return };
 
     let mut colors = generate_palette(state.steps);
     let sort_by = state.sort_by;
