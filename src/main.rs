@@ -1,4 +1,3 @@
-mod browser;
 mod editor;
 mod logging;
 mod registry;
@@ -10,12 +9,19 @@ mod util;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
+use std::path::PathBuf;
 
-// Dedicated render layer for the egui-context placeholder camera. Keeps it
-// out of the default layer 0, so 3D gizmos (which default to layer 0) aren't
-// also picked up by the placeholder's 2D pipeline and rendered as a tiny
-// projected thumbnail at the viewport center.
-const PLACEHOLDER_LAYER: usize = 31;
+use editor::CurrentShape;
+use registry::AssetRegistry;
+
+// bevy_egui 0.39 attaches the primary egui context to the first spawned
+// camera and renders egui via that camera's render graph. Empirically,
+// using the orbit Camera3d as the host produces a broken UI (panel
+// mispositioned, 3D viewport blank). A dedicated Camera2d hosts egui;
+// the orbit Camera3d (default order=0) renders the scene on top. The
+// placeholder lives on a non-default render layer so 3D gizmos (default
+// layer 0) aren't double-rendered as a viewport-center thumbnail.
+const EGUI_HOST_LAYER: usize = 31;
 
 fn main() {
     logging::init();
@@ -41,33 +47,38 @@ fn main() {
         EguiPlugin::default(),
         registry::RegistryPlugin::default(),
         shape::ShapePlugin,
-        browser::BrowserPlugin,
         editor::ObjectEditorPlugin,
         render_export::RenderExportPlugin,
     ));
 
-    if let Some(editor) = browser::resolve_from_cli() {
-        app.insert_resource(editor);
-    }
+    let initial_path = resolve_initial_shape().or_else(|| {
+        // No CLI shape specified — auto-load the first one in the registry
+        // so the viewport isn't empty on startup.
+        app.world()
+            .resource::<AssetRegistry>()
+            .shape_entries()
+            .first()
+            .map(|(_, path)| path.clone())
+    });
+    app.insert_resource(CurrentShape { path: initial_path });
 
-    // bevy_egui 0.39 attaches the primary egui context to the first spawned
-    // camera and renders egui via that camera's render graph. Editors spawn
-    // their own cameras on activation, but the browser panel needs egui to
-    // work before any editor is active. This placeholder owns the egui
-    // context for the lifetime of the app. It runs at order=-1 so it draws
-    // first (clearing the screen), and editor cameras (default order=0)
-    // draw their content on top. It lives on a dedicated render layer so
-    // that 3D gizmos (default layer 0) aren't also drawn via its 2D
-    // pipeline as a tiny thumbnail.
     app.add_systems(Startup, |mut commands: Commands| {
         commands.spawn((
             Camera2d,
             Camera { order: -1, ..default() },
-            RenderLayers::layer(PLACEHOLDER_LAYER),
+            RenderLayers::layer(EGUI_HOST_LAYER),
         ));
     });
 
     info!("starting app");
     app.run();
     info!("clean exit");
+}
+
+/// Resolve the initial shape from CLI args: first positional argument wins.
+fn resolve_initial_shape() -> Option<PathBuf> {
+    std::env::args()
+        .skip(1)
+        .find(|a| !a.starts_with('-') && a.ends_with(".ron"))
+        .map(PathBuf::from)
 }

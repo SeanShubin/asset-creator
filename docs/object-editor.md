@@ -1,146 +1,104 @@
 # Object Editor
 
-Live edit and preview 3D objects defined in RON format, with support for animations, hierarchical part trees, imports, and symmetry combinators.
+Live edit and preview 3D objects defined in RON format, with support for animations, hierarchical part trees, imports, and symmetry.
 
 ## Overview
 
-The object editor loads a RON shape file and renders it as a tree of Bevy entities with meshes and materials. Changes to the RON file can be hot-reloaded, and the part tree is displayed in an egui side panel where individual parts can be toggled, inspected, and animated.
+The object editor loads `.shape.ron` files and renders each as a tree of Bevy entities with meshes. The shape list, camera controls, animation state, and part tree all live in the left side panel; the central viewport renders the selected shape. External edits to the file hot-reload within ~500ms.
 
 ## Shape Definition Format
 
-A `.shape.ron` file is a `ShapeNode` directly -- no wrapper struct needed:
+A `.shape.ron` file is a `Vec<SpecNode>` — a flat array of parts. Each part may have nested `children`.
 
 ```ron
-(
-    name: "robot",
-    children: [
-        (
-            name: "chassis",
-            shape: Box,
-            bounds: (-0.35, 0.375, -0.25, 0.35, 0.725, 0.25),
-            color: (0.45, 0.45, 0.50),
-            children: [
-                (
-                    name: "head",
-                    shape: Sphere,
-                    bounds: (-0.18, 0.725, -0.18, 0.18, 1.085, 0.18),
-                    color: (0.55, 0.55, 0.60),
-                    children: [
-                        (
-                            name: "eye",
-                            shape: Sphere,
-                            bounds: (-0.06, 0.87, 0.09, 0.06, 0.99, 0.21),
-                            color: (0.9, 0.2, 0.1),
-                            emissive: true,
-                        ),
-                    ],
-                ),
-                (
-                    name: "arm",
-                    shape: Box,
-                    bounds: (0.35, 0.475, -0.06, 0.47, 0.875, 0.06),
-                    color: (0.25, 0.25, 0.28),
-                    mirror: [X],
-                ),
-            ],
-        ),
-    ],
-    animations: [
-        (
-            name: "walk",
-            channels: [
-                (part: "arm", property: Rotation, axis: X,
-                 motion: Oscillate(amplitude: 0.25, speed: 10.0, offset: 0.0)),
-            ],
-        ),
-    ],
-)
+[
+    (
+        name: "chassis",
+        bounds: (-2, 0, -1, 2, 1, 1),
+        tags: ["green3"],
+        children: [
+            (
+                name: "head",
+                bounds: (-1, 1, -1, 1, 2, 1),
+                tags: ["red2"],
+            ),
+        ],
+    ),
+    (
+        name: "wheel",
+        import: "wheel",
+        bounds: (1, 0, -2, 2, 1, -1),
+        symmetry: [MirrorX, MirrorZ],
+    ),
+]
 ```
 
-## Primitive Shapes
+## Primitives
 
-Primitives have no parameters -- all sizing comes from `bounds`.
+A bounded node's primitive is inferred from the presence (or absence) of `corner`, `clip`, or `faces`:
 
-| Shape      | Description                                |
-| ---------- | ------------------------------------------ |
-| `Box`      | Axis-aligned cuboid                        |
-| `Sphere`   | UV sphere                                  |
-| `Cylinder` | Cylinder along its orient axis (default Y) |
-| `Dome`     | Half-sphere along its orient axis          |
-| `Cone`     | Cone along its orient axis                 |
-| `Wedge`    | Triangular prism (ramp shape)              |
-| `Torus`    | Torus around its orient axis               |
+| Primitive       | How to specify                             | Geometry                                            |
+| --------------- | ------------------------------------------ | --------------------------------------------------- |
+| `Box`           | (no `corner`/`clip`/`faces` field)         | Fills the entire bounds                             |
+| `Wedge`         | `faces: (Face, Face)` — two adjacent faces | Triangular prism; the two faces are the filled half |
+| `Corner`        | `corner: (Face, Face, Face)` — three faces | Tetrahedron with vertex at the meeting corner       |
+| `InverseCorner` | `clip: (Face, Face, Face)` — three faces   | Box minus one corner (complement of `Corner`)       |
+
+Faces are `MinX`, `MaxX`, `MinY`, `MaxY`, `MinZ`, `MaxZ`. For Wedge, the two faces share an edge that becomes the slope. For Corner / InverseCorner, the three faces meet at the relevant vertex.
 
 ## Node Properties
 
-| Property     | Type                             | Description                                                                                                  |
-| ------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `name`       | `String`                         | Identifier used for animation targeting and UI display                                                       |
-| `shape`      | `PrimitiveShape`                 | Optional geometry for this node (Box, Sphere, Cylinder, Dome, Cone, Wedge, Torus)                            |
-| `bounds`     | `(f32, f32, f32, f32, f32, f32)` | Two corners of the bounding box `(x1, y1, z1, x2, y2, z2)`. Shape fills the box; center determines position. |
-| `color`      | `(f32, f32, f32)`                | RGB color (0.0-1.0), used when no surface is specified                                                       |
-| `surface`    | `String`                         | Name of a [surface](surface-editor.md) to apply to this part                                                 |
-| `emissive`   | `bool`                           | Whether the material emits light                                                                             |
-| `orient`     | `SignedAxis`                     | Signed axis (X, -X, Y, -Y, Z, -Z) for directional shapes (Cylinder, Cone, Dome, Torus). Default Y.           |
-| `rotate`     | `(f32, Axis)`                    | Static rotation in degrees around an axis. Converted to radians internally.                                  |
-| `import`     | `String`                         | Name of another `.shape.ron` file to import. The imported shape is scaled to fit the placement bounds.       |
-| `children`   | `[ShapeNode]`                    | Child nodes in the hierarchy                                                                                 |
-| `mirror`     | `[Axis]`                         | List of axes to mirror across. `[X]` = 2 copies, `[X, Z]` = 4, `[X, Y, Z]` = 8.                              |
-| `repeat`     | `RepeatSpec`                     | Repeat this node along an axis                                                                               |
-| `animations` | `[Animation]`                    | Named animation states with per-part motion channels (can be on any node)                                    |
-| `decals`     | `[DecalInstance]`                | [Decals](decal-editor.md) applied to this part's geometry                                                    |
+| Property     | Type                | Description                                                                                                  |
+| ------------ | ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `name`       | `Option<String>`    | Identifier used for animation targeting and UI display                                                       |
+| `bounds`     | `Option<Bounds>`    | Two integer corners `(x1, y1, z1, x2, y2, z2)`. Required for any node that contributes geometry.             |
+| `faces`      | `Option<[Face; 2]>` | Specifies a Wedge primitive (see above)                                                                      |
+| `corner`     | `Option<[Face; 3]>` | Specifies a Corner primitive (see above)                                                                     |
+| `clip`       | `Option<[Face; 3]>` | Specifies an InverseCorner primitive (see above)                                                             |
+| `tags`       | `Vec<String>`       | Free-form tags for shared appearance. Recorded but not yet consumed visually.                                |
+| `import`     | `Option<String>`    | Name of another `.shape.ron` file to import. Imported shape is remapped to fit `bounds` via integer scaling. |
+| `children`   | `Vec<SpecNode>`     | Child nodes in the hierarchy                                                                                 |
+| `rotate`     | `Vec<SymOp>`        | Pre-symmetry orientation transforms, composed left-to-right                                                  |
+| `symmetry`   | `Vec<SymOp>`        | Symmetry generators. The system takes the closure and deduplicates by canonical bounds + CSG signature.      |
+| `subtract`   | `bool`              | If true, this part's volume is removed from sibling/parent geometry instead of added                         |
+| `animations` | `Vec<AnimState>`    | Named animation states with per-part motion channels (can be on any node)                                    |
+
+`SymOp` values: `MirrorX`, `MirrorY`, `MirrorZ`, `Rotate90_XY`, `Rotate90_XZ`, `Rotate90_YZ`, `Rotate180_XY`, `Rotate180_XZ`, `Rotate180_YZ`. All operations are signed axis permutations and preserve integer coordinates.
 
 ## Imports
 
-Imports reference another `.shape.ron` file by name. The imported shape is scaled to fit the placement bounds:
+Imports reference another `.shape.ron` file by name. The imported shape's native AABB is remapped onto the placement `bounds` using only integer multiplication — no division or rounding, so coordinates stay exact.
 
 ```ron
-(
-    name: "vehicle",
-    children: [
-        (name: "front_wheel", import: "wheel",
-         bounds: (0.4, 0.0, 0.15, 0.6, 0.36, 0.45),
-         mirror: [X]),
-        (name: "rear_wheel", import: "wheel",
-         bounds: (0.4, 0.0, -0.45, 0.6, 0.36, -0.15),
-         mirror: [X]),
-    ],
-)
+[
+    (name: "front_wheel", import: "wheel",
+     bounds: (1, 0, -2, 2, 1, -1),
+     symmetry: [MirrorX]),
+    (name: "rear_wheel", import: "wheel",
+     bounds: (-2, 0, -2, -1, 1, -1),
+     symmetry: [MirrorX]),
+]
 ```
 
-## Mirror Combinator
+If `bounds` is omitted on an import, the registry resolves the imported shape's own AABB and uses that.
 
-The `mirror` property takes a list of axes and duplicates a node (and all its children) reflected across each axis. This is how you define symmetric robots, vehicles, or creatures with a single arm/leg definition:
+## Symmetry
 
-```ron
-(
-    name: "arm",
-    shape: Box,
-    bounds: (0.35, 0.475, -0.06, 0.47, 0.875, 0.06),
-    mirror: [X],  // creates a second arm mirrored across X (2 copies total)
-)
-```
+The `symmetry` field applies signed-axis permutations to the node's bounds and inferred primitive, takes the closure under composition, and deduplicates copies whose canonical bounds + CSG signature match. Common patterns:
 
-Multiple axes multiply copies: `[X]` = 2, `[X, Z]` = 4, `[X, Y, Z]` = 8.
+| Generators                                | Resulting copies | Use case             |
+| ----------------------------------------- | ---------------- | -------------------- |
+| `[MirrorX]`                               | 2                | Bilateral symmetry   |
+| `[MirrorX, MirrorZ]`                      | 4                | Quadrant symmetry    |
+| `[MirrorX, MirrorY, MirrorZ]`             | 8                | Octant symmetry      |
+| `[Rotate90_XZ]`                           | 4                | 4-fold rotational    |
+| `[Rotate90_XY, Rotate90_XZ, Rotate90_YZ]` | 24               | Full cube rotational |
 
-## Repeat Combinator
-
-The `repeat` property duplicates a node multiple times along an axis:
-
-```ron
-(
-    name: "segment",
-    shape: Box,
-    bounds: (-0.05, -0.05, -0.05, 0.05, 0.05, 0.05),
-    repeat: (count: 5, spacing: 0.15, along: Z, center: true),
-)
-```
-
-Repeat duplicates the entire subtree. If a repeated node has children, every copy includes all children.
+Deduplication means a centered Box with `[MirrorX]` produces 1 copy, not 2 — the mirrored copy is identical to the original.
 
 ## Animation System
 
-Animations are defined as named states, each containing channels that target specific parts by name. Any node can have an `animations` field -- it is not limited to the root node.
+Animations are named states. Each state contains channels that target parts by name. Any node can carry an `animations` field — it is not limited to the root.
 
 ### Motion Types
 
@@ -157,17 +115,10 @@ Animations are defined as named states, each containing channels that target spe
 | `Rotation`    | Rotate around the specified axis (radians) |
 | `Translation` | Translate along the specified axis         |
 
-### Example: Multi-state Animation
+### Example
 
 ```ron
 animations: [
-    (
-        name: "idle",
-        channels: [
-            (part: "head", property: Rotation, axis: Y,
-             motion: Oscillate(amplitude: 0.1, speed: 2.0, offset: 0.0)),
-        ],
-    ),
     (
         name: "walk",
         channels: [
@@ -180,37 +131,36 @@ animations: [
 ]
 ```
 
-## Part Tree UI
+## Left-Panel UI
 
-The egui side panel displays the full part hierarchy with:
+The left side panel contains, top to bottom:
 
-- Tri-state visibility toggles: `[+]` visible, `[-]` hidden, `[~]` mixed
-- Clicking a node toggles visibility for the entire subtree
-- Ancestor nodes are automatically shown when revealing a hidden subtree
-- Animation state selector and speed slider
+1. **Shape list.** Click to load. Reloads the editor view with the selected shape.
+2. **Camera controls.** Yaw / pitch / zoom drag-values, six fixed-view buttons (Front / Right / Top / Back / Left / Bottom) plus Reset.
+3. **Animation controls.** Animation state selector and speed slider (only visible when the loaded shape has animations).
+4. **Part tree.** Tri-state visibility toggles per node:
+   - `[+]` visible, `[-]` hidden, `[~]` mixed
+   - Clicking a node toggles visibility for the entire subtree
+   - Subtractive parts render in blue; parts involved in cell collisions render in red
+5. **Errors.** Per-file parse errors when any are present.
 
 ## Camera Controls
 
-| Input             | Action                                   |
-| ----------------- | ---------------------------------------- |
-| Left mouse drag   | Orbit camera                             |
-| Middle mouse drag | Pan camera                               |
-| Scroll wheel      | Zoom (orthographic scale)                |
-| Arrow keys        | Orbit camera                             |
-| R                 | Reload shape file                        |
-| F1                | Toggle debug gizmos (part origins, axes) |
-| Tab               | Cycle animation state                    |
-
-## Surface and Decal Integration
-
-Object nodes can reference [surfaces](surface-editor.md) by name for procedural appearance, and have [decals](decal-editor.md) applied on top. When a surface is specified, it is compiled into a WGSL shader material evaluated in world space, flowing seamlessly across all parts that share the same surface. If no surface is specified, the `color` field provides a flat `StandardMaterial`.
+| Input             | Action                    |
+| ----------------- | ------------------------- |
+| Left mouse drag   | Orbit camera              |
+| Middle mouse drag | Pan camera                |
+| Scroll wheel      | Zoom (orthographic scale) |
+| Arrow keys        | Orbit camera              |
+| R                 | Reload the current shape  |
+| Tab               | Cycle animation state     |
 
 ## Command Line
 
 ```bash
-# Load default shape
-cargo run -- object
+# Open the editor with no shape loaded; pick from the list
+cargo run
 
-# Load specific RON file
-cargo run -- object data/shapes/scout_bot.ron
+# Open with a specific shape loaded
+cargo run -- data/shapes/scout_bot.shape.ron
 ```

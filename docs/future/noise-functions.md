@@ -1,3 +1,9 @@
+> **Status:** Future / out-of-tree. The noise module was deleted on
+> 2026-04-19 together with the surface editor — nothing in the current
+> codebase consumes it. This document is preserved as a design reference for
+> planned standalone tools (surface, tileset, decal, world editors) that
+> would share a noise library.
+
 # Noise Functions
 
 Procedural noise primitives used across all editors for texture generation, terrain, material variation, and detail.

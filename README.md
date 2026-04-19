@@ -1,6 +1,6 @@
 # Asset Creator
 
-A Rust/Bevy application for procedurally generating and live-editing game assets. Everything is driven by a human-readable RON text format, with real-time preview and interactive parameter tweaking via egui panels.
+A Rust/Bevy application for interactive 3D shape editing. Shapes are defined in human-readable RON files and previewed live in the viewport, with hot reload on external file edits.
 
 ## Dependency Upgrades
 
@@ -27,59 +27,55 @@ cargo check
 
 Before bumping Bevy specifically, confirm `bevy_egui` has a matching release, and skim the [Bevy migration guides](https://bevy.org/learn/migration-guides/) for each version you cross.
 
-## Editors
+## Documentation
 
-| Editor                                 | Description                                                                                        |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| [Object Editor](docs/object-editor.md) | Live edit and preview 3D objects from RON definitions, with animations and hierarchical part trees |
-| [World Editor](docs/world-editor.md)   | Biome-based terrain generation with noise-driven elevation, moisture, and drainage layers          |
+| Topic                                          | Description                                                             |
+| ---------------------------------------------- | ----------------------------------------------------------------------- |
+| [Object Editor](docs/object-editor.md)         | The editor UI: shape list, camera, animations, part tree                |
+| [RON Format](docs/ron-format.md)               | `.shape.ron` syntax and the `SpecNode` tree                             |
+| [Composition Model](docs/composition-model.md) | Why bounds-based stretchy primitives, not a fixed-cell grid             |
+| [Architecture](docs/architecture.md)           | Application structure, plugin organization, registry, coordinate system |
+| [Render Export](docs/render-export.md)         | The headless PNG export pipeline                                        |
+| [CSG Normals](docs/csg-normals.md)             | How fused mesh normals are computed                                     |
 
-The surface, tileset, and decal editors have been moved to
-[`docs/future/`](docs/future/) — they describe planned standalone tools whose
-outputs are intended to feed the asset creator and world editor.
-
-## Core Concepts
-
-| Topic                                      | Description                                                       |
-| ------------------------------------------ | ----------------------------------------------------------------- |
-| [RON Format](docs/ron-format.md)           | The text-based data format used to define all assets procedurally |
-| [Noise Functions](docs/noise-functions.md) | Procedural noise primitives used across all editors               |
-| [SDF Primitives](docs/sdf-primitives.md)   | Signed distance field shapes and boolean operations               |
-| [Architecture](docs/architecture.md)       | Application structure, plugin organization, and shared systems    |
+[`docs/future/`](docs/future/) contains design references for tools that are
+planned but not implemented in this codebase: surface (texture) editor,
+tileset editor, decal editor, world editor, plus the SDF and noise libraries
+those tools would share. The asset creator's `tags` field on each `SpecNode`
+is the eventual integration point for surface outputs.
 
 ## Design Principles
 
-- **Text-first**: Every asset is defined in RON and can be version-controlled, diffed, and generated programmatically
-- **Live preview**: All parameter changes are reflected immediately in the viewport
-- **Procedural generation**: Noise-based textures, SDF shapes, and parametric geometry eliminate the need for external image editors
-- **Composable**: Editors share primitives -- shapes can import other shapes, parts can be tagged for shared appearance, and assets reference each other by name
-- **Export**: Assets can be exported as PNGs, tileset sheets, or mesh data from the command line without opening the GUI
+- **Text-first**: Shapes are defined in RON — version-controllable, diff-friendly, scriptable
+- **Live preview**: External file edits hot-reload into the viewport within ~500ms
+- **Integer-exact**: All authoring coordinates are integer; floats appear only at the GPU boundary
 
 ## Tech Stack
 
 - **Rust** + **Bevy** (ECS game engine)
-- **egui** (via `bevy_egui`) for editor UI panels
-- **RON** (Rusty Object Notation) for all asset definitions
-- **noise** crate for procedural generation (Perlin, Simplex, Voronoi)
-- **Custom WGSL shaders** for real-time procedural surfaces on 3D geometry
-- **serde** for deserialization of RON data
+- **egui** (via `bevy_egui`) for the editor panel
+- **RON** (Rusty Object Notation) for shape definitions
+- **serde** for deserialization
+- **image** for PNG export
 
 ## Quick Start
 
 ```bash
-# Launch the asset browser (access all editors from one window)
+# Launch the editor; pick a shape from the left panel
 cargo run
 
-# Jump directly to a specific editor
-cargo run -- object data/shapes/scout_bot.shape.ron
+# Open with a specific shape loaded
+cargo run -- data/shapes/scout_bot.shape.ron
 ```
 
-## Controls (shared across editors)
+## Controls
 
-| Input             | Action                                        |
-| ----------------- | --------------------------------------------- |
-| Scroll wheel      | Zoom in/out                                   |
-| Middle mouse drag | Pan (2D) / Orbit (3D)                         |
-| Left mouse drag   | Orbit (3D editors) / Drag shapes (SDF editor) |
-| Arrow keys        | Pan / Orbit                                   |
-| Left panel        | Parameter tweaking via egui                   |
+| Input             | Action                    |
+| ----------------- | ------------------------- |
+| Left mouse drag   | Orbit camera              |
+| Middle mouse drag | Pan camera                |
+| Scroll wheel      | Zoom (orthographic scale) |
+| Arrow keys        | Orbit camera              |
+| R                 | Reload current shape      |
+| Tab               | Cycle animation state     |
+| Left panel        | Shape list, camera, parts |

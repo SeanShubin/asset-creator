@@ -1,3 +1,8 @@
+> **Status:** Future / out-of-tree. The world editor was never implemented
+> in this codebase; this document is preserved on 2026-04-19 as the design
+> reference for a planned standalone tool whose outputs would be consumed by
+> the asset creator.
+
 # World Editor
 
 Interactive biome-based terrain generation with noise-driven layers for elevation, moisture, and drainage.

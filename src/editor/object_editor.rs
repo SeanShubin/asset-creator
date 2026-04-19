@@ -3,7 +3,6 @@ use bevy::camera::Viewport;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use std::path::PathBuf;
 
-use crate::browser::{browser_ui, ActiveEditor};
 use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{
     collect_occupancy, despawn_shape,
@@ -21,7 +20,8 @@ pub struct ObjectEditorPlugin;
 impl Plugin for ObjectEditorPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<ReloadShape>()
-            .init_resource::<EditorActivation>()
+            .init_resource::<CurrentShape>()
+            .init_resource::<LoadedShape>()
             .init_resource::<ShapeReloadState>()
             .init_resource::<CameraFitState>()
             .init_resource::<SceneStats>()
@@ -32,65 +32,48 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<ViewportRect>()
             .init_resource::<HiddenParts>()
             .init_resource::<CollidingParts>()
+            .add_systems(Startup, spawn_scene)
             .add_systems(Update, (
-                // Phase 1: detect what needs to change
-                (
-                    handle_activation,
-                    watch_shape_changes.run_if(is_object_active),
-                    keyboard_input.run_if(is_object_active),
-                ),
-                // Phase 2: apply shape reload (depends on phase 1 setting needs_reload)
-                reload_shape.run_if(is_object_active),
-                // Phase 3: post-load processing (depends on phase 2 spawning entities)
-                (
-                    on_model_loaded.run_if(is_object_active),
-                    compute_stats.run_if(is_object_active),
-                ),
+                (detect_shape_change, watch_shape_changes, keyboard_input),
+                reload_shape,
+                (on_model_loaded, compute_stats),
             ).chain())
-            .add_systems(Update, (
-                update_light.run_if(is_object_active),
-                draw_grid.run_if(is_object_active),
-            ))
-            // Egui-touching systems must run in EguiPrimaryContextPass so the
-            // egui Context is initialized when ctx_mut() is called. Camera input
-            // (touches egui via wants_pointer_input) and viewport tracking
-            // (reads egui's available_rect after panels are drawn) live here.
+            .add_systems(Update, (update_light, draw_grid))
             .add_systems(EguiPrimaryContextPass, (
-                // Camera: input → intent → apply (chained)
                 (
-                    orbit_camera::read_camera_input.run_if(is_object_active),
-                    orbit_camera::apply_orbit.run_if(is_object_active),
-                    orbit_camera::apply_zoom.run_if(is_object_active),
+                    orbit_camera::read_camera_input,
+                    orbit_camera::apply_orbit,
+                    orbit_camera::apply_zoom,
                 ).chain(),
-                // UI must run before viewport tracking so egui's
-                // available_rect reflects the panels for this frame.
-                part_tree_ui.run_if(is_object_active),
+                left_panel_ui,
                 (
-                    track_viewport_rect.run_if(is_object_active),
-                    sync_camera_viewport.run_if(is_object_active),
-                    sync_zoom_to_viewport.run_if(is_object_active),
-                ).chain().after(part_tree_ui).after(browser_ui),
+                    track_viewport_rect,
+                    sync_camera_viewport,
+                    sync_zoom_to_viewport,
+                ).chain().after(left_panel_ui),
             ));
     }
-}
-
-fn is_object_active(active: Res<ActiveEditor>) -> bool {
-    matches!(*active, ActiveEditor::Object { .. })
 }
 
 // =====================================================================
 // Resources
 // =====================================================================
 
-/// Tracks which shape is active and whether the editor scene is spawned.
-#[derive(Resource, Default)]
-struct EditorActivation {
-    current_path: Option<PathBuf>,
-    spawned: bool,
-    last_seen_editor: Option<ActiveEditor>,
+/// The shape the user has selected. UI writes to this; `detect_shape_change`
+/// compares it against `LoadedShape` and fires `ReloadShape` on mismatch.
+#[derive(Resource, Default, Clone, Debug, PartialEq)]
+pub struct CurrentShape {
+    pub path: Option<PathBuf>,
 }
 
-/// Event: request a shape reload. Replaces the old `needs_reload` flag.
+/// The shape that's currently spawned in the scene. Compared against
+/// `CurrentShape` to detect user selection changes.
+#[derive(Resource, Default)]
+struct LoadedShape {
+    path: Option<PathBuf>,
+}
+
+/// Event: request a shape reload.
 #[derive(Message)]
 struct ReloadShape;
 
@@ -153,9 +136,6 @@ struct SceneBounds {
 }
 
 #[derive(Component)]
-struct ObjectEditorEntity;
-
-#[derive(Component)]
 struct EditorLight;
 
 /// Paths of parts the user has hidden in the parts tree. Paths are
@@ -174,86 +154,16 @@ struct CollidingParts {
 }
 
 // =====================================================================
-// Activation / deactivation
+// Scene setup
 // =====================================================================
 
-fn handle_activation(
-    active: Res<ActiveEditor>,
-    mut activation: ResMut<EditorActivation>,
-    mut reload_events: MessageWriter<ReloadShape>,
-    mut fit: ResMut<CameraFitState>,
-    mut orbit: ResMut<OrbitState>,
-    mut hidden: ResMut<HiddenParts>,
-    mut commands: Commands,
-    existing_editor: Query<Entity, With<ObjectEditorEntity>>,
-    existing_shapes: Query<Entity, With<ShapeRoot>>,
-) {
-    let current = (*active).clone();
-    let changed = activation.last_seen_editor.as_ref() != Some(&current);
-    if !changed { return; }
-
-    let was_object = matches!(&activation.last_seen_editor, Some(ActiveEditor::Object { .. }));
-    let is_object = matches!(&current, ActiveEditor::Object { .. });
-
-    // Despawn if leaving object editor
-    if was_object && !is_object {
-        despawn_all(&mut commands, &existing_editor, &existing_shapes);
-        activation.spawned = false;
-        activation.current_path = None;
-        hidden.paths.clear();
-    }
-
-    // Switching between shapes — despawn old shape, keep scene
-    if was_object && is_object {
-        let roots: Vec<Entity> = existing_shapes.iter().collect();
-        despawn_shape(&mut commands, &roots);
-        hidden.paths.clear();
-    }
-
-    // Spawn scene if entering object editor for the first time
-    if is_object && !activation.spawned {
-        spawn_scene(&mut commands);
-        activation.spawned = true;
-    }
-
-    // Load the new shape, fit the camera, and reset the orbit to its
-    // default angles. Resetting on every activation (not just the
-    // initial spawn) means switching between shapes always presents
-    // the new shape from the canonical default angle.
-    if let ActiveEditor::Object { ref path } = current {
-        activation.current_path = Some(path.clone());
-        reload_events.write(ReloadShape);
-        fit.needs_fit = true;
-        orbit.yaw = DEFAULT_YAW;
-        orbit.pitch = DEFAULT_PITCH;
-        orbit.target = Vec3::ZERO;
-        info!("Object editor activated for '{}'", path.display());
-    }
-
-    activation.last_seen_editor = Some(current);
-}
-
-fn despawn_all(
-    commands: &mut Commands,
-    editor_entities: &Query<Entity, With<ObjectEditorEntity>>,
-    shape_roots: &Query<Entity, With<ShapeRoot>>,
-) {
-    for entity in editor_entities {
-        commands.entity(entity).despawn();
-    }
-    let roots: Vec<Entity> = shape_roots.iter().collect();
-    despawn_shape(commands, &roots);
-}
-
-fn spawn_scene(commands: &mut Commands) {
-    orbit_camera::spawn_orbit_camera(commands, ObjectEditorEntity);
+fn spawn_scene(mut commands: Commands) {
+    orbit_camera::spawn_orbit_camera(&mut commands);
 
     // Light direction chosen so that at default camera (yaw=45°, pitch=35°),
     // the three visible box faces get distinct brightness:
     //   top = brightest, one side = medium, other side = darkest
-    // Rotating Y by -60° offsets the light strongly to one side.
     commands.spawn((
-        ObjectEditorEntity,
         EditorLight,
         DirectionalLight {
             illuminance: 6000.0,
@@ -268,6 +178,38 @@ fn spawn_scene(commands: &mut Commands) {
         brightness: 80.0,
         ..default()
     });
+}
+
+// =====================================================================
+// Shape selection — detect user-driven changes
+// =====================================================================
+
+fn detect_shape_change(
+    current: Res<CurrentShape>,
+    mut loaded: ResMut<LoadedShape>,
+    mut reload_events: MessageWriter<ReloadShape>,
+    mut fit: ResMut<CameraFitState>,
+    mut orbit: ResMut<OrbitState>,
+    mut hidden: ResMut<HiddenParts>,
+    mut commands: Commands,
+    existing_shapes: Query<Entity, With<ShapeRoot>>,
+) {
+    if current.path == loaded.path { return; }
+
+    let roots: Vec<Entity> = existing_shapes.iter().collect();
+    despawn_shape(&mut commands, &roots);
+    hidden.paths.clear();
+
+    loaded.path = current.path.clone();
+
+    if let Some(ref path) = current.path {
+        reload_events.write(ReloadShape);
+        fit.needs_fit = true;
+        orbit.yaw = DEFAULT_YAW;
+        orbit.pitch = DEFAULT_PITCH;
+        orbit.target = Vec3::ZERO;
+        info!("Loading shape '{}'", path.display());
+    }
 }
 
 // =====================================================================
@@ -296,7 +238,7 @@ fn reload_shape(
     mut reload_events: MessageReader<ReloadShape>,
     mut stats: ResMut<SceneStats>,
     mut bounds: ResMut<SceneBounds>,
-    activation: Res<EditorActivation>,
+    loaded: Res<LoadedShape>,
     registry: Res<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
     hidden: Res<HiddenParts>,
@@ -305,7 +247,7 @@ fn reload_shape(
     if reload_events.read().next().is_none() { return; }
     reload_events.clear();
 
-    let Some(path) = &activation.current_path else { return };
+    let Some(path) = &loaded.path else { return };
 
     let roots: Vec<Entity> = existing.iter().collect();
     despawn_shape(&mut commands, &roots);
@@ -391,7 +333,7 @@ fn compute_stats(
     bounds: Res<SceneBounds>,
     mut limits: ResMut<ZoomLimits>,
     parts: Query<&ShapePart>,
-    activation: Res<EditorActivation>,
+    loaded: Res<LoadedShape>,
     registry: Res<AssetRegistry>,
     viewport: Res<ViewportRect>,
 ) {
@@ -405,7 +347,6 @@ fn compute_stats(
             stats.draw_calls = Some(draw_calls);
         }
     }
-    // Clean up receiver after successful receive (separate borrow scope).
     if stats.triangles.is_some() && stats.stats_receiver.is_some() {
         stats.stats_receiver = None;
     }
@@ -423,8 +364,7 @@ fn compute_stats(
 
     stats.parts = parts.iter().count();
 
-    // Kick off production stats on a background thread.
-    if let Some(path) = &activation.current_path {
+    if let Some(path) = &loaded.path {
         if let Some(shape) = registry.get_shape_by_path(path) {
             stats.triangles = None;
             stats.draw_calls = None;
@@ -442,10 +382,6 @@ fn compute_stats(
     }
 }
 
-/// Compute the orthographic scale at which the AABB fills the viewport with ~5% border on
-/// the constraining dimension. Uses fixed projection angles (yaw=45, pitch=45) for
-/// deterministic results — the shape's own rotation is ignored; the fit is computed against
-/// its AABB as if it were a single box.
 // =====================================================================
 // Viewport tracking
 // =====================================================================
@@ -488,9 +424,7 @@ fn track_viewport_rect(
 }
 
 /// Apply the `ViewportRect` to the camera so it only renders inside the
-/// central area. When the visible area is degenerate (e.g. egui side
-/// panels fill the whole window), hold the previous viewport rather than
-/// setting a zero-size one, which wgpu would reject.
+/// central area.
 fn sync_camera_viewport(
     viewport: Res<ViewportRect>,
     mut camera: Query<&mut Camera, With<OrbitCamera>>,
@@ -512,15 +446,7 @@ fn sync_camera_viewport(
     }
 }
 
-/// On viewport size changes (window resize, panel resize), recompute
-/// `fit_scale` against the new viewport and update `ortho.scale` so that
-/// the user's current zoom percentage is preserved — the object's apparent
-/// size in the visible rect changes, but "100% is fit" remains true.
-///
-/// This keeps `fit.fit_scale` authoritative for the CURRENT viewport.
-/// `on_model_loaded` handles the shape-switch case (needs_fit=true) and
-/// sets zoom to 100%; this system handles the resize case (viewport
-/// changed with the same shape loaded) and preserves zoom_pct.
+/// On viewport size changes, recompute fit_scale and preserve zoom_pct.
 fn sync_zoom_to_viewport(
     viewport: Res<ViewportRect>,
     mut fit: ResMut<CameraFitState>,
@@ -551,8 +477,7 @@ fn sync_zoom_to_viewport(
 }
 
 /// Compute the camera fit (scale + look-at target) for the spec-level
-/// scene bounds. These bounds come from the occupancy AABB and don't change
-/// when parts are hidden/shown, keeping zoom stable during visibility toggles.
+/// scene bounds.
 fn fit_for_bounds(bounds: &SceneBounds, viewport_size: Vec2) -> Option<orbit_camera::FitResult> {
     fit_for_aabb(
         bounds.scene_min, bounds.scene_max,
@@ -563,26 +488,19 @@ fn fit_for_bounds(bounds: &SceneBounds, viewport_size: Vec2) -> Option<orbit_cam
 }
 
 fn update_zoom_limits(limits: &mut ZoomLimits, fit_scale: f32) {
-    limits.min = fit_scale * 100.0 / ZOOM_MAX_PCT;  // 200% → scale = fit/2
-    limits.max = fit_scale * 100.0 / ZOOM_MIN_PCT;   // 10% → scale = fit*10
+    limits.min = fit_scale * 100.0 / ZOOM_MAX_PCT;
+    limits.max = fit_scale * 100.0 / ZOOM_MIN_PCT;
 }
 
 // =====================================================================
 // Light — follows camera so lighting is consistent regardless of orbit
 // =====================================================================
 
-/// The light direction is computed relative to the camera so that the
-/// lit/shadowed pattern stays consistent as you orbit.
-/// At default camera (yaw=45, pitch=35), the original fixed light was
-/// Euler YXZ (-60°, -50°, 0°). We reproduce this by computing the light
-/// rotation from the camera rotation with a fixed offset.
 fn update_light(
     orbit: Res<OrbitState>,
     mut light: Query<&mut Transform, With<EditorLight>>,
 ) {
     let Ok(mut tf) = light.single_mut() else { return };
-
-    // Camera rotation
     tf.rotation = orbit_camera::compute_light_rotation(orbit.yaw, orbit.pitch);
 }
 
@@ -590,9 +508,9 @@ fn update_light(
 // Grid
 // =====================================================================
 
-const GRID_COLOR_XZ: Color = Color::srgba(0.3, 0.5, 0.3, 0.2);  // floor — greenish
-const GRID_COLOR_XY: Color = Color::srgba(0.3, 0.3, 0.5, 0.2);  // behind-right — bluish
-const GRID_COLOR_YZ: Color = Color::srgba(0.5, 0.3, 0.3, 0.2);  // behind-left — reddish
+const GRID_COLOR_XZ: Color = Color::srgba(0.3, 0.5, 0.3, 0.2);
+const GRID_COLOR_XY: Color = Color::srgba(0.3, 0.3, 0.5, 0.2);
+const GRID_COLOR_YZ: Color = Color::srgba(0.5, 0.3, 0.3, 0.2);
 const AXIS_COLOR_X: Color = Color::srgba(0.8, 0.2, 0.2, 0.6);
 const AXIS_COLOR_Y: Color = Color::srgba(0.2, 0.8, 0.2, 0.6);
 const AXIS_COLOR_Z: Color = Color::srgba(0.2, 0.2, 0.8, 0.6);
@@ -609,8 +527,6 @@ fn draw_grid(
 
     let scene_min = bounds.scene_min;
     let scene_max = bounds.scene_max;
-    // Snap AABB to nearest integer first (handles float imprecision),
-    // then add 1 unit margin
     let gmin = Vec3::new(
         scene_min.x.round() - 1.0,
         scene_min.y.round() - 1.0,
@@ -622,26 +538,21 @@ fn draw_grid(
         scene_max.z.round() + 1.0,
     );
 
-    // Floor (XZ plane): visible when looking from above (pitch > 0)
     if pitch > 0.0 {
         draw_plane_grid(&mut gizmos, GridPlane::XZ, gmin.y, gmin, gmax, GRID_COLOR_XZ);
         draw_floor_axes(&mut gizmos, gmin.y, gmin, gmax);
     }
-    // Ceiling: visible when looking from below (pitch < 0)
     if pitch < 0.0 {
         draw_plane_grid(&mut gizmos, GridPlane::XZ, gmax.y, gmin, gmax, GRID_COLOR_XZ);
         draw_floor_axes(&mut gizmos, gmax.y, gmin, gmax);
     }
 
-    // XY wall: camera Z positive → wall at gmin.z (behind)
     let wall_z = if yaw_rad.cos() > 0.0 { gmin.z } else { gmax.z };
     draw_plane_grid(&mut gizmos, GridPlane::XY, wall_z, gmin, gmax, GRID_COLOR_XY);
 
-    // YZ wall: camera X positive → wall at gmin.x (behind)
     let wall_x = if yaw_rad.sin() > 0.0 { gmin.x } else { gmax.x };
     draw_plane_grid(&mut gizmos, GridPlane::YZ, wall_x, gmin, gmax, GRID_COLOR_YZ);
 
-    // Y axis on side wall
     gizmos.line(Vec3::new(wall_x, gmin.y - 0.5, 0.0), Vec3::new(wall_x, gmax.y + 0.5, 0.0), AXIS_COLOR_Y);
 }
 
@@ -659,7 +570,6 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
         GridPlane::YZ => (gmin.y, gmax.y, gmin.z, gmax.z),
     };
 
-    // Lines along the first axis at integer positions of the second axis
     let b_start = b_min.ceil() as i32;
     let b_end = b_max.floor() as i32;
     for i in b_start..=b_end {
@@ -673,7 +583,6 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
         gizmos.line(a, b, color);
     }
 
-    // Lines along the second axis at integer positions of the first axis
     let a_start = a_min.ceil() as i32;
     let a_end = a_max.floor() as i32;
     for i in a_start..=a_end {
@@ -687,7 +596,6 @@ fn draw_plane_grid(gizmos: &mut Gizmos, plane: GridPlane, offset: f32, gmin: Vec
         gizmos.line(a, b, color);
     }
 }
-
 
 // =====================================================================
 // Input
@@ -711,11 +619,13 @@ fn keyboard_input(
 }
 
 // =====================================================================
-// Part tree UI
+// Left-panel UI
 // =====================================================================
 
-fn part_tree_ui(
+fn left_panel_ui(
     mut contexts: EguiContexts,
+    registry: Res<AssetRegistry>,
+    mut current: ResMut<CurrentShape>,
     roots: Query<Entity, With<ShapeRoot>>,
     parts: Query<(&ShapePart, Option<&Children>, &Visibility)>,
     mut animators: Query<&mut ShapeAnimator>,
@@ -730,19 +640,24 @@ fn part_tree_ui(
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let mut toggles: Vec<(String, Visibility)> = Vec::new();
 
-    egui::SidePanel::left("part_tree").min_width(200.0).show(ctx, |ui| {
+    egui::SidePanel::left("object_editor_panel").min_width(220.0).show(ctx, |ui| {
+        shape_list(ui, &registry, &mut current);
+        ui.separator();
+
         camera_controls(ui, &mut orbit, &mut camera, &fit, &stats);
         ui.separator();
 
         animation_controls(ui, &roots, &mut animators);
+
         ui.heading("Part Tree");
         ui.separator();
-
         for root in &roots {
-            draw_tree_node(
-                ui, root, &parts, &mut toggles,
-                0, &[], &[], &colliding,
-            );
+            draw_tree_node(ui, root, &parts, &mut toggles, 0, &[], &[], &colliding);
+        }
+
+        if registry.has_errors() {
+            ui.separator();
+            error_list(ui, &registry);
         }
     });
 
@@ -761,6 +676,34 @@ fn part_tree_ui(
         if hidden.paths != snapshot {
             reload_events.write(ReloadShape);
         }
+    }
+}
+
+fn shape_list(
+    ui: &mut egui::Ui,
+    registry: &AssetRegistry,
+    current: &mut CurrentShape,
+) {
+    ui.heading("Shapes");
+    for (key, path) in &registry.shape_entries() {
+        let stem = key.strip_suffix(".shape.ron").unwrap_or(key);
+        let is_active = current.path.as_deref() == Some(path.as_path());
+        if ui.selectable_label(is_active, stem).clicked() {
+            current.path = Some(path.clone());
+        }
+    }
+}
+
+fn error_list(ui: &mut egui::Ui, registry: &AssetRegistry) {
+    ui.colored_label(egui::Color32::RED, "Errors");
+    for error in registry.errors() {
+        let filename = std::path::Path::new(&error.path)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(&error.path);
+        ui.colored_label(egui::Color32::YELLOW, filename);
+        ui.label(&error.message);
+        ui.add_space(4.0);
     }
 }
 
@@ -884,7 +827,6 @@ fn draw_tree_node(
 ) {
     let Ok((part, children, _vis)) = parts.get(entity) else { return };
 
-    // Build the full path for this node.
     let node_path = if depth == 0 {
         String::new()
     } else if let Some(name) = &part.name {
@@ -902,7 +844,6 @@ fn draw_tree_node(
         TriState::Mixed   => "~",
     };
 
-    // Color: blue for subtractive, red for colliding, default otherwise.
     let label_color = if part.subtract {
         Some(egui::Color32::from_rgb(100, 140, 255))
     } else if colliding.names.iter().any(|c| c == &node_path) {

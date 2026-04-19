@@ -10,14 +10,14 @@ use super::watcher::FileWatcher;
 // =====================================================================
 
 #[derive(Clone, Debug)]
-struct RegisteredAsset<T: Clone> {
-    data: T,
+struct ShapeEntry {
+    parts: Vec<SpecNode>,
     path: PathBuf,
 }
 
 #[derive(Resource, Default, Clone)]
 pub struct AssetRegistry {
-    shapes: HashMap<String, RegisteredAsset<Vec<SpecNode>>>,
+    shapes: HashMap<String, ShapeEntry>,
     shape_generation: u64,
     errors: Vec<AssetError>,
 }
@@ -29,21 +29,19 @@ pub struct AssetError {
 }
 
 impl AssetRegistry {
-    // --- Shape accessors ---
-
     pub fn get_shape(&self, name: &str) -> Option<&[SpecNode]> {
         if let Some(r) = self.shapes.get(name) {
-            return Some(&r.data);
+            return Some(&r.parts);
         }
         let with_ext = format!("{name}.shape.ron");
         if let Some(r) = self.shapes.get(&with_ext) {
-            return Some(&r.data);
+            return Some(&r.parts);
         }
         let suffix = format!("/{name}.shape.ron");
         let backslash_suffix = format!("\\{name}.shape.ron");
         for (key, r) in &self.shapes {
             if key.ends_with(&suffix) || key.ends_with(&backslash_suffix) || key == &with_ext {
-                return Some(&r.data);
+                return Some(&r.parts);
             }
         }
         None
@@ -52,14 +50,14 @@ impl AssetRegistry {
     pub fn get_shape_by_path(&self, path: &std::path::Path) -> Option<&[SpecNode]> {
         self.shapes.values()
             .find(|r| r.path == path)
-            .map(|r| r.data.as_slice())
+            .map(|r| r.parts.as_slice())
     }
 
     pub fn remove_by_path(&mut self, path: &std::path::Path) -> bool {
-        let shape_key = self.shapes.iter()
+        let key = self.shapes.iter()
             .find(|(_, r)| r.path == path)
             .map(|(k, _)| k.clone());
-        if let Some(key) = shape_key {
+        if let Some(key) = key {
             self.shapes.remove(&key);
             return true;
         }
@@ -77,8 +75,6 @@ impl AssetRegistry {
     pub fn shape_generation(&self) -> u64 {
         self.shape_generation
     }
-
-    // --- Error accessors ---
 
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
@@ -104,10 +100,7 @@ impl AssetRegistry {
     pub fn test_insert_shape(&mut self, key: impl Into<String>, data: Vec<SpecNode>) {
         self.shapes.insert(
             key.into(),
-            RegisteredAsset {
-                data,
-                path: std::path::PathBuf::new(),
-            },
+            ShapeEntry { parts: data, path: PathBuf::new() },
         );
     }
 }
@@ -130,7 +123,7 @@ impl AssetRegistry {
     /// Load all shapes from the data directory without Bevy.
     pub fn load_from_disk(data_dir: &Path) -> Self {
         let mut registry = AssetRegistry::default();
-        load_all_shapes(data_dir, &mut registry);
+        scan_shape_files(&data_dir.join("shapes"), &mut registry);
         registry
     }
 }
@@ -140,7 +133,7 @@ impl Plugin for RegistryPlugin {
         let mut registry = AssetRegistry::default();
         let data_dir = self.data_dir.clone();
 
-        load_all_shapes(&data_dir, &mut registry);
+        scan_shape_files(&data_dir.join("shapes"), &mut registry);
         info!("Registry loaded {} shapes from '{}'",
             registry.shapes.len(), data_dir.display());
 
@@ -151,19 +144,10 @@ impl Plugin for RegistryPlugin {
 }
 
 // =====================================================================
-// Initial loading
+// Shape loading
 // =====================================================================
 
-fn load_all_shapes(data_dir: &Path, registry: &mut AssetRegistry) {
-    load_ron_files(&data_dir.join("shapes"), registry, is_shape_file, load_shape_into_registry);
-}
-
-fn load_ron_files(
-    dir: &Path,
-    registry: &mut AssetRegistry,
-    filter: fn(&Path) -> bool,
-    loader: fn(&Path, &mut AssetRegistry),
-) {
+fn scan_shape_files(dir: &Path, registry: &mut AssetRegistry) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -171,18 +155,14 @@ fn load_ron_files(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            load_ron_files(&path, registry, filter, loader);
-        } else if filter(&path) {
-            loader(&path, registry);
+            scan_shape_files(&path, registry);
+        } else if is_shape_file(&path) {
+            load_shape(&path, registry);
         }
     }
 }
 
-// =====================================================================
-// Shape loading
-// =====================================================================
-
-fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
+fn load_shape(path: &Path, registry: &mut AssetRegistry) {
     let path_str = path.display().to_string();
 
     let contents = match std::fs::read_to_string(path) {
@@ -204,13 +184,8 @@ fn load_shape_into_registry(path: &Path, registry: &mut AssetRegistry) {
     registry.clear_error_for(&path_str);
 
     let key = shape_key_from_path(path);
-
-    registry.shapes.insert(key, RegisteredAsset {
-        data: parts,
-        path: path.to_path_buf(),
-    });
+    registry.shapes.insert(key, ShapeEntry { parts, path: path.to_path_buf() });
 }
-
 
 /// Derive a human-readable shape name from a file path.
 /// e.g., "data/shapes/frz-b/assembly.shape.ron" → "frz-b/assembly"
@@ -223,12 +198,10 @@ pub fn shape_name_from_path(path: &Path) -> String {
 /// e.g., "data/shapes/wheel.shape.ron" → "wheel.shape.ron"
 ///        "data/shapes/robots/arm.shape.ron" → "robots/arm.shape.ron"
 fn shape_key_from_path(path: &Path) -> String {
-    // Try to strip the data/shapes/ prefix
     let shapes_dir = Path::new("data").join("shapes");
     if let Ok(relative) = path.strip_prefix(&shapes_dir) {
         return relative.to_string_lossy().replace('\\', "/");
     }
-    // Fallback: use the full path
     path.to_string_lossy().replace('\\', "/")
 }
 
@@ -254,7 +227,7 @@ fn poll_file_changes(
 
     for path in &changed_paths {
         if is_shape_file(path) {
-            load_shape_into_registry(path, &mut registry);
+            load_shape(path, &mut registry);
             shape_changed = true;
         }
     }

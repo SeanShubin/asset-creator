@@ -1,3 +1,7 @@
+> **Status:** Future / out-of-tree. The SDF math described here was never
+> implemented in this codebase; it would be the foundation for the planned
+> surface and decal tools (also in `docs/future/`). Preserved on 2026-04-19.
+
 # SDF Primitives
 
 Signed distance field shapes and boolean operations. This document covers the core SDF math shared across the application. The [Decal Editor](decal-editor.md) builds on these foundations with its own surface-oriented primitive set (Spot, Ring, Arc, Bezier strokes, etc.).

@@ -54,10 +54,9 @@ pub struct CameraIntent {
 // Spawning
 // =====================================================================
 
-pub fn spawn_orbit_camera<M: Component>(commands: &mut Commands, marker: M) {
+pub fn spawn_orbit_camera(commands: &mut Commands) {
     let (position, _) = compute_camera_pose(DEFAULT_YAW, DEFAULT_PITCH, Vec3::ZERO);
     commands.spawn((
-        marker,
         OrbitCamera,
         Camera3d::default(),
         Projection::Orthographic(OrthographicProjection {
