@@ -1,3 +1,8 @@
+> **Status:** Future / out-of-tree. The decal editor was never implemented
+> in this codebase; this document is preserved on 2026-04-19 as the design
+> reference for a planned standalone tool. It depends on the surface concept,
+> which was also moved to `docs/future/`.
+
 # Decal Editor
 
 Create and edit 2D overlays (decals) that are applied on top of 3D object surfaces, layered above the base [surface](surface-editor.md).

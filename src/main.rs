@@ -1,12 +1,10 @@
 mod browser;
 mod editor;
 mod logging;
-mod noise;
 mod registry;
 mod render_export;
 mod shape;
 mod stress_test;
-mod surface;
 mod util;
 
 use bevy::camera::visibility::RenderLayers;
@@ -44,7 +42,6 @@ fn main() {
         registry::RegistryPlugin::default(),
         shape::ShapePlugin,
         browser::BrowserPlugin,
-        editor::SurfaceEditorPlugin,
         editor::ObjectEditorPlugin,
         render_export::RenderExportPlugin,
     ));

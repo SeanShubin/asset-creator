@@ -1,3 +1,8 @@
+> **Status:** Future / out-of-tree. The tileset editor was never implemented
+> in this codebase; this document is preserved on 2026-04-19 as the design
+> reference for a planned standalone tool. It depends on the surface concept,
+> which was also moved to `docs/future/`.
+
 # Tileset Editor
 
 Generate 47-blob autotile tilesets with procedural surfaces, beveled lighting, and configurable zone geometry.

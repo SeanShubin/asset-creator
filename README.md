@@ -29,13 +29,14 @@ Before bumping Bevy specifically, confirm `bevy_egui` has a matching release, an
 
 ## Editors
 
-| Editor                                   | Description                                                                                        |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| [Surface Editor](docs/surface-editor.md) | Define visual appearance once, render as 2D pixels or 3D shader materials                          |
-| [Object Editor](docs/object-editor.md)   | Live edit and preview 3D objects from RON definitions, with animations and hierarchical part trees |
-| [Tileset Editor](docs/tileset-editor.md) | 47-blob autotile tileset generation with beveled lighting and procedural surfaces                  |
-| [Decal Editor](docs/decal-editor.md)     | 2D overlays applied on top of 3D object surfaces, composed from SDF primitives                     |
-| [World Editor](docs/world-editor.md)     | Biome-based terrain generation with noise-driven elevation, moisture, and drainage layers          |
+| Editor                                 | Description                                                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| [Object Editor](docs/object-editor.md) | Live edit and preview 3D objects from RON definitions, with animations and hierarchical part trees |
+| [World Editor](docs/world-editor.md)   | Biome-based terrain generation with noise-driven elevation, moisture, and drainage layers          |
+
+The surface, tileset, and decal editors have been moved to
+[`docs/future/`](docs/future/) — they describe planned standalone tools whose
+outputs are intended to feed the asset creator and world editor.
 
 ## Core Concepts
 
@@ -51,7 +52,7 @@ Before bumping Bevy specifically, confirm `bevy_egui` has a matching release, an
 - **Text-first**: Every asset is defined in RON and can be version-controlled, diffed, and generated programmatically
 - **Live preview**: All parameter changes are reflected immediately in the viewport
 - **Procedural generation**: Noise-based textures, SDF shapes, and parametric geometry eliminate the need for external image editors
-- **Composable**: Editors share primitives -- surfaces are referenced by name from tilesets, 3D objects, and world biomes; decals layer onto any surface
+- **Composable**: Editors share primitives -- shapes can import other shapes, parts can be tagged for shared appearance, and assets reference each other by name
 - **Export**: Assets can be exported as PNGs, tileset sheets, or mesh data from the command line without opening the GUI
 
 ## Tech Stack
@@ -70,7 +71,6 @@ Before bumping Bevy specifically, confirm `bevy_egui` has a matching release, an
 cargo run
 
 # Jump directly to a specific editor
-cargo run -- surface --preset Marble
 cargo run -- object data/shapes/scout_bot.shape.ron
 ```
 

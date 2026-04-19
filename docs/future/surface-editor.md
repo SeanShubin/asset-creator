@@ -1,3 +1,12 @@
+> **Status:** Future / out-of-tree. The surface editor was removed from this
+> codebase on 2026-04-19 to keep the asset creator focused on interactive 3D
+> shape editing. This document is preserved as the design reference for a
+> planned standalone surface (texture) tool whose outputs would be consumed
+> by the asset creator and the world editor. The previous implementation
+> lived at `src/editor/surface_editor.rs` and `src/surface/` — recover from
+> git history if needed. See "Implementation snapshot at removal" at the
+> bottom of this file for what was actually built.
+
 # Surface Editor
 
 Define the visual appearance of a surface once, then apply it to any output -- 2D pixel textures, 3D shader materials, tileset faces, or world terrain.
@@ -224,3 +233,56 @@ cargo run -- surface --preset Concrete --export concrete.png --size 512
 # Preview surface on 3D shapes
 cargo run -- surface --preset Energy --3d
 ```
+
+## Implementation snapshot at removal (2026-04-19)
+
+What was actually built when the editor was removed from this codebase. The
+rest of this document describes the intended design — some of which had not
+yet been implemented.
+
+### Files
+- `src/editor/surface_editor.rs` — egui editor panel
+- `src/surface/definition.rs` — `SurfaceDef` and `PatternType`
+- `src/surface/loader.rs` — `load_surface_from_file`
+- `src/surface/presets.rs` — eleven hard-coded presets
+- `src/surface/renderer.rs` — CPU pixel renderer (no GPU/WGSL path was wired up)
+- Registry plumbing in `src/registry/store.rs`: `surfaces` HashMap,
+  `get_surface`, `surface_names`, `surface_path`, `has_surfaces`,
+  `surface_generation`, `upsert_surface`, `remove_surface`,
+  `SaveSurface` / `DeleteSurface` events, `save_surface_to_file`, file-watcher
+  hot-reload via `is_surface_file`
+- Browser: surface list with click-to-edit, delete, "+ New Surface" button
+- CLI: `cargo run -- surface [path | --preset NAME]`
+- Asset directory: `data/surfaces/` (was empty at removal)
+- File extension: `.surface.ron`
+
+### Implemented `SurfaceDef` fields
+`name`, `base_color`, `color_variation`, `noise_scale`, `noise_octaves`,
+`pattern`, `roughness`, `speckle_density`, `speckle_color`,
+`secondary_color`, `stripe_angle`, `seed`. Colors used the project's
+internal `Color3` type (a small palette index, not a float RGB).
+
+### Implemented `PatternType` variants
+`Perlin`, `Cellular`, `Ridged`, `Stripe`, `Marble`, `Turbulence`,
+`DomainWarp`. The `noise` crate drove all of them via `src/noise/`.
+
+### Implemented presets (11)
+Concrete, Red Stone, Dark Stone, Marble, Wood Plank, Sandstone, Metal Plate,
+Brushed Metal, Rusted Steel, Dark Composite, Energy.
+
+### What was NOT implemented (despite being in the design doc above)
+- WGSL shader material / 3D shader output. The doc shows
+  `SurfaceMaterial` with `AsBindGroup`; no such type existed.
+- Any consumer in the object editor. `SpecNode` had no `surface` field.
+  Surfaces were authorable and storable but had no downstream use.
+- PNG export CLI (`--export`, `--size` flags).
+- 3D preview mode (`--3d` flag).
+- Tileset and decal integration (those editors were never built either).
+- `data/surfaces/` was empty — no preset had ever been saved to disk.
+
+### Why it was removed
+The surface system was vestigial: a recent migration replaced
+palette/color/surface-based appearance with per-node `tags` on `SpecNode`,
+leaving no consumer for surfaces. The asset creator is being narrowed to
+focus on interactive 3D shape editing; surface authoring will live in a
+separate tool whose outputs feed the asset creator and a future world editor.

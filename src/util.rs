@@ -23,15 +23,6 @@ fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-/// Convert a linear component (0.0–1.0) to sRGB space.
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
-}
-
 impl Color3 {
     /// Convert to linear RGB for Bevy vertex colors. The integer
     /// 0–3 values are treated as sRGB (perceptually uniform), then
@@ -47,14 +38,6 @@ impl Color3 {
     pub fn to_rgb(self) -> (f32, f32, f32) {
         let a = self.to_array();
         (a[0], a[1], a[2])
-    }
-
-    pub fn from_array(a: [f32; 3]) -> Self {
-        Self(
-            (linear_to_srgb(a[0]) * COLOR_DIVISOR).round() as u8,
-            (linear_to_srgb(a[1]) * COLOR_DIVISOR).round() as u8,
-            (linear_to_srgb(a[2]) * COLOR_DIVISOR).round() as u8,
-        )
     }
 }
 
