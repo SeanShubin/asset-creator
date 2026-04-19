@@ -3,6 +3,6 @@
         name: "corner",
         corner: (MinX, MinY, MinZ),
         bounds: (-1, -1, -1, 1, 1, 1),
-        tags: ["green"],
+        tags: ["green3"],
     ),
 ]

@@ -8,25 +8,25 @@
         name: "edges",
         faces: (MinY, MaxX),
         bounds: (-4, 0, -2, -2, 1, 2),
-        tags: ["red", "darken", "darken"],
+        tags: ["red1"],
         symmetry: [MirrorX, Rotate90_XZ]
     ),
     (
         name: "corners",
         corner: (MaxX, MinY, MinZ),
         bounds: (-4, 0, 2, -2, 1, 4),
-        tags: ["red", "darken", "darken"],
+        tags: ["red1"],
         symmetry: [MirrorX, MirrorZ]
     ),
     (
         name: "center",
         bounds: (-2, 0, -2, 2, 1, 2),
-        tags: ["red", "darken", "darken"],
+        tags: ["red1"],
     ),
     (
         name: "hole",
         bounds: (-1, 0, -1, 1, 1, 1),
-        tags: ["blue"],
+        tags: ["blue3"],
         subtract: true
     ),
 ]

@@ -1,46 +1,51 @@
 // Color test: 6 chromatic bases × 5 non-gray levels each = 30 boxes.
 // Layout: primaries (red, green, blue) at z=-2, secondaries at z=+1.
 // Columns along X spaced by 3. Levels stacked along Y (bottom=darkest).
+//
+// Preserves the visual output of the old palette: each column used to be
+// red/green/blue/yellow/cyan/magenta with 2 darker + base + 2 lighter
+// variants. Under the per-channel tag system, the same RGB values are
+// expressed by setting each channel's level explicitly.
 [
     // === Red (x=-3) ===
-    (name: "red_dd",  bounds: (-3, -4, -2, -2, -3, -1), tags: ["red", "darken", "darken"]),
-    (name: "red_d",   bounds: (-3, -2, -2, -2, -1, -1), tags: ["red", "darken"]),
-    (name: "red",     bounds: (-3,  0, -2, -2,  1, -1), tags: ["red"]),
-    (name: "red_l",   bounds: (-3,  2, -2, -2,  3, -1), tags: ["red", "lighten"]),
-    (name: "red_ll",  bounds: (-3,  4, -2, -2,  5, -1), tags: ["red", "lighten", "lighten"]),
+    (name: "red_dd",  bounds: (-3, -4, -2, -2, -3, -1), tags: ["red1"]),
+    (name: "red_d",   bounds: (-3, -2, -2, -2, -1, -1), tags: ["red2"]),
+    (name: "red",     bounds: (-3,  0, -2, -2,  1, -1), tags: ["red3"]),
+    (name: "red_l",   bounds: (-3,  2, -2, -2,  3, -1), tags: ["red3", "green1", "blue1"]),
+    (name: "red_ll",  bounds: (-3,  4, -2, -2,  5, -1), tags: ["red3", "green2", "blue2"]),
 
     // === Green (x=0) ===
-    (name: "green_dd",  bounds: (0, -4, -2, 1, -3, -1), tags: ["green", "darken", "darken"]),
-    (name: "green_d",   bounds: (0, -2, -2, 1, -1, -1), tags: ["green", "darken"]),
-    (name: "green",     bounds: (0,  0, -2, 1,  1, -1), tags: ["green"]),
-    (name: "green_l",   bounds: (0,  2, -2, 1,  3, -1), tags: ["green", "lighten"]),
-    (name: "green_ll",  bounds: (0,  4, -2, 1,  5, -1), tags: ["green", "lighten", "lighten"]),
+    (name: "green_dd",  bounds: (0, -4, -2, 1, -3, -1), tags: ["green1"]),
+    (name: "green_d",   bounds: (0, -2, -2, 1, -1, -1), tags: ["green2"]),
+    (name: "green",     bounds: (0,  0, -2, 1,  1, -1), tags: ["green3"]),
+    (name: "green_l",   bounds: (0,  2, -2, 1,  3, -1), tags: ["red1", "green3", "blue1"]),
+    (name: "green_ll",  bounds: (0,  4, -2, 1,  5, -1), tags: ["red2", "green3", "blue2"]),
 
     // === Blue (x=3) ===
-    (name: "blue_dd",  bounds: (3, -4, -2, 4, -3, -1), tags: ["blue", "darken", "darken"]),
-    (name: "blue_d",   bounds: (3, -2, -2, 4, -1, -1), tags: ["blue", "darken"]),
-    (name: "blue",     bounds: (3,  0, -2, 4,  1, -1), tags: ["blue"]),
-    (name: "blue_l",   bounds: (3,  2, -2, 4,  3, -1), tags: ["blue", "lighten"]),
-    (name: "blue_ll",  bounds: (3,  4, -2, 4,  5, -1), tags: ["blue", "lighten", "lighten"]),
+    (name: "blue_dd",  bounds: (3, -4, -2, 4, -3, -1), tags: ["blue1"]),
+    (name: "blue_d",   bounds: (3, -2, -2, 4, -1, -1), tags: ["blue2"]),
+    (name: "blue",     bounds: (3,  0, -2, 4,  1, -1), tags: ["blue3"]),
+    (name: "blue_l",   bounds: (3,  2, -2, 4,  3, -1), tags: ["red1", "green1", "blue3"]),
+    (name: "blue_ll",  bounds: (3,  4, -2, 4,  5, -1), tags: ["red2", "green2", "blue3"]),
 
     // === Yellow (x=-3, z=1) ===
-    (name: "yellow_dd",  bounds: (-3, -4, 1, -2, -3, 2), tags: ["yellow", "darken", "darken"]),
-    (name: "yellow_d",   bounds: (-3, -2, 1, -2, -1, 2), tags: ["yellow", "darken"]),
-    (name: "yellow",     bounds: (-3,  0, 1, -2,  1, 2), tags: ["yellow"]),
-    (name: "yellow_l",   bounds: (-3,  2, 1, -2,  3, 2), tags: ["yellow", "lighten"]),
-    (name: "yellow_ll",  bounds: (-3,  4, 1, -2,  5, 2), tags: ["yellow", "lighten", "lighten"]),
+    (name: "yellow_dd",  bounds: (-3, -4, 1, -2, -3, 2), tags: ["red1", "green1"]),
+    (name: "yellow_d",   bounds: (-3, -2, 1, -2, -1, 2), tags: ["red2", "green2"]),
+    (name: "yellow",     bounds: (-3,  0, 1, -2,  1, 2), tags: ["red3", "green3"]),
+    (name: "yellow_l",   bounds: (-3,  2, 1, -2,  3, 2), tags: ["red3", "green3", "blue1"]),
+    (name: "yellow_ll",  bounds: (-3,  4, 1, -2,  5, 2), tags: ["red3", "green3", "blue2"]),
 
     // === Cyan (x=0, z=1) ===
-    (name: "cyan_dd",  bounds: (0, -4, 1, 1, -3, 2), tags: ["cyan", "darken", "darken"]),
-    (name: "cyan_d",   bounds: (0, -2, 1, 1, -1, 2), tags: ["cyan", "darken"]),
-    (name: "cyan",     bounds: (0,  0, 1, 1,  1, 2), tags: ["cyan"]),
-    (name: "cyan_l",   bounds: (0,  2, 1, 1,  3, 2), tags: ["cyan", "lighten"]),
-    (name: "cyan_ll",  bounds: (0,  4, 1, 1,  5, 2), tags: ["cyan", "lighten", "lighten"]),
+    (name: "cyan_dd",  bounds: (0, -4, 1, 1, -3, 2), tags: ["green1", "blue1"]),
+    (name: "cyan_d",   bounds: (0, -2, 1, 1, -1, 2), tags: ["green2", "blue2"]),
+    (name: "cyan",     bounds: (0,  0, 1, 1,  1, 2), tags: ["green3", "blue3"]),
+    (name: "cyan_l",   bounds: (0,  2, 1, 1,  3, 2), tags: ["red1", "green3", "blue3"]),
+    (name: "cyan_ll",  bounds: (0,  4, 1, 1,  5, 2), tags: ["red2", "green3", "blue3"]),
 
     // === Magenta (x=3, z=1) ===
-    (name: "magenta_dd",  bounds: (3, -4, 1, 4, -3, 2), tags: ["magenta", "darken", "darken"]),
-    (name: "magenta_d",   bounds: (3, -2, 1, 4, -1, 2), tags: ["magenta", "darken"]),
-    (name: "magenta",     bounds: (3,  0, 1, 4,  1, 2), tags: ["magenta"]),
-    (name: "magenta_l",   bounds: (3,  2, 1, 4,  3, 2), tags: ["magenta", "lighten"]),
-    (name: "magenta_ll",  bounds: (3,  4, 1, 4,  5, 2), tags: ["magenta", "lighten", "lighten"]),
+    (name: "magenta_dd",  bounds: (3, -4, 1, 4, -3, 2), tags: ["red1", "blue1"]),
+    (name: "magenta_d",   bounds: (3, -2, 1, 4, -1, 2), tags: ["red2", "blue2"]),
+    (name: "magenta",     bounds: (3,  0, 1, 4,  1, 2), tags: ["red3", "blue3"]),
+    (name: "magenta_l",   bounds: (3,  2, 1, 4,  3, 2), tags: ["red3", "green1", "blue3"]),
+    (name: "magenta_ll",  bounds: (3,  4, 1, 4,  5, 2), tags: ["red3", "green2", "blue3"]),
 ]

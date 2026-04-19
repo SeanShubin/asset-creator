@@ -3,6 +3,6 @@
         name: "inverse_corner",
         clip: (MaxX, MaxY, MaxZ),
         bounds: (-1, -1, -1, 1, 1, 1),
-        tags: ["green"],
+        tags: ["green3"],
     ),
 ]

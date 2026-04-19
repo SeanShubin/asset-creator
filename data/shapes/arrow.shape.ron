@@ -2,11 +2,13 @@
     (
         name: "base",
         bounds: (-1, -2, -1, 1, 3, 1),
+        tags: ["red2", "green2", "blue2"],
     ),
     (
         name: "tip",
         faces: (MinY, MaxX),
         bounds: (-3, 3, -1, 0, 6, 1),
         symmetry: [MirrorX],
+        tags: ["red2", "green2", "blue2"],
     ),
 ]

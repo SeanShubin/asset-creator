@@ -7,20 +7,20 @@
     (
         name: "body",
         bounds: (-4, -1, -4, 4, 0, 4),
-        tags: ["red", "darken", "darken"],
+        tags: ["red1"],
     ),
     (
         name: "corner",
         faces: (MinX, MaxZ),
         bounds: (-4, -1, 4, -2, 0, 2),
-        tags: ["green"],
+        tags: ["green3"],
         symmetry: [MirrorX, MirrorZ],
         subtract: true,
     ),
     (
         name: "weapons_bay",
         bounds: (-3, -1, -2, -2, 0, 4),
-        tags: ["blue"],
+        tags: ["blue3"],
         symmetry: [MirrorX],
         subtract: true,
     ),

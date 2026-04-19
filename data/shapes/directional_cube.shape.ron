@@ -2,6 +2,7 @@
     (
         name: "base",
         bounds: (-5, -5, -5, 5, 5, 5),
+        tags: ["red2", "green2", "blue2"],
     ),
     (
         import: "arrow",
