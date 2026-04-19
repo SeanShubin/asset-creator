@@ -9,8 +9,15 @@ mod stress_test;
 mod surface;
 mod util;
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
+
+// Dedicated render layer for the egui-context placeholder camera. Keeps it
+// out of the default layer 0, so 3D gizmos (which default to layer 0) aren't
+// also picked up by the placeholder's 2D pipeline and rendered as a tiny
+// projected thumbnail at the viewport center.
+const PLACEHOLDER_LAYER: usize = 31;
 
 fn main() {
     logging::init();
@@ -52,11 +59,14 @@ fn main() {
     // work before any editor is active. This placeholder owns the egui
     // context for the lifetime of the app. It runs at order=-1 so it draws
     // first (clearing the screen), and editor cameras (default order=0)
-    // draw their content on top.
+    // draw their content on top. It lives on a dedicated render layer so
+    // that 3D gizmos (default layer 0) aren't also drawn via its 2D
+    // pipeline as a tiny thumbnail.
     app.add_systems(Startup, |mut commands: Commands| {
         commands.spawn((
             Camera2d,
             Camera { order: -1, ..default() },
+            RenderLayers::layer(PLACEHOLDER_LAYER),
         ));
     });
 
