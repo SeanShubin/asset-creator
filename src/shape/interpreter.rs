@@ -13,6 +13,11 @@ use super::spec::SpecNode;
 pub struct ShapePart {
     pub name: Option<String>,
     pub subtract: bool,
+    /// Slash-separated source path from the shape root, e.g. `"chassis_top/wheel"`.
+    /// Identifies the SpecNode this entity was spawned from. All copies of a
+    /// symmetry-derived part share the same path because they merge into a
+    /// single fused mesh under one source entity.
+    pub path: String,
 }
 
 #[derive(Component, Clone, Debug)]
@@ -56,7 +61,7 @@ pub fn spawn_shape_with_layers(
     let root_tf = Transform::IDENTITY;
     let mut root_cmd = commands.spawn((
         ShapeRoot,
-        ShapePart { name: Some(name.to_string()), subtract: false },
+        ShapePart { name: Some(name.to_string()), subtract: false, path: String::new() },
         BaseTransform(root_tf),
         ShapeAnimator::new(animations),
         root_tf,
@@ -171,7 +176,11 @@ fn attach_compiled(
         let vis = if is_hidden { Visibility::Hidden } else { Visibility::Visible };
         let part_entity = commands
             .spawn((
-                ShapePart { name: compiled.name.clone(), subtract: compiled.subtract },
+                ShapePart {
+                    name: compiled.name.clone(),
+                    subtract: compiled.subtract,
+                    path: node_path.clone(),
+                },
                 BaseTransform(compiled.local_transform),
                 compiled.local_transform,
                 vis,

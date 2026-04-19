@@ -85,8 +85,8 @@ pub fn read_camera_input(
     // Reset intent each frame
     *intent = CameraIntent::default();
 
-    // Mouse orbit (left drag)
-    if mouse.pressed(MouseButton::Left) && !egui_wants {
+    // Mouse orbit (right drag) — left is reserved for selection/editing
+    if mouse.pressed(MouseButton::Right) && !egui_wants {
         for ev in motion.read() {
             intent.orbit_delta.x -= ev.delta.x * 0.3;
             intent.orbit_delta.y += ev.delta.y * 0.3;

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::camera::Viewport;
+use bevy::camera::primitives::Aabb;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use std::path::PathBuf;
 
@@ -32,19 +33,21 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<ViewportRect>()
             .init_resource::<HiddenParts>()
             .init_resource::<CollidingParts>()
+            .init_resource::<Selection>()
             .add_systems(Startup, spawn_scene)
             .add_systems(Update, (
                 (detect_shape_change, watch_shape_changes, keyboard_input),
                 reload_shape,
                 (on_model_loaded, compute_stats),
             ).chain())
-            .add_systems(Update, (update_light, draw_grid))
+            .add_systems(Update, (update_light, draw_grid, draw_selection_highlight))
             .add_systems(EguiPrimaryContextPass, (
                 (
                     orbit_camera::read_camera_input,
                     orbit_camera::apply_orbit,
                     orbit_camera::apply_zoom,
                 ).chain(),
+                select_on_click,
                 left_panel_ui,
                 (
                     track_viewport_rect,
@@ -153,6 +156,14 @@ struct CollidingParts {
     names: Vec<String>,
 }
 
+/// The currently-selected part, identified by its hierarchical source path
+/// (e.g. `"chassis_top/wheel"`). Clicking a derived copy resolves to the
+/// source; all copies share one entity per source so this is unambiguous.
+#[derive(Resource, Default, Clone, Debug)]
+pub struct Selection {
+    pub source_path: Option<String>,
+}
+
 // =====================================================================
 // Scene setup
 // =====================================================================
@@ -191,6 +202,7 @@ fn detect_shape_change(
     mut fit: ResMut<CameraFitState>,
     mut orbit: ResMut<OrbitState>,
     mut hidden: ResMut<HiddenParts>,
+    mut selection: ResMut<Selection>,
     mut commands: Commands,
     existing_shapes: Query<Entity, With<ShapeRoot>>,
 ) {
@@ -199,6 +211,7 @@ fn detect_shape_change(
     let roots: Vec<Entity> = existing_shapes.iter().collect();
     despawn_shape(&mut commands, &roots);
     hidden.paths.clear();
+    selection.source_path = None;
 
     loaded.path = current.path.clone();
 
@@ -636,9 +649,12 @@ fn left_panel_ui(
     mut hidden: ResMut<HiddenParts>,
     mut reload_events: MessageWriter<ReloadShape>,
     colliding: Res<CollidingParts>,
+    mut selection: ResMut<Selection>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let mut toggles: Vec<(String, Visibility)> = Vec::new();
+    let mut select_click: Option<String> = None;
+    let selected_path = selection.source_path.clone();
 
     egui::SidePanel::left("object_editor_panel").min_width(220.0).show(ctx, |ui| {
         shape_list(ui, &registry, &mut current);
@@ -652,7 +668,10 @@ fn left_panel_ui(
         ui.heading("Part Tree");
         ui.separator();
         for root in &roots {
-            draw_tree_node(ui, root, &parts, &mut toggles, 0, &[], &[], &colliding);
+            draw_tree_node(
+                ui, root, &parts, &mut toggles, &mut select_click,
+                selected_path.as_deref(), 0, &[], &[], &colliding,
+            );
         }
 
         if registry.has_errors() {
@@ -660,6 +679,10 @@ fn left_panel_ui(
             error_list(ui, &registry);
         }
     });
+
+    if let Some(path) = select_click {
+        selection.source_path = Some(path);
+    }
 
     if !toggles.is_empty() {
         let snapshot = hidden.paths.clone();
@@ -815,11 +838,14 @@ fn animation_controls(
 // Tree rendering
 // =====================================================================
 
+#[allow(clippy::too_many_arguments)]
 fn draw_tree_node(
     ui: &mut egui::Ui,
     entity: Entity,
     parts: &Query<(&ShapePart, Option<&Children>, &Visibility)>,
     toggles: &mut Vec<(String, Visibility)>,
+    select_click: &mut Option<String>,
+    selected_path: Option<&str>,
     depth: usize,
     ancestors: &[Entity],
     name_path: &[String],
@@ -852,6 +878,8 @@ fn draw_tree_node(
         None
     };
 
+    let is_selected = !node_path.is_empty() && selected_path == Some(node_path.as_str());
+
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         if !indent.is_empty() {
@@ -873,7 +901,9 @@ fn draw_tree_node(
         } else {
             egui::RichText::new(label)
         };
-        ui.label(label_widget);
+        if ui.selectable_label(is_selected, label_widget).clicked() && !node_path.is_empty() {
+            *select_click = Some(node_path.clone());
+        }
     });
 
     if let Some(children) = children {
@@ -888,7 +918,7 @@ fn draw_tree_node(
         for child in children.iter() {
             if parts.get(child).is_ok() {
                 draw_tree_node(
-                    ui, child, parts, toggles,
+                    ui, child, parts, toggles, select_click, selected_path,
                     depth + 1, &path, &child_name_path, colliding,
                 );
             }
@@ -952,5 +982,149 @@ fn collect_subtree_paths(
                 collect_subtree_paths(child, parts, &child_path, out);
             }
         }
+    }
+}
+
+// =====================================================================
+// Selection — click in the viewport to select a part
+// =====================================================================
+
+/// Read a left-click in the central viewport, raycast against each named
+/// part's own geometry (excluding nested subparts), and update
+/// `Selection.source_path` to the nearest hit (or `None` for empty space).
+fn select_on_click(
+    mut contexts: EguiContexts,
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    cameras: Query<(&Camera, &GlobalTransform), With<OrbitCamera>>,
+    parts: Query<(Entity, &ShapePart)>,
+    is_part: Query<(), With<ShapePart>>,
+    children_q: Query<&Children>,
+    aabbs: Query<(&Aabb, &GlobalTransform)>,
+    mut selection: ResMut<Selection>,
+) {
+    if !mouse.just_pressed(MouseButton::Left) { return; }
+
+    let egui_wants = contexts.ctx_mut().map(|c| c.wants_pointer_input()).unwrap_or(false);
+    if egui_wants { return; }
+
+    let Ok(window) = windows.single() else { return; };
+    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok((camera, cam_xf)) = cameras.single() else { return; };
+
+    // `viewport_to_world` expects the cursor in window logical coords (it
+    // subtracts the viewport's top-left internally). We just need to verify
+    // the cursor is inside the visible viewport rect first.
+    if let Some(vp_rect) = camera.logical_viewport_rect() {
+        if !vp_rect.contains(cursor) { return; }
+    }
+
+    let Ok(ray) = camera.viewport_to_world(cam_xf, cursor) else { return; };
+    let dir: Vec3 = ray.direction.into();
+
+    let mut best: Option<(f32, String)> = None;
+    for (entity, part) in &parts {
+        // Skip the root pseudo-part — its path is empty and it has no own
+        // geometry; clicking the whole-shape volume isn't a useful selection.
+        if part.path.is_empty() { continue; }
+        let Some((mn, mx)) = own_world_aabb(entity, &children_q, &aabbs, &is_part) else { continue };
+        let Some(t) = ray_aabb_intersect(ray.origin, dir, mn, mx) else { continue };
+        if best.as_ref().is_none_or(|(t_best, _)| t < *t_best) {
+            best = Some((t, part.path.clone()));
+        }
+    }
+
+    selection.source_path = best.map(|(_, p)| p);
+}
+
+/// Union the world AABBs of an entity's *direct* mesh children, excluding
+/// any child that is itself a `ShapePart` (those represent nested named
+/// sub-parts and own their own selection volume). Returns `None` if the
+/// entity has no own geometry.
+fn own_world_aabb(
+    root: Entity,
+    children_q: &Query<&Children>,
+    aabbs: &Query<(&Aabb, &GlobalTransform)>,
+    is_part: &Query<(), With<ShapePart>>,
+) -> Option<(Vec3, Vec3)> {
+    let children = children_q.get(root).ok()?;
+    let mut result: Option<(Vec3, Vec3)> = None;
+    for child in children.iter() {
+        if is_part.get(child).is_ok() { continue; }
+        let Ok((aabb, xf)) = aabbs.get(child) else { continue };
+        let world = aabb_to_world(aabb, xf);
+        result = Some(match result {
+            Some((mn, mx)) => (mn.min(world.0), mx.max(world.1)),
+            None => world,
+        });
+    }
+    result
+}
+
+/// Transform a local-space `Aabb` by a `GlobalTransform` into a world-space
+/// (min, max). The result is itself axis-aligned in world space — i.e. the
+/// AABB of the transformed corners, not a tightly-rotated OBB.
+fn aabb_to_world(aabb: &Aabb, xf: &GlobalTransform) -> (Vec3, Vec3) {
+    let center = Vec3::from(aabb.center);
+    let half = Vec3::from(aabb.half_extents);
+    let mut mn = Vec3::splat(f32::MAX);
+    let mut mx = Vec3::splat(f32::MIN);
+    for sx in [-1.0, 1.0] {
+        for sy in [-1.0, 1.0] {
+            for sz in [-1.0, 1.0] {
+                let local = center + Vec3::new(sx * half.x, sy * half.y, sz * half.z);
+                let world = xf.transform_point(local);
+                mn = mn.min(world);
+                mx = mx.max(world);
+            }
+        }
+    }
+    (mn, mx)
+}
+
+/// Slab-based ray-AABB intersection. Returns the nearest non-negative `t`
+/// along the ray at which it enters the box, or `None` if it misses.
+fn ray_aabb_intersect(origin: Vec3, dir: Vec3, mn: Vec3, mx: Vec3) -> Option<f32> {
+    let inv = Vec3::new(
+        if dir.x.abs() < 1e-8 { f32::INFINITY } else { 1.0 / dir.x },
+        if dir.y.abs() < 1e-8 { f32::INFINITY } else { 1.0 / dir.y },
+        if dir.z.abs() < 1e-8 { f32::INFINITY } else { 1.0 / dir.z },
+    );
+    let t0 = (mn - origin) * inv;
+    let t1 = (mx - origin) * inv;
+    let tmin = t0.min(t1);
+    let tmax = t0.max(t1);
+    let t_enter = tmin.x.max(tmin.y).max(tmin.z);
+    let t_exit = tmax.x.min(tmax.y).min(tmax.z);
+    if t_enter > t_exit || t_exit < 0.0 {
+        None
+    } else {
+        Some(t_enter.max(0.0))
+    }
+}
+
+/// Draw a wireframe gizmo around the AABB of every entity matching the
+/// current selection's `source_path`. There's typically only one such
+/// entity per source — symmetry copies merge into one fused mesh.
+const SELECTION_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
+
+fn draw_selection_highlight(
+    mut gizmos: Gizmos,
+    selection: Res<Selection>,
+    parts: Query<(Entity, &ShapePart)>,
+    is_part: Query<(), With<ShapePart>>,
+    children_q: Query<&Children>,
+    aabbs: Query<(&Aabb, &GlobalTransform)>,
+) {
+    let Some(ref selected_path) = selection.source_path else { return; };
+    for (entity, part) in &parts {
+        if part.path != *selected_path { continue; }
+        let Some((mn, mx)) = own_world_aabb(entity, &children_q, &aabbs, &is_part) else { continue };
+        let center = (mn + mx) * 0.5;
+        let size = mx - mn;
+        gizmos.cube(
+            Transform::from_translation(center).with_scale(size),
+            SELECTION_COLOR,
+        );
     }
 }
