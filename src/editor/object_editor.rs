@@ -1232,9 +1232,18 @@ fn draw_selection_highlight(
     }
 }
 
-/// Stroke every triangle edge in `mesh` as gizmo line segments, transformed
-/// to world space by `xf`. Generic over the gizmo config group so the same
-/// helper drives both the front and behind passes.
+/// Draw the *feature edges* of `mesh` as gizmo line segments. A feature
+/// edge is one that either (a) borders only one triangle (a mesh boundary,
+/// e.g. around a subtract hole), or (b) is shared by two triangles whose
+/// face normals differ — a real geometric crease, like a cube edge. Edges
+/// shared by two coplanar triangles (the diagonals introduced when a quad
+/// face is triangulated) are skipped, eliminating triangulation noise.
+///
+/// Edge identity is by bit-exact vertex position (not vertex index)
+/// because adjacent primitives in a fused mesh have separate vertex
+/// buffers but identical positions at their shared face — the compile
+/// pipeline derives both from the same integer bounds, so the float
+/// math is deterministic and matches exactly.
 fn draw_mesh_wireframe<C: GizmoConfigGroup>(
     gizmos: &mut Gizmos<C>,
     mesh: &Mesh,
@@ -1244,13 +1253,56 @@ fn draw_mesh_wireframe<C: GizmoConfigGroup>(
     let Some(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|a| a.as_float3()) else { return };
     let Some(indices) = mesh.indices() else { return };
 
+    type PosKey = (u32, u32, u32);
+    fn pos_key(p: [f32; 3]) -> PosKey {
+        (p[0].to_bits(), p[1].to_bits(), p[2].to_bits())
+    }
+    fn edge_key(a: [f32; 3], b: [f32; 3]) -> (PosKey, PosKey) {
+        let ka = pos_key(a);
+        let kb = pos_key(b);
+        if ka <= kb { (ka, kb) } else { (kb, ka) }
+    }
+
+    // First pass: bucket every triangle's 3 edges by position-key, recording
+    // each adjacent triangle's face normal.
+    let mut edge_normals: std::collections::HashMap<(PosKey, PosKey), Vec<Vec3>> =
+        std::collections::HashMap::new();
+    let mut triangles: Vec<[[f32; 3]; 3]> = Vec::new();
+
     let mut idx_iter = indices.iter();
     while let (Some(i0), Some(i1), Some(i2)) = (idx_iter.next(), idx_iter.next(), idx_iter.next()) {
-        let v0 = xf.transform_point(Vec3::from_array(positions[i0]));
-        let v1 = xf.transform_point(Vec3::from_array(positions[i1]));
-        let v2 = xf.transform_point(Vec3::from_array(positions[i2]));
-        gizmos.line(v0, v1, color);
-        gizmos.line(v1, v2, color);
-        gizmos.line(v2, v0, color);
+        let v0 = positions[i0];
+        let v1 = positions[i1];
+        let v2 = positions[i2];
+        let p0 = Vec3::from_array(v0);
+        let p1 = Vec3::from_array(v1);
+        let p2 = Vec3::from_array(v2);
+        let normal = (p1 - p0).cross(p2 - p0).normalize_or_zero();
+        for (a, b) in [(v0, v1), (v1, v2), (v2, v0)] {
+            edge_normals.entry(edge_key(a, b)).or_default().push(normal);
+        }
+        triangles.push([v0, v1, v2]);
+    }
+
+    // Second pass: draw each unique edge at most once, suppressing edges
+    // shared by two coplanar triangles.
+    const COPLANAR_DOT_THRESHOLD: f32 = 0.999; // ~2.5° tolerance
+    let mut drawn: std::collections::HashSet<(PosKey, PosKey)> = std::collections::HashSet::new();
+    for [v0, v1, v2] in &triangles {
+        for (a, b) in [(*v0, *v1), (*v1, *v2), (*v2, *v0)] {
+            let key = edge_key(a, b);
+            if !drawn.insert(key) { continue; }
+            let normals = &edge_normals[&key];
+            let is_feature = match normals.as_slice() {
+                [_] => true, // mesh boundary
+                [n0, n1] => n0.dot(*n1) < COPLANAR_DOT_THRESHOLD,
+                _ => true, // non-manifold; draw to be safe
+            };
+            if is_feature {
+                let world_a = xf.transform_point(Vec3::from_array(a));
+                let world_b = xf.transform_point(Vec3::from_array(b));
+                gizmos.line(world_a, world_b, color);
+            }
+        }
     }
 }
