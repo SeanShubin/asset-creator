@@ -9,7 +9,8 @@ use bevy::prelude::*;
 
 pub use animation::ShapeAnimator;
 pub use interpreter::{
-    despawn_shape, spawn_shape, spawn_shape_with_layers, ShapePart, ShapeRoot,
+    despawn_shape, spawn_shape, spawn_shape_with_layers,
+    PlacementCopy, ShapePart, ShapeRoot,
 };
 pub use render::{compile, production_stats, CompiledShape};
 pub use spec::{collect_occupancy, aabb_for_parts, SpecNode};

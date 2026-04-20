@@ -64,6 +64,11 @@ pub struct FusedMesh {
     /// translucent overlays showing what volume is being carved.
     /// Only emitted when the shape is compiled directly (not via import).
     pub subtract_preview: bool,
+    /// True if every primitive in this mesh came from the canonical
+    /// placement chain within this group's symmetry — i.e. all the
+    /// `placements_for` indices encountered along the way were 0.
+    /// Used by the editor to color symmetry copies differently.
+    pub is_canonical: bool,
 }
 
 // =====================================================================
@@ -196,6 +201,7 @@ pub fn compile(
             &ctx,
             &all_subtracts,
             "",
+            true,
         );
     }
     group.finish(None, false, ctx.templates)
@@ -239,6 +245,7 @@ pub fn production_stats(
             &ctx,
             &all_subtracts,
             "",
+            true,
         );
     }
     let resolved = fuse_boxes(group.resolve(None));
@@ -307,6 +314,11 @@ struct UnionPrimitive {
     emissive: bool,
     is_mirrored: bool,
     scale: (i32, i32, i32),
+    /// True if this primitive came from the canonical placement chain
+    /// within its compile group (all encountered placement indices
+    /// were 0). Carried into `FusedMesh` so the editor can color
+    /// canonical vs derived copies differently.
+    is_canonical: bool,
 }
 
 /// A Subtract primitive recorded at accumulation time. Same fields as
@@ -348,6 +360,7 @@ struct ResolvedPrimitive {
     emissive: bool,
     is_mirrored: bool,
     subtract_preview: bool,
+    is_canonical: bool,
 }
 
 impl GroupAccumulator {
@@ -401,6 +414,7 @@ impl GroupAccumulator {
                     emissive: prim.emissive,
                     is_mirrored: prim.is_mirrored,
                     subtract_preview: false,
+                    is_canonical: prim.is_canonical,
                 });
             } else {
                 let mn = prim.world_bounds.min();
@@ -430,6 +444,7 @@ impl GroupAccumulator {
                                     emissive: prim.emissive,
                                     is_mirrored: prim.is_mirrored,
                                     subtract_preview: false,
+                                    is_canonical: prim.is_canonical,
                                 });
                             } else {
                                 match super::csg::cell_subtract_with_sig(
@@ -446,6 +461,7 @@ impl GroupAccumulator {
                                             emissive: prim.emissive,
                                             is_mirrored: prim.is_mirrored,
                                             subtract_preview: false,
+                                            is_canonical: prim.is_canonical,
                                         });
                                     }
                                     super::csg::CellResult::NotRepresentable { result_signature } => {
@@ -473,6 +489,7 @@ impl GroupAccumulator {
                 emissive: false,
                 is_mirrored: prim.is_mirrored,
                 subtract_preview: true,
+                is_canonical: prim.is_canonical,
             });
         }
 
@@ -480,44 +497,61 @@ impl GroupAccumulator {
     }
 
     /// Turn resolved primitives into fused meshes (editor path, no fusion).
+    /// Output is bucketed by (kind, is_canonical) — kind is one of normal,
+    /// emissive, subtract preview. The canonical split keeps the source
+    /// placement separable from its symmetry-derived copies so the editor
+    /// can color them differently.
     fn finish(self, name: Option<String>, subtract: bool, templates: &PrimitiveTemplates) -> CompiledShape {
         let resolved = self.resolve(name.as_deref());
 
-        let mut emissive_mesh = RawMesh::default();
-        let mut normal_mesh = RawMesh::default();
-        let mut preview_mesh = RawMesh::default();
-        let mut emissive_mirrored = false;
-        let mut normal_mirrored = false;
-        let mut preview_mirrored = false;
+        // [canonical_idx][kind] where kind = 0 normal, 1 emissive, 2 preview.
+        let mut bucket_meshes = [[RawMesh::default(), RawMesh::default(), RawMesh::default()],
+                                 [RawMesh::default(), RawMesh::default(), RawMesh::default()]];
+        let mut bucket_mirrored = [[false; 3]; 2];
 
         for cell in &resolved {
             let mesh_tf = compute_mesh_transform(cell.shape, &cell.bounds, &cell.orient_mat, cell.scale);
             let (cr, cg, cb) = cell.color.to_rgb();
-
-            if cell.subtract_preview {
-                let rgba = [cr, cg, cb, 0.3];
-                preview_mesh.append_transformed(templates.get(cell.shape), &mesh_tf, rgba);
-                if cell.is_mirrored { preview_mirrored = true; }
+            let canonical_idx = if cell.is_canonical { 0 } else { 1 };
+            let (kind_idx, alpha) = if cell.subtract_preview {
+                (2, 0.3)
             } else if cell.emissive {
-                let rgba = [cr, cg, cb, 1.0];
-                emissive_mesh.append_transformed(templates.get(cell.shape), &mesh_tf, rgba);
-                if cell.is_mirrored { emissive_mirrored = true; }
+                (1, 1.0)
             } else {
-                let rgba = [cr, cg, cb, 1.0];
-                normal_mesh.append_transformed(templates.get(cell.shape), &mesh_tf, rgba);
-                if cell.is_mirrored { normal_mirrored = true; }
+                (0, 1.0)
+            };
+            let rgba = [cr, cg, cb, alpha];
+            bucket_meshes[canonical_idx][kind_idx]
+                .append_transformed(templates.get(cell.shape), &mesh_tf, rgba);
+            if cell.is_mirrored {
+                bucket_mirrored[canonical_idx][kind_idx] = true;
             }
         }
 
         let mut meshes = Vec::new();
-        if !normal_mesh.is_empty() {
-            meshes.push(FusedMesh { mesh: normal_mesh, emissive: false, contains_mirrored: normal_mirrored, subtract_preview: false });
-        }
-        if !emissive_mesh.is_empty() {
-            meshes.push(FusedMesh { mesh: emissive_mesh, emissive: true, contains_mirrored: emissive_mirrored, subtract_preview: false });
-        }
-        if !preview_mesh.is_empty() {
-            meshes.push(FusedMesh { mesh: preview_mesh, emissive: false, contains_mirrored: preview_mirrored, subtract_preview: true });
+        for (canonical_idx, [normal, emissive, preview]) in bucket_meshes.into_iter().enumerate() {
+            let is_canonical = canonical_idx == 0;
+            if !normal.is_empty() {
+                meshes.push(FusedMesh {
+                    mesh: normal, emissive: false, subtract_preview: false,
+                    contains_mirrored: bucket_mirrored[canonical_idx][0],
+                    is_canonical,
+                });
+            }
+            if !emissive.is_empty() {
+                meshes.push(FusedMesh {
+                    mesh: emissive, emissive: true, subtract_preview: false,
+                    contains_mirrored: bucket_mirrored[canonical_idx][1],
+                    is_canonical,
+                });
+            }
+            if !preview.is_empty() {
+                meshes.push(FusedMesh {
+                    mesh: preview, emissive: false, subtract_preview: true,
+                    contains_mirrored: bucket_mirrored[canonical_idx][2],
+                    is_canonical,
+                });
+            }
         }
 
         CompiledShape {
@@ -571,6 +605,9 @@ fn fuse_boxes(cells: Vec<ResolvedPrimitive>) -> Vec<ResolvedPrimitive> {
                 emissive,
                 is_mirrored: false,
                 subtract_preview: false,
+                // Production-stats path only — is_canonical isn't observed
+                // by the triangle counter that consumes this output.
+                is_canonical: true,
             });
         }
     }
@@ -888,7 +925,9 @@ fn ceil_div(a: i32, b: i32) -> i32 {
 
 /// Compile one named-group subtree starting at `spec`. Walks unnamed
 /// descendants into the same group; recursively compiles named
-/// descendants as children.
+/// descendants as children. Each named group resets the canonical
+/// chain — within this group, "canonical" means index-0 of this group's
+/// own symmetry, regardless of how its parents were placed.
 fn compile_group(
     spec: &SpecNode,
     inherited_placement: Placement,
@@ -899,7 +938,7 @@ fn compile_group(
 ) -> CompiledShape {
     let mut group = GroupAccumulator::new();
     group.subtract_primitives.extend_from_slice(all_subtracts);
-    walk_into_group(spec, inherited_placement, scale, &mut group, true, ctx, all_subtracts, parent_path);
+    walk_into_group(spec, inherited_placement, scale, &mut group, true, ctx, all_subtracts, parent_path, true);
     group.finish(spec.effective_name().map(str::to_string), spec.subtract, ctx.templates)
 }
 
@@ -924,10 +963,13 @@ fn walk_into_group(
     ctx: &CompileCtx<'_>,
     all_subtracts: &[SubtractPrimitive],
     parent_path: &str,
+    canonical_so_far: bool,
 ) {
     let node_path = build_path(parent_path, spec);
 
     // Named non-root nodes create child groups (unless flattening).
+    // The child is its own selectable identity, so it starts a fresh
+    // canonical chain — `compile_group` reinitializes it.
     if !ctx.flatten && !is_group_root && spec.effective_name().is_some() {
         let child = compile_group(spec, inherited_placement, scale, ctx, all_subtracts, parent_path);
         group.children.push(child);
@@ -939,21 +981,22 @@ fn walk_into_group(
     if is_hidden(&node_path, ctx) {
         if ctx.flatten { return; }
         if let Some(ref import_name) = spec.import {
-            walk_import(spec, import_name, inherited_placement, scale, group, ctx, &node_path);
+            walk_import(spec, import_name, inherited_placement, scale, group, ctx, &node_path, canonical_so_far);
         } else {
             for child in &spec.children {
-                walk_into_group(child, inherited_placement, scale, group, false, ctx, all_subtracts, &node_path);
+                walk_into_group(child, inherited_placement, scale, group, false, ctx, all_subtracts, &node_path, canonical_so_far);
             }
         }
         return;
     }
 
-    for (local, _suffix) in &placements_for(spec) {
+    for (idx, (local, _suffix)) in placements_for(spec).iter().enumerate() {
         let combined = compose_placements(inherited_placement, *local);
+        let placement_canonical = canonical_so_far && idx == 0;
         if let Some(ref import_name) = spec.import {
-            walk_import(spec, import_name, combined, scale, group, ctx, &node_path);
+            walk_import(spec, import_name, combined, scale, group, ctx, &node_path, placement_canonical);
         } else {
-            walk_node_body(spec, combined, scale, group, ctx, all_subtracts, &node_path);
+            walk_node_body(spec, combined, scale, group, ctx, all_subtracts, &node_path, placement_canonical);
         }
     }
 }
@@ -968,11 +1011,12 @@ fn walk_node_body(
     ctx: &CompileCtx<'_>,
     all_subtracts: &[SubtractPrimitive],
     node_path: &str,
+    is_canonical: bool,
 ) {
     if let Some((shape, orient_p)) = spec.primitive() {
         let Some(bounds) = spec.bounds else {
             for child in &spec.children {
-                walk_into_group(child, placement, scale, group, false, ctx, all_subtracts, node_path);
+                walk_into_group(child, placement, scale, group, false, ctx, all_subtracts, node_path, is_canonical);
             }
             return;
         };
@@ -984,15 +1028,15 @@ fn walk_node_body(
 
         if spec.subtract {
             if ctx.is_direct {
-                add_primitive(shape, &bounds, placement, scale, orient_p, spec, &mut group.preview_primitives);
+                add_primitive(shape, &bounds, placement, scale, orient_p, spec, is_canonical, &mut group.preview_primitives);
             }
         } else {
-            add_primitive(shape, &bounds, placement, scale, orient_p, spec, &mut group.union_primitives);
+            add_primitive(shape, &bounds, placement, scale, orient_p, spec, is_canonical, &mut group.union_primitives);
         }
     }
 
     for child in &spec.children {
-        walk_into_group(child, placement, scale, group, false, ctx, all_subtracts, node_path);
+        walk_into_group(child, placement, scale, group, false, ctx, all_subtracts, node_path, is_canonical);
     }
 }
 
@@ -1007,6 +1051,7 @@ fn add_primitive(
     scale: (i32, i32, i32),
     orient_p: Placement,
     spec: &SpecNode,
+    is_canonical: bool,
     target: &mut Vec<UnionPrimitive>,
 ) {
     let world_bounds = apply_placement_to_bounds(placement, *bounds);
@@ -1023,6 +1068,7 @@ fn add_primitive(
         emissive,
         is_mirrored,
         scale,
+        is_canonical,
     });
 }
 
@@ -1071,6 +1117,7 @@ fn walk_import(
     group: &mut GroupAccumulator,
     ctx: &CompileCtx<'_>,
     parent_path: &str,
+    canonical_so_far: bool,
 ) {
     let imported = match ctx.registry.get_shape(import_name) {
         Some(parts) => parts.to_vec(),
@@ -1125,6 +1172,7 @@ fn walk_import(
             &import_ctx,
             &import_subtracts,
             parent_path,
+            canonical_so_far,
         );
     }
 }

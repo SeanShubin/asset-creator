@@ -20,6 +20,16 @@ pub struct ShapePart {
     pub path: String,
 }
 
+/// Tag on a spawned mesh entity indicating whether it carries the
+/// canonical (authored) placement of its `ShapePart`'s primitives, or a
+/// symmetry-derived copy. `is_canonical = true` ⇔ every placement index in
+/// the derivation chain within the part's compile group was 0. The editor
+/// uses this to color canonical vs derived copies differently.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PlacementCopy {
+    pub is_canonical: bool,
+}
+
 #[derive(Component, Clone, Debug)]
 pub struct BaseTransform(pub Transform);
 
@@ -257,6 +267,7 @@ fn attach_fused_mesh(
             MeshMaterial3d(material),
             Transform::IDENTITY,
             Visibility::default(),
+            PlacementCopy { is_canonical: fused.is_canonical },
         ))
         .id();
     commands.entity(parent).add_child(mesh_entity);

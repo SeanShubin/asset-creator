@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::camera::Viewport;
 use bevy::camera::primitives::Aabb;
+use bevy::gizmos::config::{GizmoConfigGroup, GizmoConfigStore};
 use bevy::mesh::Mesh3d;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use std::path::PathBuf;
@@ -9,7 +10,7 @@ use crate::registry::{AssetRegistry, shape_name_from_path};
 use crate::shape::{
     collect_occupancy, despawn_shape,
     production_stats, spawn_shape,
-    ShapeAnimator, ShapePart, ShapeRoot,
+    PlacementCopy, ShapeAnimator, ShapePart, ShapeRoot,
 };
 use super::edits::{self, CommandHistory, WorkingShape};
 use super::orbit_camera::{self, fit_for_aabb, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
@@ -38,7 +39,10 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<Selection>()
             .init_resource::<WorkingShape>()
             .init_resource::<CommandHistory>()
-            .add_systems(Startup, spawn_scene)
+            // Selection wireframe gizmo group with a small negative
+            // depth_bias to prevent z-fighting on coplanar faces.
+            .init_gizmo_group::<SelectionFrontGizmos>()
+            .add_systems(Startup, (spawn_scene, configure_selection_gizmos))
             .add_systems(Update, (
                 (
                     edits::reset_working_on_shape_switch,
@@ -1189,20 +1193,28 @@ fn ray_aabb_intersect(origin: Vec3, dir: Vec3, mn: Vec3, mx: Vec3) -> Option<f32
     }
 }
 
-/// Draw the actual mesh edges of the selected part as gizmo lines. A single
-/// AABB is too loose: a part with N symmetry copies has a fused mesh whose
-/// AABB encloses all of them (e.g. the "corners" mesh of chassis_top has
-/// the same AABB as the whole chassis_top). Per-triangle edges show exactly
-/// what's selected.
-const SELECTION_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
+/// Gizmo group for selection wireframe, with a small negative depth_bias
+/// to prevent z-fighting on coplanar faces.
+#[derive(Default, Reflect, GizmoConfigGroup)]
+struct SelectionFrontGizmos;
 
+fn configure_selection_gizmos(mut store: ResMut<GizmoConfigStore>) {
+    let (front_cfg, _) = store.config_mut::<SelectionFrontGizmos>();
+    front_cfg.depth_bias = -0.001;
+}
+
+const CANONICAL_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);   // bright yellow
+const DERIVED_COLOR: Color = Color::srgb(0.65, 0.55, 0.15);   // dim yellow
+
+/// Draw the actual mesh edges of the selected part. Canonical (placement
+/// index 0) copies render brighter than symmetry-derived copies.
 fn draw_selection_highlight(
-    mut gizmos: Gizmos,
+    mut front: Gizmos<SelectionFrontGizmos>,
     selection: Res<Selection>,
     parts: Query<(Entity, &ShapePart)>,
     is_part: Query<(), With<ShapePart>>,
     children_q: Query<&Children>,
-    meshes: Query<(&Mesh3d, &GlobalTransform)>,
+    meshes: Query<(&Mesh3d, &GlobalTransform, Option<&PlacementCopy>)>,
     mesh_assets: Res<Assets<Mesh>>,
 ) {
     let Some(ref selected_path) = selection.source_path else { return; };
@@ -1211,18 +1223,24 @@ fn draw_selection_highlight(
         let Ok(children) = children_q.get(entity) else { continue };
         for child in children.iter() {
             if is_part.get(child).is_ok() { continue; }
-            let Ok((mesh3d, xf)) = meshes.get(child) else { continue };
+            let Ok((mesh3d, xf, copy)) = meshes.get(child) else { continue };
             let Some(mesh) = mesh_assets.get(&mesh3d.0) else { continue };
-            draw_mesh_wireframe(&mut gizmos, mesh, xf, SELECTION_COLOR);
+            let is_canonical = copy.is_none_or(|c| c.is_canonical);
+            let color = if is_canonical { CANONICAL_COLOR } else { DERIVED_COLOR };
+            draw_mesh_wireframe(&mut front, mesh, xf, color);
         }
     }
 }
 
 /// Stroke every triangle edge in `mesh` as gizmo line segments, transformed
-/// to world space by `xf`. Internal edges of triangulated faces will be
-/// drawn too (a quad face shows its diagonal); cleaner silhouette extraction
-/// is a future polish.
-fn draw_mesh_wireframe(gizmos: &mut Gizmos, mesh: &Mesh, xf: &GlobalTransform, color: Color) {
+/// to world space by `xf`. Generic over the gizmo config group so the same
+/// helper drives both the front and behind passes.
+fn draw_mesh_wireframe<C: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<C>,
+    mesh: &Mesh,
+    xf: &GlobalTransform,
+    color: Color,
+) {
     let Some(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|a| a.as_float3()) else { return };
     let Some(indices) = mesh.indices() else { return };
 

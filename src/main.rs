@@ -8,19 +8,21 @@ mod util;
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
-use bevy_egui::EguiPlugin;
+use bevy_egui::{EguiGlobalSettings, EguiPlugin, PrimaryEguiContext};
 use std::path::PathBuf;
 
 use editor::CurrentShape;
 use registry::AssetRegistry;
 
-// bevy_egui 0.39 attaches the primary egui context to the first spawned
-// camera and renders egui via that camera's render graph. Empirically,
-// using the orbit Camera3d as the host produces a broken UI (panel
-// mispositioned, 3D viewport blank). A dedicated Camera2d hosts egui;
-// the orbit Camera3d (default order=0) renders the scene on top. The
-// placeholder lives on a non-default render layer so 3D gizmos (default
-// layer 0) aren't double-rendered as a viewport-center thumbnail.
+// bevy_egui 0.39 attaches the primary egui context to the first camera it
+// sees in `setup_primary_egui_context_system`. Empirically, using the
+// orbit Camera3d as the host produces a broken UI (panel mispositioned,
+// 3D viewport blank). We dedicate a Camera2d as the egui host, render
+// nothing through it (it's on a non-default layer so 3D gizmos aren't
+// double-rendered as a thumbnail), and let the orbit Camera3d render the
+// scene at order=0. To make the host attachment deterministic regardless
+// of plugin scheduling, we DISABLE bevy_egui's auto-create and explicitly
+// insert `PrimaryEguiContext` on the placeholder at spawn time.
 const EGUI_HOST_LAYER: usize = 31;
 
 fn main() {
@@ -62,11 +64,25 @@ fn main() {
     });
     app.insert_resource(CurrentShape { path: initial_path });
 
-    app.add_systems(Startup, |mut commands: Commands| {
+    // Disable bevy_egui's auto-create-primary-context. Otherwise its
+    // `setup_primary_egui_context_system` (which runs in PreStartup with
+    // no explicit ordering) might attach the primary context to whatever
+    // camera it sees first — including the orbit Camera3d if scheduling
+    // happens to put it ahead of our placeholder. Manual attachment below
+    // is order-independent.
+    app.world_mut()
+        .resource_mut::<EguiGlobalSettings>()
+        .auto_create_primary_context = false;
+
+    // Spawn the placeholder Camera2d with `PrimaryEguiContext` already
+    // attached. Order doesn't matter because we've disabled auto-create —
+    // this is the only camera that ever gets the primary context.
+    app.add_systems(PreStartup, |mut commands: Commands| {
         commands.spawn((
             Camera2d,
             Camera { order: -1, ..default() },
             RenderLayers::layer(EGUI_HOST_LAYER),
+            PrimaryEguiContext,
         ));
     });
 
