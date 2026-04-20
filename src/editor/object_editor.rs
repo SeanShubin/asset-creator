@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::camera::Viewport;
 use bevy::camera::primitives::Aabb;
+use bevy::mesh::Mesh3d;
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use std::path::PathBuf;
 
@@ -10,6 +11,7 @@ use crate::shape::{
     production_stats, spawn_shape,
     ShapeAnimator, ShapePart, ShapeRoot,
 };
+use super::edits::{self, CommandHistory, WorkingShape};
 use super::orbit_camera::{self, fit_for_aabb, CameraIntent, OrbitCamera, OrbitState, ZoomLimits};
 
 // =====================================================================
@@ -34,11 +36,20 @@ impl Plugin for ObjectEditorPlugin {
             .init_resource::<HiddenParts>()
             .init_resource::<CollidingParts>()
             .init_resource::<Selection>()
+            .init_resource::<WorkingShape>()
+            .init_resource::<CommandHistory>()
             .add_systems(Startup, spawn_scene)
             .add_systems(Update, (
-                (detect_shape_change, watch_shape_changes, keyboard_input),
+                (
+                    edits::reset_working_on_shape_switch,
+                    detect_shape_change,
+                    watch_shape_changes,
+                    edits::delete_selected,
+                    edits::undo_redo,
+                    keyboard_input,
+                ),
                 reload_shape,
-                (on_model_loaded, compute_stats),
+                (on_model_loaded, compute_stats, edits::auto_save),
             ).chain())
             .add_systems(Update, (update_light, draw_grid, draw_selection_highlight))
             .add_systems(EguiPrimaryContextPass, (
@@ -78,7 +89,7 @@ struct LoadedShape {
 
 /// Event: request a shape reload.
 #[derive(Message)]
-struct ReloadShape;
+pub struct ReloadShape;
 
 /// Tracks the last-seen shape generation for file-change detection.
 #[derive(Resource, Default)]
@@ -251,7 +262,7 @@ fn reload_shape(
     mut reload_events: MessageReader<ReloadShape>,
     mut stats: ResMut<SceneStats>,
     mut bounds: ResMut<SceneBounds>,
-    loaded: Res<LoadedShape>,
+    working: Res<WorkingShape>,
     registry: Res<AssetRegistry>,
     existing: Query<Entity, With<ShapeRoot>>,
     hidden: Res<HiddenParts>,
@@ -260,19 +271,24 @@ fn reload_shape(
     if reload_events.read().next().is_none() { return; }
     reload_events.clear();
 
-    let Some(path) = &loaded.path else { return };
+    let Some(path) = &working.path else { return };
 
     let roots: Vec<Entity> = existing.iter().collect();
     despawn_shape(&mut commands, &roots);
 
-    let Some(shape_file) = registry.get_shape_by_path(path) else {
-        error!("Shape at '{}' not found in registry", path.display());
+    if working.parts.is_empty() {
+        // Nothing to render — empty working copy, e.g., after Delete-all
+        // or before the registry has populated.
+        bounds.scene_min = Vec3::ZERO;
+        bounds.scene_max = Vec3::ZERO;
+        stats.collisions = 0;
+        colliding.names.clear();
         return;
-    };
+    }
 
     // Compute the cell-level occupancy index once per reload. This is the
     // single source of truth for scene AABB AND collision count.
-    let occupancy = collect_occupancy(shape_file, &registry);
+    let occupancy = collect_occupancy(&working.parts, &registry);
 
     if let Some(aabb) = occupancy.aabb() {
         let min = aabb.min();
@@ -296,7 +312,7 @@ fn reload_shape(
     }
 
     let name = shape_name_from_path(path);
-    spawn_shape(&mut commands, &mut meshes, &mut materials, &name, shape_file, &registry, &hidden.paths);
+    spawn_shape(&mut commands, &mut meshes, &mut materials, &name, &working.parts, &registry, &hidden.paths);
     stats.needs_update = true;
 }
 
@@ -346,7 +362,7 @@ fn compute_stats(
     bounds: Res<SceneBounds>,
     mut limits: ResMut<ZoomLimits>,
     parts: Query<&ShapePart>,
-    loaded: Res<LoadedShape>,
+    working: Res<WorkingShape>,
     registry: Res<AssetRegistry>,
     viewport: Res<ViewportRect>,
 ) {
@@ -377,21 +393,19 @@ fn compute_stats(
 
     stats.parts = parts.iter().count();
 
-    if let Some(path) = &loaded.path {
-        if let Some(shape) = registry.get_shape_by_path(path) {
-            stats.triangles = None;
-            stats.draw_calls = None;
-            let parts_owned = shape.to_vec();
-            let registry_owned = registry.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-            stats.stats_receiver = Some(std::sync::Mutex::new(rx));
-            std::thread::spawn(move || {
-                let t0 = std::time::Instant::now();
-                let prod = production_stats(&parts_owned, &registry_owned);
-                let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                let _ = tx.send((prod.triangles, prod.draw_calls, elapsed_ms));
-            });
-        }
+    if !working.parts.is_empty() {
+        stats.triangles = None;
+        stats.draw_calls = None;
+        let parts_owned = working.parts.clone();
+        let registry_owned = registry.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        stats.stats_receiver = Some(std::sync::Mutex::new(rx));
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            let prod = production_stats(&parts_owned, &registry_owned);
+            let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let _ = tx.send((prod.triangles, prod.draw_calls, elapsed_ms));
+        });
     }
 }
 
@@ -989,9 +1003,11 @@ fn collect_subtree_paths(
 // Selection — click in the viewport to select a part
 // =====================================================================
 
-/// Read a left-click in the central viewport, raycast against each named
-/// part's own geometry (excluding nested subparts), and update
-/// `Selection.source_path` to the nearest hit (or `None` for empty space).
+/// Read a left-click in the central viewport and update `Selection.source_path`
+/// to the part the user actually clicked. We test the ray against each part's
+/// own mesh triangles (not just AABBs) — AABB picking would mis-resolve
+/// overlapping fused meshes (e.g. an "edges" mesh whose perimeter-spanning
+/// AABB covers the corner cells claimed by a separate "corners" part).
 fn select_on_click(
     mut contexts: EguiContexts,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -1001,6 +1017,8 @@ fn select_on_click(
     is_part: Query<(), With<ShapePart>>,
     children_q: Query<&Children>,
     aabbs: Query<(&Aabb, &GlobalTransform)>,
+    meshes: Query<(&Mesh3d, &GlobalTransform)>,
+    mesh_assets: Res<Assets<Mesh>>,
     mut selection: ResMut<Selection>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) { return; }
@@ -1027,14 +1045,82 @@ fn select_on_click(
         // Skip the root pseudo-part — its path is empty and it has no own
         // geometry; clicking the whole-shape volume isn't a useful selection.
         if part.path.is_empty() { continue; }
-        let Some((mn, mx)) = own_world_aabb(entity, &children_q, &aabbs, &is_part) else { continue };
-        let Some(t) = ray_aabb_intersect(ray.origin, dir, mn, mx) else { continue };
-        if best.as_ref().is_none_or(|(t_best, _)| t < *t_best) {
-            best = Some((t, part.path.clone()));
+
+        // Coarse AABB cull first — most parts won't overlap the ray at all.
+        if let Some((mn, mx)) = own_world_aabb(entity, &children_q, &aabbs, &is_part) {
+            if ray_aabb_intersect(ray.origin, dir, mn, mx).is_none() { continue; }
+        } else {
+            continue;
+        }
+
+        // Precise per-triangle test against the part's own meshes.
+        let Ok(children) = children_q.get(entity) else { continue };
+        for child in children.iter() {
+            if is_part.get(child).is_ok() { continue; }
+            let Ok((mesh3d, xf)) = meshes.get(child) else { continue };
+            let Some(mesh) = mesh_assets.get(&mesh3d.0) else { continue };
+            let Some(t) = ray_mesh_intersect(ray.origin, dir, mesh, xf) else { continue };
+            if best.as_ref().is_none_or(|(t_best, _)| t < *t_best) {
+                best = Some((t, part.path.clone()));
+            }
         }
     }
 
     selection.source_path = best.map(|(_, p)| p);
+}
+
+/// Ray-vs-mesh test in world space using Möller–Trumbore against each
+/// triangle. Returns the smallest non-negative `t` if the ray hits any
+/// triangle. Triangles are transformed to world space using `xf` so `t`
+/// is comparable across different parts with different transforms.
+fn ray_mesh_intersect(
+    origin: Vec3,
+    dir: Vec3,
+    mesh: &Mesh,
+    xf: &GlobalTransform,
+) -> Option<f32> {
+    let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION)?.as_float3()?;
+    let indices = mesh.indices()?;
+
+    let mut best: Option<f32> = None;
+    let mut idx_iter = indices.iter();
+    while let (Some(i0), Some(i1), Some(i2)) = (idx_iter.next(), idx_iter.next(), idx_iter.next()) {
+        let v0 = xf.transform_point(Vec3::from_array(positions[i0]));
+        let v1 = xf.transform_point(Vec3::from_array(positions[i1]));
+        let v2 = xf.transform_point(Vec3::from_array(positions[i2]));
+        if let Some(t) = ray_triangle_intersect(origin, dir, v0, v1, v2) {
+            if best.is_none_or(|b| t < b) {
+                best = Some(t);
+            }
+        }
+    }
+    best
+}
+
+/// Möller–Trumbore ray-triangle intersection. Returns `t` along the ray
+/// (origin + t * dir) where it hits the triangle, or `None` if it misses
+/// or hits behind the origin.
+fn ray_triangle_intersect(
+    origin: Vec3,
+    dir: Vec3,
+    v0: Vec3,
+    v1: Vec3,
+    v2: Vec3,
+) -> Option<f32> {
+    let edge1 = v1 - v0;
+    let edge2 = v2 - v0;
+    let h = dir.cross(edge2);
+    let a = edge1.dot(h);
+    if a.abs() < 1e-7 { return None; }
+    let f = 1.0 / a;
+    let s = origin - v0;
+    let u = f * s.dot(h);
+    if !(0.0..=1.0).contains(&u) { return None; }
+    let q = s.cross(edge1);
+    let v = f * dir.dot(q);
+    if v < 0.0 || u + v > 1.0 { return None; }
+    let t = f * edge2.dot(q);
+    if t > 1e-6 { Some(t) } else { None }
 }
 
 /// Union the world AABBs of an entity's *direct* mesh children, excluding
@@ -1103,9 +1189,11 @@ fn ray_aabb_intersect(origin: Vec3, dir: Vec3, mn: Vec3, mx: Vec3) -> Option<f32
     }
 }
 
-/// Draw a wireframe gizmo around the AABB of every entity matching the
-/// current selection's `source_path`. There's typically only one such
-/// entity per source — symmetry copies merge into one fused mesh.
+/// Draw the actual mesh edges of the selected part as gizmo lines. A single
+/// AABB is too loose: a part with N symmetry copies has a fused mesh whose
+/// AABB encloses all of them (e.g. the "corners" mesh of chassis_top has
+/// the same AABB as the whole chassis_top). Per-triangle edges show exactly
+/// what's selected.
 const SELECTION_COLOR: Color = Color::srgb(1.0, 0.85, 0.2);
 
 fn draw_selection_highlight(
@@ -1114,17 +1202,37 @@ fn draw_selection_highlight(
     parts: Query<(Entity, &ShapePart)>,
     is_part: Query<(), With<ShapePart>>,
     children_q: Query<&Children>,
-    aabbs: Query<(&Aabb, &GlobalTransform)>,
+    meshes: Query<(&Mesh3d, &GlobalTransform)>,
+    mesh_assets: Res<Assets<Mesh>>,
 ) {
     let Some(ref selected_path) = selection.source_path else { return; };
     for (entity, part) in &parts {
         if part.path != *selected_path { continue; }
-        let Some((mn, mx)) = own_world_aabb(entity, &children_q, &aabbs, &is_part) else { continue };
-        let center = (mn + mx) * 0.5;
-        let size = mx - mn;
-        gizmos.cube(
-            Transform::from_translation(center).with_scale(size),
-            SELECTION_COLOR,
-        );
+        let Ok(children) = children_q.get(entity) else { continue };
+        for child in children.iter() {
+            if is_part.get(child).is_ok() { continue; }
+            let Ok((mesh3d, xf)) = meshes.get(child) else { continue };
+            let Some(mesh) = mesh_assets.get(&mesh3d.0) else { continue };
+            draw_mesh_wireframe(&mut gizmos, mesh, xf, SELECTION_COLOR);
+        }
+    }
+}
+
+/// Stroke every triangle edge in `mesh` as gizmo line segments, transformed
+/// to world space by `xf`. Internal edges of triangulated faces will be
+/// drawn too (a quad face shows its diagonal); cleaner silhouette extraction
+/// is a future polish.
+fn draw_mesh_wireframe(gizmos: &mut Gizmos, mesh: &Mesh, xf: &GlobalTransform, color: Color) {
+    let Some(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).and_then(|a| a.as_float3()) else { return };
+    let Some(indices) = mesh.indices() else { return };
+
+    let mut idx_iter = indices.iter();
+    while let (Some(i0), Some(i1), Some(i2)) = (idx_iter.next(), idx_iter.next(), idx_iter.next()) {
+        let v0 = xf.transform_point(Vec3::from_array(positions[i0]));
+        let v1 = xf.transform_point(Vec3::from_array(positions[i1]));
+        let v2 = xf.transform_point(Vec3::from_array(positions[i2]));
+        gizmos.line(v0, v1, color);
+        gizmos.line(v1, v2, color);
+        gizmos.line(v2, v0, color);
     }
 }

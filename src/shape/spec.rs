@@ -12,7 +12,7 @@
 //! CSG signature computation during symmetry deduplication — this is
 //! the one intentional cross-module dependency.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use crate::registry::AssetRegistry;
@@ -23,7 +23,7 @@ use crate::registry::AssetRegistry;
 
 /// A node in the authored shape list. A `.shape.ron` file is a
 /// `Vec<SpecNode>` — a flat array of parts.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SpecNode {
     #[serde(default)]
     pub name: Option<String>,
@@ -201,7 +201,7 @@ pub fn remap_bounds_for_parts(parts: &mut [SpecNode], from: &Bounds, to: &Bounds
 // Primitives
 // =====================================================================
 
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PrimitiveShape {
     Box,
     Wedge,
@@ -214,7 +214,7 @@ pub enum PrimitiveShape {
 /// A face of the bounding box, used to specify which sides of the
 /// cell are adjacent to filled geometry. Determines the primitive
 /// shape and orientation.
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Face {
     MinX, MaxX,
     MinY, MaxY,
@@ -229,7 +229,7 @@ pub enum Face {
 /// left-to-right into one transform) and `symmetry` (closure taken
 /// over generators, deduplicated by signature).
 #[allow(non_camel_case_types)]
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SymOp {
     MirrorX,
     MirrorY,
@@ -282,7 +282,7 @@ pub fn compose_orient(ops: &[SymOp]) -> Placement {
 // Bounds
 // =====================================================================
 
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bounds(pub i32, pub i32, pub i32, pub i32, pub i32, pub i32);
 
 impl Bounds {
@@ -361,7 +361,7 @@ fn include_point(
 /// Coordinate axis, used for things like animation channels. This is
 /// distinct from `SignedAxis` — a coordinate axis is a direction label,
 /// a signed axis carries direction AND sign.
-#[derive(Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum Axis {
     X,
     Y,
@@ -370,7 +370,7 @@ pub enum Axis {
 
 /// A coordinate axis with a sign. Used as the components of a
 /// `Placement`, which describes where each output axis draws from.
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SignedAxis {
     PosX,
     NegX,
@@ -410,7 +410,7 @@ impl SignedAxis {
 // Animation data — carried through the spec but never interpreted here
 // =====================================================================
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum JointMotion {
     Oscillate {
         amplitude: f32,
@@ -427,7 +427,7 @@ pub enum JointMotion {
     },
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AnimChannel {
     pub part: String,
     pub property: AnimProperty,
@@ -435,13 +435,13 @@ pub struct AnimChannel {
     pub axis: Axis,
 }
 
-#[derive(Deserialize, Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum AnimProperty {
     Rotation,
     Translation,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AnimState {
     pub name: String,
     pub channels: Vec<AnimChannel>,

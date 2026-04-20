@@ -1,3 +1,4 @@
+mod edits;
 mod object_editor;
 mod orbit_camera;
 
