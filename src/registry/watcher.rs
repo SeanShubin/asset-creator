@@ -59,6 +59,11 @@ fn collect_changed_files(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            // Skip hidden directories (e.g. `.backups/`) so the watcher
+            // doesn't trigger reloads on editor-managed snapshots.
+            if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.')) {
+                continue;
+            }
             collect_changed_files(&path, seen_mtimes, changed, current_paths);
         } else if path.extension().is_some_and(|ext| ext == "ron") {
             current_paths.insert(path.clone());

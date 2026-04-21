@@ -225,8 +225,13 @@ pub fn undo_redo(
 }
 
 /// Auto-save: when `working.dirty` and the last edit was at least
-/// `AUTOSAVE_DEBOUNCE_SECS` ago, serialize and write to disk.
+/// `AUTOSAVE_DEBOUNCE_SECS` ago, snapshot the existing on-disk file to
+/// the rotating backup directory, then serialize and write to disk.
 const AUTOSAVE_DEBOUNCE_SECS: f64 = 0.25;
+
+/// How many backup snapshots to keep per shape. Older snapshots beyond
+/// this count are evicted oldest-first on each successful save.
+const BACKUP_RETENTION: usize = 10;
 
 pub fn auto_save(
     mut working: ResMut<WorkingShape>,
@@ -236,6 +241,15 @@ pub fn auto_save(
     let Some(last) = working.last_edit_secs else { return };
     if time.elapsed_secs_f64() - last < AUTOSAVE_DEBOUNCE_SECS { return; }
     let Some(path) = working.path.clone() else { return };
+
+    // Snapshot the pre-edit state to the rotating backup dir before
+    // overwriting. Failures here are warnings, not errors — losing a
+    // backup is better than losing the user's edit.
+    if path.exists() {
+        if let Err(e) = save_backup(&path) {
+            warn!("backup of '{}' failed: {}", path.display(), e);
+        }
+    }
 
     match write_shape_to_disk(&path, &working.parts) {
         Ok(()) => {
@@ -257,6 +271,54 @@ fn write_shape_to_disk(path: &std::path::Path, parts: &[SpecNode]) -> Result<(),
         std::fs::create_dir_all(parent).map_err(|e| format!("create_dir_all: {e}"))?;
     }
     std::fs::write(path, ron_str).map_err(|e| format!("write: {e}"))
+}
+
+/// Copy the current on-disk version of the shape to its rotating backup
+/// directory, then evict any backups beyond `BACKUP_RETENTION`. Backups
+/// live in `data/shapes/.backups/<rel_dir>/<stem>/<unix_micros>.shape.ron`
+/// — under `data/shapes/` for proximity but in a hidden `.backups/`
+/// subdir so the registry/file-watcher skip them.
+fn save_backup(file_path: &std::path::Path) -> Result<(), String> {
+    let backup_dir = backup_dir_for(file_path)?;
+    std::fs::create_dir_all(&backup_dir).map_err(|e| format!("create_dir_all: {e}"))?;
+
+    let micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system time: {e}"))?
+        .as_micros();
+    let backup_path = backup_dir.join(format!("{micros}.shape.ron"));
+    std::fs::copy(file_path, &backup_path).map_err(|e| format!("copy: {e}"))?;
+
+    rotate_backups(&backup_dir, BACKUP_RETENTION);
+    Ok(())
+}
+
+fn backup_dir_for(file_path: &std::path::Path) -> Result<PathBuf, String> {
+    let shapes_dir = std::path::Path::new("data").join("shapes");
+    let relative = file_path.strip_prefix(&shapes_dir)
+        .map_err(|_| format!("'{}' is not under data/shapes", file_path.display()))?;
+
+    let filename = relative.file_name().and_then(|n| n.to_str())
+        .ok_or("no filename")?;
+    let stem = filename.strip_suffix(".shape.ron").unwrap_or(filename);
+    let parent = relative.parent().unwrap_or(std::path::Path::new(""));
+
+    Ok(shapes_dir.join(".backups").join(parent).join(stem))
+}
+
+fn rotate_backups(dir: &std::path::Path, retain: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    // Filenames are unix-micros — lexicographic = chronological.
+    files.sort();
+    while files.len() > retain {
+        let oldest = files.remove(0);
+        let _ = std::fs::remove_file(&oldest);
+    }
 }
 
 /// Reset the working copy and clear history when `CurrentShape` changes.

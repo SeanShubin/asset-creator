@@ -155,6 +155,12 @@ fn scan_shape_files(dir: &Path, registry: &mut AssetRegistry) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            // Skip hidden directories (e.g. `.backups/`) — they're not
+            // authored shapes; treating them as such would pollute the
+            // registry with editor-managed snapshots.
+            if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with('.')) {
+                continue;
+            }
             scan_shape_files(&path, registry);
         } else if is_shape_file(&path) {
             load_shape(&path, registry);
