@@ -1284,8 +1284,16 @@ fn draw_mesh_wireframe<C: GizmoConfigGroup>(
         triangles.push([v0, v1, v2]);
     }
 
-    // Second pass: draw each unique edge at most once, suppressing edges
-    // shared by two coplanar triangles.
+    // Second pass: decide each unique edge's fate.
+    //
+    // An edge with only one triangle is a mesh boundary (hole perimeter,
+    // outer silhouette) — always draw. Otherwise, first cancel any
+    // antiparallel pairs (back-to-back internal-wall triangles from two
+    // adjacent cells facing each other with opposite normals — these are
+    // never rendered anyway due to back-face culling and shouldn't
+    // contribute to the feature-edge decision). Then count remaining
+    // distinct directions: 1 → all coplanar, suppress; 2+ → real crease,
+    // draw.
     const COPLANAR_DOT_THRESHOLD: f32 = 0.999; // ~2.5° tolerance
     let mut drawn: std::collections::HashSet<(PosKey, PosKey)> = std::collections::HashSet::new();
     for [v0, v1, v2] in &triangles {
@@ -1293,10 +1301,12 @@ fn draw_mesh_wireframe<C: GizmoConfigGroup>(
             let key = edge_key(a, b);
             if !drawn.insert(key) { continue; }
             let normals = &edge_normals[&key];
-            let is_feature = match normals.as_slice() {
-                [_] => true, // mesh boundary
-                [n0, n1] => n0.dot(*n1) < COPLANAR_DOT_THRESHOLD,
-                _ => true, // non-manifold; draw to be safe
+            let is_feature = if normals.len() == 1 {
+                true // mesh boundary
+            } else {
+                let after_cancel = cancel_antiparallel_pairs(normals, COPLANAR_DOT_THRESHOLD);
+                !after_cancel.is_empty()
+                    && count_distinct_normals(&after_cancel, COPLANAR_DOT_THRESHOLD) > 1
             };
             if is_feature {
                 let world_a = xf.transform_point(Vec3::from_array(a));
@@ -1305,4 +1315,41 @@ fn draw_mesh_wireframe<C: GizmoConfigGroup>(
             }
         }
     }
+}
+
+/// Greedy removal of antiparallel normal pairs — each pair represents two
+/// back-to-back triangles on an internal wall between adjacent cells. These
+/// contribute nothing visible (back-face culled at render) and would
+/// otherwise create false creases at edges of flat shared surfaces.
+fn cancel_antiparallel_pairs(normals: &[Vec3], threshold: f32) -> Vec<Vec3> {
+    let mut remaining: Vec<Vec3> = normals.to_vec();
+    let mut i = 0;
+    while i < remaining.len() {
+        let mut matched = None;
+        for j in (i + 1)..remaining.len() {
+            if remaining[i].dot(remaining[j]) < -threshold {
+                matched = Some(j);
+                break;
+            }
+        }
+        if let Some(j) = matched {
+            remaining.swap_remove(j);
+            remaining.swap_remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    remaining
+}
+
+/// Count distinct directions in a list of normals, treating two normals
+/// as the same direction when `|dot| > threshold`.
+fn count_distinct_normals(normals: &[Vec3], threshold: f32) -> usize {
+    let mut unique: Vec<Vec3> = Vec::new();
+    for &n in normals {
+        if !unique.iter().any(|u| u.dot(n).abs() > threshold) {
+            unique.push(n);
+        }
+    }
+    unique.len()
 }
